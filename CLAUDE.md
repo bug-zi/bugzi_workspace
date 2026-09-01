@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目性质
 
-本项目是「生活化个人专属工作台」桌面端 App 的 AI coding 项目。**当前仓库只包含项目文档（docs/），尚无任何代码**——不存在构建、测试、lint 命令。开发工作从 `designs-specs.md` 文档生成代码开始。
+本项目是「bugzi's workspace」——「生活化个人专属工作台」桌面端 App 的 AI coding 项目。技术栈定为 Electron + React + TypeScript，本地单机运行。**当前仓库只包含项目文档（docs/），尚无任何代码**——不存在构建、测试、lint 命令。开发工作从 `designs-specs.md` 文档生成代码开始。数据存储：结构化数据存 SQLite，md 文档（格言笔记/灵感文档/万象卡片/辩真记录）存真实 .md 文件，均在用户数据目录下。
 
 ## 文档体系与维护权责（最重要）
 
@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/project/需求（功能模块）/总需求文档.md`           | 开发者主导        | 跨模块的全局硬性规则；AI 可提建议，或在开发者要求下协助完善（需审核通过）         |
 | `docs/project/问题疑惑区.md`                          | **开发者**        | 开发者记录问题疑惑处；**AI 不要主动查阅**，开发者指明时才阅读并答疑               |
 
-工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。注意：目前所有 designs-specs.md 均为空，尚未生成。
+工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。7 份 designs-specs.md 已于 260902 全部生成，待开发者简单审核后即可开始开发。
 
 ## 全局硬性规则（来自 总需求文档.md 与 样式/design.md）
 
@@ -29,7 +29,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 双主题：浅色 = 樱花粉 + 黑字；深色 = 宝蓝 + 白字。背景使用开发者上传的 bg-light / bg-dark 图片。
 - 禁止使用 emoji 作图标；需要图标时从 https://fonts.google.com/icons 获取。
 - 组件框、按键、弹窗等禁止彩亮颜色，须使用与主题色相近的色系，保持整体风格一致。
-- 三栏式布局：左侧边栏（图标+模块名）→ 中间主栏（当前模块内容）→ 右侧边栏（AI 助手，可收起/展开）。
+- 三栏式布局：左侧边栏（图标+模块名，顺序：格言库→万象库→灵感泉→辩真阁→回收站→个人中心）→ 中间主栏（当前模块内容）→ 右侧边栏（AI 助手，可收起/展开，自由对话+模块感知，v1 单会话持久保存）。
+- md 弹窗为全局统一组件（格言笔记/万象卡片/灵感文档/辩真记录详情共用）：默认渲染态，双击切换编辑态。
+- LLM/MCP 未配置时 AI 功能按钮不置灰，点击弹窗提示并「去配置」直达个人中心；定时任务在 App 未运行时错过即跳过；首次启动有欢迎引导（用户名+主题+LLM 提示）。
 
 ## 应用架构（规划）
 
