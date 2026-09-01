@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -11,16 +11,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `docs/` 目录是开发者与 AI 共同维护的项目文档库，权责划分如下：
 
 
-| 内容                                                    | 维护方            | AI 的角色                                                                           |
-| --------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------- |
-| `docs/project/需求（功能模块）/<模块>/design.md`        | 开发者主导        | 可提修改建议，但不得擅自改写                                                        |
-| `docs/project/需求（功能模块）/<模块>/designs-specs.md` | **AI 生成并维护** | 基于 design.md 严格生成的 AI coding prompt 文档，是开发的直接依据；开发者仅简单审核 |
-| `docs/project/样式/design.md`                           | 开发者            | 同上，仅可建议                                                                      |
-| `docs/log/<YYMMDD>.md`（如 260902.md）                  | AI                | 每天一个开发日志，按日期命名，由 AI 记录当天开发情况                                |
-| `docs/project/idea/`                                    | **仅用户**        | AI coding 时**不需要关注、不得修改**此目录                                          |
-| `docs/project/需求（功能模块）/总需求文档.md`           | 开发者            | 跨模块的全局硬性规则，所有开发必须遵守                                              |
+| 内容                                                    | 维护方            | AI 的角色                                                                            |
+| --------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------- |
+| `docs/project/需求（功能模块）/<模块>/design.md`        | 开发者主导        | 可提修改建议，或者在开发者要求下帮忙完善（必须由开发者审核通过才能修改）不得擅自改写 |
+| `docs/project/需求（功能模块）/<模块>/designs-specs.md` | **AI 生成并维护** | 基于 design.md 严格生成的 AI coding prompt 文档，是开发的直接依据；开发者仅简单审核  |
+| `docs/project/样式/design.md`                           | 开发者            | 同上，仅可建议                                                                       |
+| `docs/log/<YYMMDD>.md`（如 260902.md）                  | AI                | 每天一个开发日志，按日期命名，由 AI 记录当天开发情况                                 |
+| `docs/project/idea/`                                    | **开发者**        | AI coding 时**不需要关注、不得修改**此目录                                           |
+| `docs/project/需求（功能模块）/总需求文档.md`           | 开发者主导        | 跨模块的全局硬性规则；AI 可提建议，或在开发者要求下协助完善（需审核通过）         |
+| `docs/project/问题疑惑区.md`                          | **开发者**        | 开发者记录问题疑惑处；**AI 不要主动查阅**，开发者指明时才阅读并答疑               |
 
-工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。注意：目前所有 designs-specs.md 均为空，尚未生成。另外 `个人中心/desing.md` 是开发者的拼写笔误文件名（实为 design.md），读取时注意。
+工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。注意：目前所有 designs-specs.md 均为空，尚未生成。
 
 ## 全局硬性规则（来自 总需求文档.md 与 样式/design.md）
 
@@ -38,5 +39,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **万象库**：非计算机领域知识词条（初始板块：经济学/法学/心理学/博弈论/历史神话，可自定义）。词条点击弹窗显示详情，支持划词高光（存入笔记本板块）和划词问 AI（在右侧 AI 助手交互）。支持随机或手动输入词条由 AI 生成知识卡片。
 - **灵感泉**：项目灵感四层管理（草稿区/立项区/开发区/归档区），列表行组件 + 专属 md 文档（弹窗打开，双击编辑）。各单位之间可自由拖拽跨区移动。
 - **辩真阁**：输入观点，AI 联网搜索（需接 MCP 配置）验证真实性并保存验证记录。
-- **回收站**：按来源模块分块存放，条目有「恢复」和「删除」（彻底删除）两个操作。3 天后未处理的条目会自动彻底删除。
+- **回收站**：按来源分四块（格言库/万象库/灵感泉/辩真阁），条目有「恢复」（回来源模块最初级区）和「删除」（彻底删除）两个操作，3 天后自动彻底删除（启动+每日零点检查）。
 - **个人中心**：个人信息（用户名/头像/个性签名）+ App 设置（字体大小/样式/粗细、LLM 配置、MCP 配置）。
