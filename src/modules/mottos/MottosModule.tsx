@@ -1,10 +1,11 @@
 // 格言库模块（格言库 specs 全量）
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MottoRecord } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { SettingsKeys } from '../../shared/types'
 
 export interface MottosModuleProps {
@@ -44,6 +45,8 @@ export default function MottosModule(props: MottosModuleProps) {
   const [scheduleTime, setScheduleTime] = useState('22:00')
   // 丢弃确认
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
+  // 拖拽排序（区内）
+  const dragIdRef = useRef<number | null>(null)
 
   const load = useCallback(async () => {
     const rows = await window.api.mottos.list()
@@ -56,6 +59,9 @@ export default function MottosModule(props: MottosModuleProps) {
       if (t) setScheduleTime(t)
     })
   }, [load])
+
+  // keep-alive：切回格言库时刷新（定时任务可能在后台已生成）
+  useModuleActivated('mottos', () => void load())
 
   const generate = async (): Promise<void> => {
     if (generating) return
@@ -132,6 +138,43 @@ export default function MottosModule(props: MottosModuleProps) {
     setScheduleOpen(false)
   }
 
+  /** 复制「格言 —— 出处」（无出处只复制正文） */
+  const copyMotto = async (m: MottoRecord): Promise<void> => {
+    const text = m.source.trim() ? `${m.content} —— ${m.source.trim()}` : m.content
+    await window.api.clipboard.writeText(text)
+    toast('已复制')
+  }
+
+  // 区内拖拽排序（HTML5 DnD，模式同灵感泉）
+  const onDragStart = (e: React.DragEvent, m: MottoRecord): void => {
+    dragIdRef.current = m.id
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(m.id))
+    ;(e.currentTarget as HTMLElement).classList.add('dragging')
+  }
+  const onDragEnd = (e: React.DragEvent): void => {
+    ;(e.currentTarget as HTMLElement).classList.remove('dragging')
+    dragIdRef.current = null
+  }
+  /** 拖到某行上 → 插入该位置：目标 sort 减半差，随后全区归一化 */
+  const onDropToRow = async (e: React.DragEvent, target: MottoRecord): Promise<void> => {
+    e.preventDefault()
+    const id = Number(e.dataTransfer.getData('text/plain')) || dragIdRef.current
+    if (!id || id === target.id) return
+    const source = mottos.find((m) => m.id === id)
+    if (!source || source.status !== target.status) return // 仅区内排序，跨区走流转按钮
+    const zoneItems = mottos
+      .filter((m) => m.status === target.status)
+      .sort((a, b) => a.sort - b.sort || a.id - b.id)
+    const targetIdx = zoneItems.findIndex((m) => m.id === target.id)
+    const sourceIdx = zoneItems.findIndex((m) => m.id === id)
+    const next = [...zoneItems]
+    next.splice(sourceIdx, 1)
+    next.splice(targetIdx, 0, source)
+    await window.api.mottos.reorder(next.map((m, i) => ({ id: m.id, sort: i })))
+    await load()
+  }
+
   return (
     <div className="module-page">
       <div className="module-header">
@@ -192,12 +235,18 @@ export default function MottosModule(props: MottosModuleProps) {
                     暂无格言
                   </div>
                 )}
-                {items.map((m) => (
+                {items.map((m, idx) => (
                   <div
-                    className="row-item"
+                    className="row-item motto-row"
                     key={m.id}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, m)}
+                    onDragEnd={onDragEnd}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => void onDropToRow(e, m)}
                     onClick={() => m.status === 'formal' && m.note_path && setViewId(m.id)}
                   >
+                    <span className="row-index">{idx + 1}</span>
                     <div className="row-main">
                       <div className="motto-line">
                         <span className="motto-content" title={m.content}>
@@ -241,6 +290,13 @@ export default function MottosModule(props: MottosModuleProps) {
                           <span className="material-symbols-outlined">edit</span>
                         </button>
                       )}
+                      <button
+                        className="icon-btn"
+                        title="复制格言+出处"
+                        onClick={() => void copyMotto(m)}
+                      >
+                        <span className="material-symbols-outlined">content_copy</span>
+                      </button>
                       <button className="icon-btn danger" title="丢弃" onClick={() => setDiscardTarget(m)}>
                         <span className="material-symbols-outlined">delete</span>
                       </button>

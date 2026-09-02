@@ -50,6 +50,13 @@
   overflow-y: auto;
   padding: 18px 22px;
 }
+/* keep-alive 模块容器：激活时占满滚动区，非激活彻底隐藏但保持挂载 */
+.module-live {
+  display: contents;
+}
+.module-hidden {
+  display: none;
+}
 
 /* ===== 模块页通用 ===== */
 .module-page {
@@ -146,6 +153,20 @@
   gap: 2px;
   align-items: center;
 }
+/* 行序号（格言库：每区独立 1..n） */
+.row-index {
+  flex-shrink: 0;
+  min-width: 1.6em;
+  text-align: right;
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+/* 拖拽中的行半透明（格言排序 + 灵感泉看板共用） */
+.row-item.dragging {
+  opacity: 0.5;
+}
 .icon-btn {
   border: none;
   background: transparent;
@@ -189,7 +210,10 @@
   color: #fff;
 }
 
-/* 格言单行：格言居左 + 出处右侧对齐（同一行，超长省略） */
+/* 格言单行：格言居左 + 出处右侧对齐（同一行，超长省略）；行可拖拽排序 */
+.motto-row {
+  cursor: grab;
+}
 .motto-line {
   display: flex;
   align-items: baseline;
@@ -253,9 +277,6 @@
 }
 .kanban-card {
   cursor: grab;
-}
-.kanban-card.dragging {
-  opacity: 0.5;
 }
 .kanban .zone-header {
   cursor: default;

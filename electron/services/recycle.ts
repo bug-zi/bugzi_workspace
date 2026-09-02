@@ -51,8 +51,17 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
   if (!rb) throw new Error('NOT_FOUND')
   switch (rb.source) {
     case 'mottos':
-      // 回草稿区（回收站 specs §3）
-      d.prepare('UPDATE mottos SET deleted_at = NULL, status = ? WHERE id = ?').run('draft', rb.item_id)
+      // 回草稿区（回收站 specs §3），插到区首（sort 取草稿区最小值-1）
+      {
+        const head = d
+          .prepare('SELECT MIN(sort) AS m FROM mottos WHERE status = ? AND deleted_at IS NULL')
+          .get('draft') as { m: number | null }
+        d.prepare('UPDATE mottos SET deleted_at = NULL, status = ?, sort = ? WHERE id = ?').run(
+          'draft',
+          head.m == null ? 0 : head.m - 1,
+          rb.item_id
+        )
+      }
       break
     case 'wiki':
       // 回原板块：仅清标记

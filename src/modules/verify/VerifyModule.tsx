@@ -5,6 +5,7 @@ import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 export interface VerifyModuleProps {
   onOpenAi: (prefill?: string) => void
@@ -44,6 +45,9 @@ export default function VerifyModule(props: VerifyModuleProps) {
   useEffect(() => {
     if (aiVersion > 0) props.bumpAi()
   }, [aiVersion, props])
+
+  // keep-alive：切回辩真阁时刷新记录列表
+  useModuleActivated('verify', () => void load())
 
   const runVerify = async (): Promise<void> => {
     const text = claim.trim()

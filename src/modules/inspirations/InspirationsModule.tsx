@@ -4,6 +4,7 @@ import type { InspirationRecord } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 const ZONES: { status: InspirationRecord['status']; label: string }[] = [
   { status: 'draft', label: '草稿区' },
@@ -33,6 +34,9 @@ export default function InspirationsModule() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // keep-alive：切回灵感泉时刷新（回收站恢复操作可能改动了列表）
+  useModuleActivated('inspirations', () => void load())
 
   const itemsOf = (status: InspirationRecord['status']): InspirationRecord[] =>
     items.filter((i) => i.status === status).sort((a, b) => a.sort - b.sort || a.id - b.id)

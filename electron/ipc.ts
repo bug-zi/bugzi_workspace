@@ -1,5 +1,5 @@
 // IPC 全通道注册（主进程）：渲染层 window.api.* 的后端
-import { ipcMain, dialog, BrowserWindow, shell, app } from 'electron'
+import { ipcMain, dialog, BrowserWindow, shell, app, clipboard } from 'electron'
 import { getDb, nowIso, normalizeText } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
@@ -149,18 +149,25 @@ export function registerIpc(): void {
     const d = getDb()
     const base = 'SELECT * FROM mottos WHERE deleted_at IS NULL'
     const rows = status
-      ? d.prepare(`${base} AND status = ? ORDER BY id DESC`).all(status)
-      : d.prepare(`${base} ORDER BY id DESC`).all()
+      ? d.prepare(`${base} AND status = ? ORDER BY sort, id`).all(status)
+      : d.prepare(`${base} ORDER BY sort, id`).all()
     return rows
   })
+  /** 区内最小 sort（空区返回 0），新条目插到区首 */
+  const mottoHeadSort = (d: ReturnType<typeof getDb>, status: string): number => {
+    const row = d
+      .prepare('SELECT MIN(sort) AS m FROM mottos WHERE status = ? AND deleted_at IS NULL')
+      .get(status) as { m: number | null }
+    return row.m == null ? 0 : row.m - 1
+  }
   ipcMain.handle('mottos:create', (_e, content: string, source: string, status: string) => {
     const d = getDb()
     const now = nowIso()
     const r = d
       .prepare(
-        'INSERT INTO mottos (content, source, status, origin, note_path, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?)'
+        'INSERT INTO mottos (content, source, status, origin, note_path, sort, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)'
       )
-      .run(content, source, status, 'manual', now, now)
+      .run(content, source, status, 'manual', mottoHeadSort(d, status), now, now)
     const id = Number(r.lastInsertRowid)
     if (status === 'formal') {
       const notePath = `md/mottos/${id}.md`
@@ -182,7 +189,19 @@ export function registerIpc(): void {
       d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
       mdCreate(notePath, `# ${row.content}\n\n> ${row.source}\n`)
     }
-    d.prepare('UPDATE mottos SET status = ?, updated_at = ? WHERE id = ?').run(status, nowIso(), id)
+    // 流转目标区：插到区首（sort 取目标区最小值-1）
+    d.prepare('UPDATE mottos SET status = ?, sort = ?, updated_at = ? WHERE id = ?').run(
+      status,
+      mottoHeadSort(d, status),
+      nowIso(),
+      id
+    )
+    return true
+  })
+  ipcMain.handle('mottos:reorder', (_e, moves: { id: number; sort: number }[]) => {
+    const d = getDb()
+    const stmt = d.prepare('UPDATE mottos SET sort = ?, updated_at = ? WHERE id = ?')
+    for (const m of moves) stmt.run(m.sort, nowIso(), m.id)
     return true
   })
   ipcMain.handle('mottos:generate', () => generateMottos())
@@ -326,6 +345,12 @@ export function registerIpc(): void {
   // ---------- 外链 ----------
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+    return true
+  })
+
+  // ---------- 剪贴板 ----------
+  ipcMain.handle('clipboard:writeText', (_e, text: string) => {
+    clipboard.writeText(text)
     return true
   })
 }

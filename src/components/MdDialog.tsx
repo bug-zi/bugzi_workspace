@@ -37,6 +37,7 @@ export default function MdDialog(props: MdDialogProps) {
   const [loading, setLoading] = useState(false)
   const [titleDraft, setTitleDraft] = useState(title)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setTitleDraft(title)
@@ -89,12 +90,14 @@ export default function MdDialog(props: MdDialogProps) {
     }
   }, [editing, saveAndExit, onClose])
 
-  // Esc 关闭（编辑态先保存）
+  // Esc 关闭（编辑态先保存）。keep-alive 下隐藏模块的弹窗不响应 Esc：
+  // 祖先 display:none 时 getBoundingClientRect 全为 0，据此判断弹窗是否真正可见
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        close()
+      if (e.key === 'Escape' && overlayRef.current) {
+        const rect = overlayRef.current.getBoundingClientRect()
+        if (rect.width > 0 || rect.height > 0) close()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -156,6 +159,7 @@ export default function MdDialog(props: MdDialogProps) {
 
   return (
     <div
+      ref={overlayRef}
       className="dialog-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) {

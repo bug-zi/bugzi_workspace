@@ -64,6 +64,8 @@ const api = {
       ipcRenderer.invoke('mottos:update', id, content, source),
     setStatus: (id: number, status: string): Promise<boolean> =>
       ipcRenderer.invoke('mottos:setStatus', id, status),
+    reorder: (moves: { id: number; sort: number }[]): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:reorder', moves),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'mottos', id),
     generate: (): Promise<{ generated: number; inserted: number }> =>
       ipcRenderer.invoke('mottos:generate'),
@@ -133,6 +135,10 @@ const api = {
   },
   shell: {
     openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke('shell:openExternal', url)
+  },
+  clipboard: {
+    /** 写文本入系统剪贴板（格言复制等） */
+    writeText: (text: string): Promise<boolean> => ipcRenderer.invoke('clipboard:writeText', text)
   }
 }
 

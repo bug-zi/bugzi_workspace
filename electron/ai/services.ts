@@ -58,12 +58,16 @@ export async function aiChat(userMessage: string, currentModule: string): Promis
 // ---------- 格言生成（格言库 specs §3） ----------
 
 function parseJsonArray(raw: string): { content: string; source: string }[] {
-  // 兼容 ```json 包裹与裸 JSON
+  // 兼容 ```json 包裹与裸 JSON；兼容 {"mottos":[...]} 对象包裹（json_object 模式下多数服务强制顶层为对象，无法直接返回数组）
   const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
-  const arr = JSON.parse(text)
-  if (!Array.isArray(arr)) throw new Error('LLM 未返回 JSON 数组')
+  let parsed: unknown = JSON.parse(text)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    // 对象形态：取第一个数组类型的字段（如 mottos/items/data/list）
+    parsed = Object.values(parsed).find((v) => Array.isArray(v)) ?? parsed
+  }
+  if (!Array.isArray(parsed)) throw new Error('LLM 未返回 JSON 数组')
   const out: { content: string; source: string }[] = []
-  for (const item of arr) {
+  for (const item of parsed) {
     if (item && typeof item.content === 'string' && typeof item.source === 'string') {
       out.push({ content: item.content.trim(), source: item.source.trim() })
     }
@@ -86,7 +90,7 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const samples = formal.length
     ? formal.map((m) => `- ${m.content} —— ${m.source}`).join('\n')
     : '（暂无，可自由发挥）'
-  const prompt = `以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言。可以摘取现实书籍作品中的名言，也可以自行编撰；每条必须标明出处（编撰的标「AI 编撰」）。以 JSON 数组返回，格式：[{"content":"格言正文","source":"出处"}] × 10，不要输出其他任何内容。`
+  const prompt = `以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言。可以摘取现实书籍作品中的名言，也可以自行编撰；每条必须标明出处（编撰的标「AI 编撰」）。以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处"}]}，mottos 数组内恰好 10 项，不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
@@ -113,8 +117,16 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
     ).map((r) => normalizeText(r.content))
   )
   const now = nowIso()
+  // 插到草稿区开头（优化建议区「序号+拖拽排序」决策：新格言插区首）：
+  // 逐条 MIN(sort)-1 递减，先插入的排更前
+  let headSort = (
+    d.prepare("SELECT MIN(sort) AS m FROM mottos WHERE status = 'draft' AND deleted_at IS NULL").get() as {
+      m: number | null
+    }
+  ).m
+  if (headSort == null) headSort = 1
   const ins = d.prepare(
-    "INSERT INTO mottos (content, source, status, origin, created_at, updated_at) VALUES (?, ?, 'draft', 'ai', ?, ?)"
+    "INSERT INTO mottos (content, source, status, origin, sort, created_at, updated_at) VALUES (?, ?, 'draft', 'ai', ?, ?, ?)"
   )
   let inserted = 0
   const seen = new Set<string>()
@@ -122,7 +134,8 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
     const key = normalizeText(it.content)
     if (!key || existing.has(key) || seen.has(key)) continue
     seen.add(key)
-    ins.run(it.content, it.source, now, now)
+    headSort -= 1
+    ins.run(it.content, it.source, headSort, now, now)
     existing.add(key)
     inserted++
   }

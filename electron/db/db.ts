@@ -184,6 +184,21 @@ function migrate(): void {
     }
     d.exec('PRAGMA user_version = 2')
   }
+
+  if (version < 3) {
+    // v3：格言排序（优化建议区「序号+拖拽排序」）。mottos 加 sort REAL 列
+    //（越小越靠前，REAL 便于插入位置取半差）；存量按当前显示顺序（区内 id 倒序，
+    // 即 mottos:list 原排序）逐区赋 0..n-1，迁移后观感不变。
+    d.exec('ALTER TABLE mottos ADD COLUMN sort REAL NOT NULL DEFAULT 0')
+    for (const status of ['draft', 'settled', 'formal']) {
+      const rows = d
+        .prepare('SELECT id FROM mottos WHERE status = ? AND deleted_at IS NULL ORDER BY id DESC')
+        .all(status) as { id: number }[]
+      const upd = d.prepare('UPDATE mottos SET sort = ? WHERE id = ?')
+      rows.forEach((r, i) => upd.run(i, r.id))
+    }
+    d.exec('PRAGMA user_version = 3')
+  }
 }
 
 // ---------- 通用工具 ----------

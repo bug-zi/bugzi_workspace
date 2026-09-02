@@ -5,6 +5,7 @@ import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 export interface WikiModuleProps {
   onOpenAi: (prefill?: string) => void
@@ -68,6 +69,13 @@ export default function WikiModule(props: WikiModuleProps) {
     void loadSections()
     void loadHighlights()
   }, [loadSections, loadHighlights])
+
+  // keep-alive：切回万象库时刷新板块/词条/高光（后台生成可能已入库）
+  useModuleActivated('wiki', () => {
+    void loadSections()
+    void loadHighlights()
+    if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
+  })
 
   // 板块页加载词条
   useEffect(() => {

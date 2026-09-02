@@ -25,6 +25,7 @@
   --color-surface-strong: rgba(255, 255, 255, 0.92);
   --color-border: rgba(209, 127, 165, 0.35);
   --color-danger: #b0577d;
+  --color-selection: rgba(232, 160, 191, 0.45);
   --bg-image: none;
 }
 
@@ -39,6 +40,8 @@
   --color-surface-strong: rgba(13, 23, 47, 0.92);
   --color-border: rgba(102, 164, 255, 0.25);
   --color-danger: #e87a93;
+  /* 划词高亮取参考图点缀蓝（#66a4ff）半透明，深色下保证选中区与背景有区分度 */
+  --color-selection: rgba(102, 164, 255, 0.45);
   --bg-image: none;
 }
 
@@ -119,6 +122,12 @@ select {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 划词选中色主题化（替换系统默认蓝，优化建议区「划词颜色」） */
+::selection {
+  background: var(--color-selection);
+  color: var(--color-text);
 }
 
 /* ===== 通用组件类 ===== */

@@ -32,6 +32,9 @@ export default function App() {
   )
 }
 
+// 模块激活自定义事件（keep-alive 下切回模块时通知其刷新数据——替代卸载重挂的隐式刷新）
+export const MODULE_ACTIVATED_EVENT = 'bugzi:module-activated'
+
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
   const [module, setModule] = useState<ModuleId>('mottos')
@@ -39,6 +42,12 @@ function Shell() {
   const [aiPendingAsk, setAiPendingAsk] = useState<string | null>(null)
   const [aiVersion, setAiVersion] = useState(0)
   const [aiForceOpen, setAiForceOpen] = useState(false)
+
+  // 切换模块 = 激活目标模块（常驻组件监听此事件自行刷新）
+  const activateModule = useCallback((id: ModuleId) => {
+    setModule(id)
+    window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
+  }, [])
 
   // 万象库/辩真阁请求展开 AI 边栏
   const openAiWith = useCallback((prefill?: string) => {
@@ -62,7 +71,7 @@ function Shell() {
             <button
               key={m.id}
               className={`nav-item${module === m.id ? ' active' : ''}`}
-              onClick={() => setModule(m.id)}
+              onClick={() => activateModule(m.id)}
               title={m.label}
             >
               <span className="material-symbols-outlined">{m.icon}</span>
@@ -76,18 +85,26 @@ function Shell() {
           </button>
         </nav>
 
-        {/* 中间主栏 */}
+        {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
         <main className="main-area">
-          {module === 'mottos' && <MottosModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />}
-          {module === 'wiki' && (
-            <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
-          )}
-          {module === 'inspirations' && <InspirationsModule />}
-          {module === 'verify' && (
-            <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
-          )}
-          {module === 'recycle' && <RecycleModule />}
-          {module === 'profile' && <ProfileModule />}
+          {MODULES.map((m) => (
+            <div
+              key={m.id}
+              className={m.id === module ? 'module-live' : 'module-live module-hidden'}
+              aria-hidden={m.id !== module}
+            >
+              {m.id === 'mottos' && <MottosModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />}
+              {m.id === 'wiki' && (
+                <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
+              )}
+              {m.id === 'inspirations' && <InspirationsModule />}
+              {m.id === 'verify' && (
+                <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
+              )}
+              {m.id === 'recycle' && <RecycleModule />}
+              {m.id === 'profile' && <ProfileModule />}
+            </div>
+          ))}
         </main>
 
         {/* 右侧 AI 边栏 */}
@@ -98,12 +115,12 @@ function Shell() {
           pendingAsk={aiPendingAsk}
           onPendingAskConsumed={() => setAiPendingAsk(null)}
           messagesVersion={aiVersion}
-          onNavigateToProfile={() => setModule('profile')}
+          onNavigateToProfile={() => activateModule('profile')}
         />
       </div>
 
       {/* 首次启动引导（个人中心 specs §4） */}
-      <WelcomeGuide open={firstLaunch} onDone={setFirstLaunchDone} onGoProfile={() => setModule('profile')} />
+      <WelcomeGuide open={firstLaunch} onDone={setFirstLaunchDone} onGoProfile={() => activateModule('profile')} />
     </>
   )
 }

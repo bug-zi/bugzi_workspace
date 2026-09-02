@@ -8,6 +8,8 @@ export interface MottoRecord {
   status: 'draft' | 'settled' | 'formal'
   note_path: string | null
   origin: 'manual' | 'ai'
+  /** 区内排序（越小越靠前，DB v3） */
+  sort: number
   created_at: string
   updated_at: string
   deleted_at: string | null
@@ -132,6 +134,8 @@ export interface Api {
     create(content: string, source: string, status: string): Promise<number>
     update(id: number, content: string, source: string): Promise<boolean>
     setStatus(id: number, status: string): Promise<boolean>
+    /** 区内重排（sort 覆盖为 0..n-1） */
+    reorder(moves: { id: number; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
     generate(): Promise<{ generated: number; inserted: number }>
     normalize(s: string): Promise<string>
@@ -191,6 +195,10 @@ export interface Api {
   }
   shell: {
     openExternal(url: string): Promise<boolean>
+  }
+  clipboard: {
+    /** 写文本入系统剪贴板（格言复制等） */
+    writeText(text: string): Promise<boolean>
   }
 }
 

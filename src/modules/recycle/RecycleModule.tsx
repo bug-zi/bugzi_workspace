@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { RecycleRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 const TABS: { source: RecycleRow['source']; label: string; backTo: string }[] = [
   { source: 'mottos', label: '格言库', backTo: '格言库草稿区' },
@@ -59,6 +60,9 @@ export default function RecycleModule() {
   useEffect(() => {
     if (version > 0) void load()
   }, [version, load])
+
+  // keep-alive：切回回收站时刷新（剩余天数文案需要随时间更新）
+  useModuleActivated('recycle', () => void load())
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
