@@ -21,7 +21,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false // preload 需要部分 node 能力做类型化桥（仍不开 nodeIntegration）
@@ -48,6 +48,9 @@ function createWindow(): void {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  // 必须在 app ready 之前注册特权 scheme（bzres:// 头像/背景图）
+  registerBzresSchemes()
+
   app.on('second-instance', () => {
     const wins = BrowserWindow.getAllWindows()
     if (wins.length > 0) {
@@ -58,7 +61,6 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   void app.whenReady().then(() => {
-    registerBzresSchemes()
     registerBzresProtocol()
     initDb()
     registerIpc()

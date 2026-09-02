@@ -2,7 +2,7 @@
   "name": "bugzi_workspace",
   "version": "1.0.0",
   "description": "bug子的workspace —— 生活化个人专属工作台",
-  "main": "out/main/index.js",
+  "main": "out/main/main.js",
   "author": "bugzi",
   "private": true,
   "scripts": {
@@ -13,7 +13,7 @@
     "smoke": "electron-vite build && electron . --smoke"
   },
   "dependencies": {
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.1",

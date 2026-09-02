@@ -23,6 +23,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。7 份 designs-specs.md 已于 260902 全部生成，v1.0 代码已于同日全部生成（typecheck/build 通过，待人工冒烟）。
 
+## Git 操作纪律（开发者指令）
+
+- **禁止 AI 自主执行任何 git 操作**（add / commit / push / pull / checkout / reset 等全部命令）。
+- 所有 git 操作由开发者自主完成；AI 最多在开发者明确要求时给出命令建议，不得代为执行。
+
 ## 全局硬性规则（来自 总需求文档.md 与 样式/design.md）
 
 - 所有「放入回收站/删除」操作必须有二次确认弹窗，确认后才生效。
