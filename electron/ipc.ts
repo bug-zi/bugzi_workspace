@@ -14,7 +14,7 @@ import {
   runVerification,
   isLlmConfigured
 } from './ai/services'
-import { chatCompletion, testLlmConnection } from './ai/llm'
+import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { getEnabledMcps } from './ai/mcp'
 import { SettingsKeys } from '../src/shared/types'
 import type { LlmConfig, McpConfig } from '../src/shared/types'
@@ -83,18 +83,10 @@ export function registerIpc(): void {
       }
       setSetting(SettingsKeys.UserAvatar, `avatar.${ext}`)
     } else {
-      dest = join(userDataDir(), 'bg', kind)
-      // bg 目标保留原扩展名（bzres://bg/bg-light 无扩展）→ 直接写入文件（覆盖同名）
-      try {
-        unlinkSync(dest)
-      } catch {
-        /* 无旧文件 */
-      }
-    }
-    copyFileSync(src, dest)
-    if (kind !== 'avatar') {
-      // 背景图带扩展存，settings 存文件名
-      setSetting(`bg_${kind}`, kind + '.' + ext)
+      // 背景图带扩展名存（settings 记文件名，bzres://bg/<file> 引用）
+      dest = join(userDataDir(), 'bg', `${kind}.${ext}`)
+      copyFileSync(src, dest)
+      setSetting(`bg_${kind}`, `${kind}.${ext}`)
       // 删掉旧的其他扩展版本
       for (const old of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']) {
         if (old !== ext) {
@@ -303,6 +295,7 @@ export function registerIpc(): void {
 
   // ---------- 个人中心：LLM/MCP ----------
   ipcMain.handle('llm:test', (_e, config: LlmConfig) => testLlmConnection(config))
+  ipcMain.handle('llm:models', (_e, config: LlmConfig) => listUpstreamModels(config))
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())
 
   // ---------- 外链 ----------

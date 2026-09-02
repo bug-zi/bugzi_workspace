@@ -163,6 +163,7 @@ export default function VerifyModule(props: VerifyModuleProps) {
         open={viewRec != null}
         title={viewRec?.claim ?? ''}
         filePath={viewRec?.md_path ?? ''}
+        onClose={() => setViewRec(null)}
       />
 
       {/* 重复观点 */}
@@ -205,6 +206,7 @@ export default function VerifyModule(props: VerifyModuleProps) {
           open
           title={dupEntry.claim}
           filePath={dupEntry.md_path}
+          onClose={() => setDupEntry(null)}
           onChanged={() => void load()}
         />
       )}

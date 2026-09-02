@@ -350,6 +350,7 @@ export default function WikiModule(props: WikiModuleProps) {
         open={cardEntry != null}
         title={cardEntry?.term ?? ''}
         filePath={cardEntry?.md_path ?? ''}
+        onClose={() => setCardEntry(null)}
         onChanged={() => void refreshCard()}
         selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
       />

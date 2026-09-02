@@ -256,6 +256,7 @@ export default function MottosModule(props: MottosModuleProps) {
         open={viewing != null && !!viewing?.note_path}
         title={viewing?.content ?? ''}
         filePath={viewing?.note_path ?? ''}
+        onClose={() => setViewId(null)}
         onChanged={load}
       />
 

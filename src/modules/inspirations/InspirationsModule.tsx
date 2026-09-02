@@ -198,6 +198,7 @@ export default function InspirationsModule() {
         open={openDoc != null}
         title={openDoc?.title ?? ''}
         filePath={openDoc?.md_path ?? ''}
+        onClose={() => setOpenDoc(null)}
         onChanged={() => void load()}
         onTitleChange={
           openDoc

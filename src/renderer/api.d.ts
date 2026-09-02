@@ -172,6 +172,7 @@ export interface Api {
   }
   llm: {
     test(config: LlmConfig): Promise<void>
+    models(config: LlmConfig): Promise<string[]>
   }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>

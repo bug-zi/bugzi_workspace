@@ -59,12 +59,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     let url = ''
     if (file) {
       url = `bzres://bg/${file}`
-      // 探测文件存在（404 时回退纯色）
+      // 探测 404 回退纯色；fetch 异常（网络层拦截等）不视为文件缺失——
+      // CSS url() 加载不受 CORS 限制，保留 url 让样式层自行决定
       try {
         const probe = await fetch(url)
         if (!probe.ok) url = ''
       } catch {
-        url = ''
+        /* 保留 url */
       }
     }
     document.documentElement.style.setProperty(

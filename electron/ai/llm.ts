@@ -75,6 +75,38 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   return { content }
 }
 
+/** 标准化 models URL：自动拼 /v1/models（调用方给 base 或完整路径均可） */
+export function normalizeModelsUrl(apiUrl: string): string {
+  const u = apiUrl.trim().replace(/\/+$/, '')
+  if (/\/models$/.test(u)) return u
+  if (/\/v\d+($|\/)/.test(u)) return `${u}/models`
+  return `${u}/v1/models`
+}
+
+/** 从上游获取模型列表（OpenAI 兼容 GET /models，优化建议区 #1）。失败抛带 message 的 Error */
+export async function listUpstreamModels(config: LlmConfig): Promise<string[]> {
+  const url = normalizeModelsUrl(config.apiUrl)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${config.apiKey}` }
+    })
+  } catch (e) {
+    throw new Error(`网络请求失败：${(e as Error).message}`)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`LLM 服务返回 ${res.status}：${text.slice(0, 300)}`)
+  }
+  const data = (await res.json()) as { data?: { id?: string }[] }
+  const models = (data?.data ?? [])
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  if (models.length === 0) throw new Error('上游未返回任何模型')
+  return models.sort((a, b) => a.localeCompare(b))
+}
+
 /** LLM「测试连接」：发一次最小请求（个人中心 specs §3.4） */
 export async function testLlmConnection(config: LlmConfig): Promise<void> {
   const url = normalizeChatUrl(config.apiUrl)

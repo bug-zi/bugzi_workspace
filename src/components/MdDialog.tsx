@@ -9,6 +9,8 @@ export interface MdDialogProps {
   title: string
   /** md 相对路径（userData 下） */
   filePath: string
+  /** 关闭弹窗（关闭键/遮罩调用；若正处于编辑态会先保存） */
+  onClose: () => void
   onChanged?: () => void
   /** 万象卡片划词能力开关（仅万象库启用） */
   selectionActions?: {
@@ -28,7 +30,7 @@ function renderMd(md: string): string {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, filePath, onChanged, selectionActions, onTitleChange } = props
+  const { open, title, filePath, onClose, onChanged, selectionActions, onTitleChange } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -78,19 +80,26 @@ export default function MdDialog(props: MdDialogProps) {
     setEditing(false)
   }, [draft, content, filePath, onChanged])
 
+  /** 关闭：编辑态先保存草稿再关 */
+  const close = useCallback((): void => {
+    if (editing) {
+      void saveAndExit().then(() => onClose())
+    } else {
+      onClose()
+    }
+  }, [editing, saveAndExit, onClose])
+
   // Esc 关闭（编辑态先保存）
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
-        if (editing) {
-          void saveAndExit()
-        }
+        close()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, editing, saveAndExit])
+  }, [open, close])
 
   // 划词气泡（万象卡片）
   useEffect(() => {
@@ -150,7 +159,7 @@ export default function MdDialog(props: MdDialogProps) {
       className="dialog-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) {
-          if (editing) void saveAndExit()
+          close()
         }
       }}
     >
@@ -182,11 +191,8 @@ export default function MdDialog(props: MdDialogProps) {
           ) : (
             <button
               className="btn btn-ghost close-btn"
-              onClick={() => {
-                if (editing) void saveAndExit()
-              }}
-              title={editing ? '保存并关闭' : '关闭'}
-              style={{ display: editing ? 'none' : 'inline-flex' }}
+              onClick={close}
+              title="关闭"
             >
               关闭
             </button>

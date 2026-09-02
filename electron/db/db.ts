@@ -1,7 +1,7 @@
 // 主进程数据库层：node:sqlite 初始化 + 版本化迁移 + 全部建表
 import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 let db: DatabaseSync | null = null
@@ -130,6 +130,46 @@ function migrate(): void {
     set.run('motto_schedule', '22:00')
 
     d.exec('PRAGMA user_version = 1')
+  }
+
+  if (version < 2) {
+    // v2 修复+种子：
+    // 1) 旧 bug 产物清理：image:pick 曾把背景图存为 bg/bg-light（无扩展名）而 settings 记
+    //    bg-light.png → 404。将无扩展旧文件改名为规范名。
+    // 2) 种子默认背景图：项目根 bg-light.png / bg-dark.png 首次启动复制入 userData/bg/
+    //    （开发者要求默认即用项目内背景图，见 问题疑惑区 #2）。
+    const bgDir = join(userDataDir(), 'bg')
+    for (const kind of ['bg-light', 'bg-dark'] as const) {
+      const bare = join(bgDir, kind)
+      const canonical = join(bgDir, `${kind}.png`)
+      try {
+        const st = statSync(bare)
+        if (st.isFile()) {
+          try {
+            unlinkSync(canonical)
+          } catch {
+            /* 无同名规范文件 */
+          }
+          renameSync(bare, canonical)
+        }
+      } catch {
+        /* 无旧 bug 文件 */
+      }
+      // 种子（缺文件才复制，不覆盖用户已上传的）
+      if (!existsSync(canonical)) {
+        const src = join(app.getAppPath(), `${kind}.png`)
+        try {
+          copyFileSync(src, canonical)
+        } catch {
+          /* 源图缺失（打包环境路径不同）则跳过 */
+        }
+      }
+      d.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run(
+        `bg_${kind}`,
+        `${kind}.png`
+      )
+    }
+    d.exec('PRAGMA user_version = 2')
   }
 }
 

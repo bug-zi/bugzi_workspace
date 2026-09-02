@@ -30,6 +30,9 @@ export default function ProfileModule() {
   const [llmForm, setLlmForm] = useState<LlmConfig | null>(null)
   const [testing, setTesting] = useState(false)
   const [delLlm, setDelLlm] = useState<LlmConfig | null>(null)
+  // 上游模型列表（优化建议区 #1）
+  const [models, setModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
   // MCP
   const [mcps, setMcps] = useState<McpConfig[]>([])
   const [mcpForm, setMcpForm] = useState<{ name: string; url: string } | null>(null)
@@ -136,6 +139,26 @@ export default function ProfileModule() {
       toast(`连接失败：${String((e as Error).message).slice(0, 120)}`)
     } finally {
       setTesting(false)
+    }
+  }
+
+  // 从上游拉取模型列表（优化建议区 #1）：需先填 API 地址
+  const fetchModels = async (): Promise<void> => {
+    if (!llmForm) return
+    if (!llmForm.apiUrl.trim()) {
+      toast('请先填写 API 地址')
+      return
+    }
+    setLoadingModels(true)
+    try {
+      const list = await window.api.llm.models(llmForm)
+      setModels(list)
+      toast(`获取到 ${list.length} 个模型`)
+    } catch (e) {
+      setModels([])
+      toast(`获取失败：${String((e as Error).message).slice(0, 120)}`)
+    } finally {
+      setLoadingModels(false)
     }
   }
 
@@ -383,9 +406,39 @@ export default function ProfileModule() {
             <div className="dialog-header">LLM 配置</div>
             <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input className="field" placeholder="名称（自定义）" value={llmForm.name} onChange={(e) => setLlmForm({ ...llmForm, name: e.target.value })} />
-              <input className="field" placeholder="API 地址（如 https://api.example.com）" value={llmForm.apiUrl} onChange={(e) => setLlmForm({ ...llmForm, apiUrl: e.target.value })} />
+              <input className="field" placeholder="API 地址（如 https://api.example.com）" value={llmForm.apiUrl} onChange={(e) => { setModels([]); setLlmForm({ ...llmForm, apiUrl: e.target.value }) }} />
               <input className="field" type="password" placeholder="API Key" value={llmForm.apiKey} onChange={(e) => setLlmForm({ ...llmForm, apiKey: e.target.value })} />
-              <input className="field" placeholder="模型名（如 gpt-4o-mini）" value={llmForm.model} onChange={(e) => setLlmForm({ ...llmForm, model: e.target.value })} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  className="field"
+                  style={{ flex: 1 }}
+                  placeholder="模型名（如 gpt-4o-mini）"
+                  value={llmForm.model}
+                  onChange={(e) => setLlmForm({ ...llmForm, model: e.target.value })}
+                />
+                <button
+                  className="btn"
+                  style={{ flexShrink: 0 }}
+                  onClick={() => void fetchModels()}
+                  disabled={loadingModels}
+                  title="从上游服务获取可用模型列表"
+                >
+                  <span className="material-symbols-outlined">refresh</span>
+                  {loadingModels ? '获取中…' : '获取模型'}
+                </button>
+              </div>
+              {models.length > 0 && (
+                <select
+                  className="field"
+                  value={llmForm.model}
+                  onChange={(e) => setLlmForm({ ...llmForm, model: e.target.value })}
+                >
+                  <option value="">— 从列表选择模型 —</option>
+                  {models.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => void testLlm()} disabled={testing}>

@@ -28,17 +28,17 @@
   --bg-image: none;
 }
 
-/* 深色主题：宝蓝 + 白字 */
+/* 深色主题：深海军蓝 + 白字（配色取自 深色模式颜色参考.png，优化建议区 #2） */
 :root[data-theme='dark'] {
-  --color-primary: #1a237e;
-  --color-primary-soft: #283593;
-  --color-primary-deep: #9fa8f5;
+  --color-primary: #2e5fa3;
+  --color-primary-soft: #1f3a6b;
+  --color-primary-deep: #8ab0f0;
   --color-text: #ffffff;
-  --color-text-secondary: #c3c9f0;
-  --color-surface: rgba(40, 53, 147, 0.55);
-  --color-surface-strong: rgba(26, 35, 126, 0.92);
-  --color-border: rgba(159, 168, 245, 0.35);
-  --color-danger: #ff8fab;
+  --color-text-secondary: #9aa8c7;
+  --color-surface: rgba(21, 38, 74, 0.6);
+  --color-surface-strong: rgba(13, 23, 47, 0.92);
+  --color-border: rgba(102, 164, 255, 0.25);
+  --color-danger: #e87a93;
   --bg-image: none;
 }
 
@@ -76,7 +76,7 @@ body {
   background-color: #fdf0f5;
 }
 :root[data-theme='dark'] .app-bg {
-  background-color: #10154a;
+  background-color: #0e1d3c;
 }
 
 /* Material Symbols 基础类 */

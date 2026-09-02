@@ -11,7 +11,9 @@ export function registerBzresSchemes(): void {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: BZRES_SCHEME,
-      privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+      // corsEnabled：dev 下页面源是 http://localhost:5173，fetch(bzres://) 属跨源请求，
+      // 不加此特权 Chromium 直接拒（IMG 标签不受限但 ThemeProvider 用 fetch 探测 404）
+      privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true }
     }
   ])
 }
@@ -20,13 +22,23 @@ export function registerBzresSchemes(): void {
 export function registerBzresProtocol(): void {
   protocol.handle(BZRES_SCHEME, (request) => {
     const url = new URL(request.url)
-    // bzres://bg/bg-light → userData/bg/bg-light（standard scheme：host 为第一段路径）
-    const host = url.hostname === 'localhost' ? '' : url.hostname
-    const rel = (host ? host + '/' : '') + url.pathname.replace(/^\/+/, '')
-    const parts = decodeURIComponent(rel)
+    // bzres:// 无真实主机，host 仅作命名空间（root=userData 根，bg=背景图目录），不映射为磁盘目录。
+    // bzres://root/avatar.png → userData/avatar.png；bzres://bg/bg-light.png → userData/bg/bg-light.png
+    const host = url.hostname
+    const pathPart = url.pathname.replace(/^\/+/, '')
+    const raw =
+      host === 'bg'
+        ? 'bg/' + pathPart
+        : host === 'root' || host === 'localhost' || host === ''
+          ? pathPart
+          : ''
+    const parts = decodeURIComponent(raw)
       .replace(/\\/g, '/')
       .split('/')
       .filter((p) => p && p !== '.' && p !== '..')
+    if (parts.length === 0) {
+      return new Response('Forbidden', { status: 403 })
+    }
     const abs = join(userDataDir(), ...parts)
     if (!abs.startsWith(userDataDir())) {
       return new Response('Forbidden', { status: 403 })

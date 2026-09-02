@@ -112,7 +112,8 @@ const api = {
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'verify_records', id)
   },
   llm: {
-    test: (config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', config)
+    test: (config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', config),
+    models: (config: unknown): Promise<string[]> => ipcRenderer.invoke('llm:models', config)
   },
   mcp: {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>

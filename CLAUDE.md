@@ -19,6 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/log/<YYMMDD>.md`（如 260902.md）                  | AI                | 每天一个开发日志，按日期命名，由 AI 记录当天开发情况                                 |
 | `docs/project/idea/`                                    | **开发者**        | AI coding 时**不需要关注、不得修改**此目录                                           |
 | `docs/project/需求（功能模块）/总需求文档.md`           | 开发者主导        | 跨模块的全局硬性规则；AI 可提建议，或在开发者要求下协助完善（需审核通过）         |
+| `docs/project/优化建议区.md`                          | **开发者**        | 开发者记录使用中遇到的优化建议；AI 据此实施优化（实施后移入「归档区」）           |
 | `docs/project/问题疑惑区.md`                          | **开发者**        | 开发者记录问题疑惑处；**AI 不要主动查阅**，开发者指明时才阅读并答疑               |
 
 工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。7 份 designs-specs.md 已于 260902 全部生成，v1.0 代码已于同日全部生成（typecheck/build 通过，待人工冒烟）。
