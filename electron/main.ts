@@ -12,6 +12,11 @@ if (process.env.NODE_ENV === 'production' && !process.versions.electron) {
   // no-op：esm 打包由 electron-vite 处理
 }
 
+// 应用图标（优化建议区：resources/app.png）。dev 从项目根取；打包态预留 extraResources 路径
+const appIcon = app.isPackaged
+  ? join(process.resourcesPath, 'app.png')
+  : join(__dirname, '../../resources/app.png')
+
 function createWindow(): void {
   const win = new BrowserWindow({
     title: "bugzi's workspace",
@@ -27,7 +32,7 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false // preload 需要部分 node 能力做类型化桥（仍不开 nodeIntegration）
     },
-    icon: join(__dirname, '../renderer/assets/icon.png')
+    icon: appIcon
   })
 
   win.on('ready-to-show', () => win.show())

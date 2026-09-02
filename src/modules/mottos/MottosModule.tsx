@@ -1,5 +1,5 @@
-// 格言库模块（格言库 specs 全量）
-import { useCallback, useEffect, useRef, useState } from 'react'
+// 格言库模块（格言库 specs 全量 + v2.0 §7：标签/搜索/生成/去重）
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MottoRecord } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -37,6 +37,28 @@ export default function MottosModule(props: MottosModuleProps) {
   const [adding, setAdding] = useState(false)
   const [addContent, setAddContent] = useState('')
   const [addSource, setAddSource] = useState('')
+  const [addTags, setAddTags] = useState('')
+  // 编辑
+  const [editTags, setEditTags] = useState('')
+  // v2.0 §7.2 搜索 + §7.1 标签筛选/行内编辑
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [tagEditId, setTagEditId] = useState<number | null>(null)
+  const [tagInput, setTagInput] = useState('')
+  // 导航栏标签弹层开关 + 外部点击收起判定容器
+  const [tagPopOpen, setTagPopOpen] = useState(false)
+  const tagNavRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!tagPopOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (tagNavRef.current && e.target instanceof Node && !tagNavRef.current.contains(e.target)) {
+        setTagPopOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [tagPopOpen])
   // 批量导入
   const [importing, setImporting] = useState(false)
   const [importText, setImportText] = useState('')
@@ -74,12 +96,93 @@ export default function MottosModule(props: MottosModuleProps) {
   // keep-alive：切回格言库时刷新（定时任务可能在后台已生成）
   useModuleActivated('mottos', () => void load())
 
+  // ---------- v2.0：标签聚合 + 过滤（§7.1/§7.2） ----------
+  /** 全部标签（按使用条数降序，同数按名称），筛选条数据源 */
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const m of mottos) {
+      for (const t of m.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'))
+  }, [mottos])
+
+  const filterActive = (searchOpen && searchText.trim() !== '') || tagFilter != null
+
+  /** 搜索（正文/出处/标签，不区分大小写）AND 标签筛选（单选） */
+  const visibleMotto = useCallback(
+    (m: MottoRecord): boolean => {
+      const kw = searchText.trim().toLowerCase()
+      if (kw) {
+        const hit =
+          m.content.toLowerCase().includes(kw) ||
+          m.source.toLowerCase().includes(kw) ||
+          (m.tags ?? []).some((t) => t.toLowerCase().includes(kw))
+        if (!hit) return false
+      }
+      if (tagFilter != null && !(m.tags ?? []).includes(tagFilter)) return false
+      return true
+    },
+    [searchText, tagFilter]
+  )
+
+  /** 区计数：过滤时显示 命中/总数 */
+  const zoneCountLabel = useCallback(
+    (status: string): string => {
+      const total = mottos.filter((m) => m.status === status).length
+      if (!filterActive) return String(total)
+      return `${mottos.filter((m) => m.status === status && visibleMotto(m)).length}/${total}`
+    },
+    [mottos, filterActive, visibleMotto]
+  )
+
+  /** 标签弹窗输入解析：逗号（,，）或顿号（、）分隔多个 */
+  const parseTagInput = (raw: string): string[] =>
+    raw
+      .split(/[,，、]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+  /** 快速添加候选：已有标签中不在当前输入里的（最多 8 个） */
+  const tagsNotIn = useCallback(
+    (raw: string): string[] => {
+      const cur = new Set(parseTagInput(raw))
+      return allTags
+        .filter(([t]) => !cur.has(t))
+        .slice(0, 8)
+        .map(([t]) => t)
+    },
+    [allTags]
+  )
+
+  /** 弹窗输入框追加一个标签（顿号衔接） */
+  const appendTagToInput = (raw: string, t: string): string =>
+    raw.trim() ? `${raw.replace(/[，、,\s]+$/, '')}、${t}` : t
+
+  /** 行内标签编辑：添加（回车确认，同名去重） */
+  const addTagTo = async (m: MottoRecord, raw: string): Promise<void> => {
+    const t = raw.trim()
+    if (!t) return
+    const next = [...(m.tags ?? [])]
+    if (!next.includes(t)) next.push(t)
+    await window.api.mottos.setTags(m.id, next)
+    setMottos((prev) => prev.map((x) => (x.id === m.id ? { ...x, tags: next } : x)))
+  }
+
+  /** 行内标签编辑：删除 */
+  const removeTagFrom = async (m: MottoRecord, tag: string): Promise<void> => {
+    const next = (m.tags ?? []).filter((t) => t !== tag)
+    await window.api.mottos.setTags(m.id, next)
+    setMottos((prev) => prev.map((x) => (x.id === m.id ? { ...x, tags: next } : x)))
+  }
+
   const generate = async (): Promise<void> => {
     if (generating) return
     setGenerating(true)
     try {
       const r = await window.api.mottos.generate()
-      toast(`本次生成 ${r.generated} 条，去重后入库 ${r.inserted} 条`)
+      toast(
+        `本次生成 ${r.generated} 条（摘录 ${r.excerptInserted} + 编撰 ${r.composedInserted}），去重后入库 ${r.inserted} 条`
+      )
       await load()
     } catch (e) {
       const msg = String((e as Error).message)
@@ -101,17 +204,18 @@ export default function MottosModule(props: MottosModuleProps) {
   const saveEdit = async (): Promise<void> => {
     if (!editing) return
     if (!editContent.trim()) return
-    await window.api.mottos.update(editing.id, editContent.trim(), editSource.trim())
+    await window.api.mottos.update(editing.id, editContent.trim(), editSource.trim(), parseTagInput(editTags))
     setEditing(null)
     await load()
   }
 
   const doAdd = async (): Promise<void> => {
     if (!addContent.trim()) return
-    await window.api.mottos.create(addContent.trim(), addSource.trim(), 'formal')
+    await window.api.mottos.create(addContent.trim(), addSource.trim(), 'formal', parseTagInput(addTags))
     setAdding(false)
     setAddContent('')
     setAddSource('')
+    setAddTags('')
     toast('已新增到正式区')
     await load()
   }
@@ -127,9 +231,11 @@ export default function MottosModule(props: MottosModuleProps) {
       const m = l.match(/^(.+?)\s*——\s*(.+)$/)
       return m ? { content: m[1].trim(), source: m[2].trim() } : { content: l, source: '' }
     })
-    // 查重（与现有全部格言）
-    const existing = new Set(mottos.map((m) => m.content.replace(/\s/g, '')))
-    const fresh = items.filter((it) => !existing.has(it.content.replace(/\s/g, '')))
+    // 查重（v2.0 §7.4：主进程规范化 + 包含判重，仅未删除区）
+    const fresh: { content: string; source: string }[] = []
+    for (const it of items) {
+      if (!(await window.api.mottos.checkDuplicate(it.content))) fresh.push(it)
+    }
     for (const it of fresh) {
       await window.api.mottos.create(it.content, it.source, 'formal')
     }
@@ -194,18 +300,99 @@ export default function MottosModule(props: MottosModuleProps) {
         <span className="module-sub">三级流转：草稿 → 沉淀 → 正式</span>
       </div>
 
-      {/* 快速导航（优化建议区）：点击跳转到对应区 */}
+      {/* 吸顶导航栏（优化建议区 + v2.0）：左侧区导航跳转，右侧标签筛选 + 搜索，滚动时常驻可用 */}
       <div className="zone-nav">
         {ZONES.map((z) => (
           <button key={z.status} className="zone-nav-btn" onClick={() => jumpToZone(z.status)}>
             <span>{z.label}</span>
-            <span className="zone-count">{mottos.filter((m) => m.status === z.status).length}</span>
+            <span className="zone-count">{zoneCountLabel(z.status)}</span>
           </button>
         ))}
+        <div className="zone-nav-right">
+          {/* 标签筛选：点击图标弹层列出全部标签，快速筛选（§7.1） */}
+          <div className="zone-nav-pop-wrap" ref={tagNavRef}>
+            <button
+              className={`zone-nav-btn${tagPopOpen || tagFilter != null ? ' on' : ''}`}
+              title="标签筛选"
+              onClick={() => setTagPopOpen((v) => !v)}
+            >
+              <span className="material-symbols-outlined">sell</span>
+              {tagFilter != null && <span className="zone-count">{tagFilter}</span>}
+            </button>
+            {tagPopOpen && (
+              <div className="tag-pop">
+                {allTags.length === 0 ? (
+                  <span className="tag-pop-empty">还没有任何标签</span>
+                ) : (
+                  allTags.map(([t, n]) => (
+                    <button
+                      key={t}
+                      className={`tag-chip${tagFilter === t ? ' active' : ''}`}
+                      title={`${tagFilter === t ? '取消筛选' : '筛选'}标签「${t}」：${n} 条`}
+                      onClick={() => {
+                        setTagFilter((cur) => (cur === t ? null : t))
+                        setTagPopOpen(false)
+                      }}
+                    >
+                      {t}
+                      <span className="tag-chip-count">{n}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          {/* 搜索：图标展开输入框，实时过滤三区（§7.2） */}
+          {searchOpen && (
+            <input
+              className="field search-input nav-search"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchText('')
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+              placeholder="搜索正文 / 出处 / 标签…"
+              autoFocus
+            />
+          )}
+          <button
+            className={`zone-nav-btn${searchOpen ? ' on' : ''}`}
+            title={searchOpen ? '关闭搜索' : '搜索格言'}
+            onClick={() => {
+              setSearchOpen((v) => !v)
+              setSearchText('')
+            }}
+          >
+            <span className="material-symbols-outlined">{searchOpen ? 'close' : 'search'}</span>
+          </button>
+        </div>
       </div>
 
+      {/* v2.0 §7.1 标签汇总条：聚合全部标签，单选切换（与导航栏弹层同数据源） */}
+      {allTags.length > 0 && (
+        <div className="tag-bar">
+          <span className="material-symbols-outlined tag-bar-icon">sell</span>
+          {allTags.map(([t, n]) => (
+            <button
+              key={t}
+              className={`tag-chip${tagFilter === t ? ' active' : ''}`}
+              onClick={() => setTagFilter((cur) => (cur === t ? null : t))}
+              title={`筛选标签「${t}」：${n} 条`}
+            >
+              {t}
+              <span className="tag-chip-count">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {ZONES.map((z) => {
-        const items = mottos.filter((m) => m.status === z.status)
+        const zoneAll = mottos.filter((m) => m.status === z.status)
+        // v2.0：搜索 + 标签筛选作用于三区（§7.1/§7.2）
+        const items = zoneAll.filter(visibleMotto)
         const isCollapsed = collapsed[z.status]
         return (
           <section
@@ -256,16 +443,21 @@ export default function MottosModule(props: MottosModuleProps) {
             </div>
             {!isCollapsed && (
               <div className="zone-body">
-                {items.length === 0 && (
+                {zoneAll.length === 0 ? (
                   <div className="empty-state">
                     <span className="material-symbols-outlined">format_quote</span>
                     暂无格言
                   </div>
-                )}
+                ) : items.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="material-symbols-outlined">search_off</span>
+                    无匹配
+                  </div>
+                ) : null}
                 {items.map((m, idx) => (
+                  <Fragment key={m.id}>
                   <div
                     className="row-item motto-row"
-                    key={m.id}
                     draggable
                     onDragStart={(e) => onDragStart(e, m)}
                     onDragEnd={onDragEnd}
@@ -280,10 +472,23 @@ export default function MottosModule(props: MottosModuleProps) {
                           {m.content}
                         </span>
                         <span className="motto-source">—— {m.source || '（出处待补）'}</span>
+                        {(m.tags ?? []).length > 0 && (
+                          <span className="motto-tags" title={m.tags.join('、')}>
+                            {m.tags.slice(0, 3).map((t) => (
+                              <span key={t} className="tag-chip mini">
+                                {t}
+                              </span>
+                            ))}
+                            {m.tags.length > 3 && (
+                              <span className="tag-chip mini more">+{m.tags.length - 3}</span>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-                      {m.origin === 'ai' && <span className="badge">AI</span>}
+                      {/* AI 徽章仅编撰条显示（v2.0：现实摘录条不打） */}
+                      {m.origin === 'ai' && m.gen_kind !== 'excerpt' && <span className="badge">AI</span>}
                       {z.status === 'draft' && (
                         <button
                           className="icon-btn"
@@ -312,11 +517,22 @@ export default function MottosModule(props: MottosModuleProps) {
                             setEditing(m)
                             setEditContent(m.content)
                             setEditSource(m.source)
+                            setEditTags((m.tags ?? []).join('、'))
                           }}
                         >
                           <span className="material-symbols-outlined">edit</span>
                         </button>
                       )}
+                      <button
+                        className="icon-btn"
+                        title="标签"
+                        onClick={() => {
+                          setTagEditId((cur) => (cur === m.id ? null : m.id))
+                          setTagInput('')
+                        }}
+                      >
+                        <span className="material-symbols-outlined">sell</span>
+                      </button>
                       <button
                         className="icon-btn"
                         title="复制格言+出处"
@@ -329,6 +545,43 @@ export default function MottosModule(props: MottosModuleProps) {
                       </button>
                     </div>
                   </div>
+                  {/* v2.0 §7.1 行内标签编辑条：回车添加，点 × 删除；虚线胶囊快速添加已有标签 */}
+                  {tagEditId === m.id && (
+                    <div className="tag-edit-row">
+                      {(m.tags ?? []).map((t) => (
+                        <span key={t} className="tag-chip removable">
+                          {t}
+                          <button onClick={() => void removeTagFrom(m, t)} title={`删除标签「${t}」`}>
+                            <span className="material-symbols-outlined">close</span>
+                          </button>
+                        </span>
+                      ))}
+                      {tagsNotIn((m.tags ?? []).join('、')).map((t) => (
+                        <button
+                          key={t}
+                          className="tag-chip addable"
+                          title={`添加已有标签「${t}」`}
+                          onClick={() => void addTagTo(m, t)}
+                        >
+                          <span className="material-symbols-outlined">add</span>
+                          {t}
+                        </button>
+                      ))}
+                      <input
+                        className="field tag-input"
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            void addTagTo(m, tagInput)
+                            setTagInput('')
+                          }
+                        }}
+                        placeholder="输入标签，回车添加"
+                      />
+                    </div>
+                  )}
+                  </Fragment>
                 ))}
               </div>
             )}
@@ -364,6 +617,27 @@ export default function MottosModule(props: MottosModuleProps) {
                 onChange={(e) => setEditSource(e.target.value)}
                 placeholder="出处（书名/作者/AI 编撰）"
               />
+              <input
+                className="field"
+                value={editTags}
+                onChange={(e) => setEditTags(e.target.value)}
+                placeholder="标签（可选，逗号/顿号分隔多个）"
+              />
+              {tagsNotIn(editTags).length > 0 && (
+                <div className="dialog-quick-tags">
+                  {tagsNotIn(editTags).map((t) => (
+                    <button
+                      key={t}
+                      className="tag-chip addable"
+                      title={`添加已有标签「${t}」`}
+                      onClick={() => setEditTags((v) => appendTagToInput(v, t))}
+                    >
+                      <span className="material-symbols-outlined">add</span>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => setEditing(null)}>取消</button>
@@ -392,6 +666,27 @@ export default function MottosModule(props: MottosModuleProps) {
                 onChange={(e) => setAddSource(e.target.value)}
                 placeholder="出处"
               />
+              <input
+                className="field"
+                value={addTags}
+                onChange={(e) => setAddTags(e.target.value)}
+                placeholder="标签（可选，逗号/顿号分隔多个）"
+              />
+              {tagsNotIn(addTags).length > 0 && (
+                <div className="dialog-quick-tags">
+                  {tagsNotIn(addTags).map((t) => (
+                    <button
+                      key={t}
+                      className="tag-chip addable"
+                      title={`添加已有标签「${t}」`}
+                      onClick={() => setAddTags((v) => appendTagToInput(v, t))}
+                    >
+                      <span className="material-symbols-outlined">add</span>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => setAdding(false)}>取消</button>

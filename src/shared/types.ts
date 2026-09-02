@@ -17,7 +17,9 @@ export const SettingsKeys = {
   McpConfigs: 'mcp_configs',
   McpEnabled: 'mcp_enabled',
   MottoSchedule: 'motto_schedule',
-  LastMottoRun: 'last_motto_run'
+  LastMottoRun: 'last_motto_run',
+  AiActiveSessionId: 'ai_active_session_id',
+  AiWidth: 'ai_width'
 } as const
 
 export type Theme = 'light' | 'dark'
@@ -72,9 +74,19 @@ export interface McpResearch {
   notes: string
 }
 
+// AI 边栏会话（ai_sessions 表，DB v4）
+export interface AiSession {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 // AI 边栏消息（ai_messages 表）
 export interface AiMessage {
   id: number
+  /** 所属会话（DB v4 起必填） */
+  session_id: number
   role: 'user' | 'assistant' | 'system'
   ai_module: string | null
   content: string

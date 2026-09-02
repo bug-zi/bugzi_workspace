@@ -1,31 +1,119 @@
 // AI 业务服务（主进程）：格言生成、知识卡片生成、AI 边栏对话、辩真验证
-import { getDb, nowIso, normalizeText } from '../db/db'
+import { getDb, nowIso, normalizeText, isDupMotto } from '../db/db'
 import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { mdWrite } from '../services/files'
 import { SettingsKeys } from '../../src/shared/types'
-import type { AiMessage, LlmConfig } from '../../src/shared/types'
+import type { AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
 
-// ---------- AI 边栏（样式 specs §4） ----------
+// ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
 
-export function listAiMessages(): AiMessage[] {
+/** 会话默认标题（自动命名/手动改名前的初始值） */
+const DEFAULT_SESSION_TITLE = '新对话'
+
+/** 自动命名取消息前 N 字 */
+const AUTO_TITLE_LEN = 20
+
+/** 会话列表（最近活跃在前） */
+export function listAiSessions(): AiSession[] {
   return getDb()
-    .prepare('SELECT * FROM ai_messages ORDER BY id ASC')
-    .all() as unknown as AiMessage[]
+    .prepare('SELECT * FROM ai_sessions ORDER BY updated_at DESC, id DESC')
+    .all() as unknown as AiSession[]
 }
 
-export function appendAiMessage(role: AiMessage['role'], content: string, aiModule: string | null = null): AiMessage {
+/** 当前激活会话 id（settings.ai_active_session_id；无或非法 → null） */
+export function getActiveSessionId(): number | null {
+  const v = getSetting(SettingsKeys.AiActiveSessionId)
+  const id = v ? Number(v) : NaN
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/** 设置激活会话（渲染层切换/新建时经 settings:set 落库；null 清除） */
+export function setActiveSessionId(id: number | null): void {
+  setSetting(SettingsKeys.AiActiveSessionId, id == null ? '' : String(id))
+}
+
+export function createAiSession(title: string = DEFAULT_SESSION_TITLE): AiSession {
   const now = nowIso()
   const r = getDb()
-    .prepare('INSERT INTO ai_messages (role, ai_module, content, created_at) VALUES (?, ?, ?, ?)')
-    .run(role, aiModule, content, now)
+    .prepare('INSERT INTO ai_sessions (title, created_at, updated_at) VALUES (?, ?, ?)')
+    .run(title, now, now)
+  return { id: Number(r.lastInsertRowid), title, created_at: now, updated_at: now }
+}
+
+export function renameAiSession(id: number, title: string): void {
+  const t = title.trim().slice(0, 50) || DEFAULT_SESSION_TITLE
+  getDb().prepare('UPDATE ai_sessions SET title = ? WHERE id = ?').run(t, id)
+}
+
+/** 删除会话（连同其全部消息）；若删的是激活会话 → 自动切到剩余最近活跃的一个，无剩余则清除激活 */
+export function deleteAiSession(id: number): void {
+  const d = getDb()
+  // 先删消息再删会话（FK 约束下顺序即安全，无需显式事务）
+  d.prepare('DELETE FROM ai_messages WHERE session_id = ?').run(id)
+  d.prepare('DELETE FROM ai_sessions WHERE id = ?').run(id)
+  if (getActiveSessionId() === id) {
+    const next = d.prepare('SELECT id FROM ai_sessions ORDER BY updated_at DESC, id DESC LIMIT 1').get() as
+      | { id: number }
+      | undefined
+    setActiveSessionId(next ? next.id : null)
+  }
+}
+
+export function listAiMessages(sessionId: number): AiMessage[] {
+  return getDb()
+    .prepare('SELECT * FROM ai_messages WHERE session_id = ? ORDER BY id ASC')
+    .all(sessionId) as unknown as AiMessage[]
+}
+
+export function deleteAiMessage(id: number): void {
+  getDb().prepare('DELETE FROM ai_messages WHERE id = ?').run(id)
+}
+
+export function appendAiMessage(
+  role: AiMessage['role'],
+  content: string,
+  aiModule: string | null,
+  sessionId: number
+): AiMessage {
+  const now = nowIso()
+  const d = getDb()
+  const r = d
+    .prepare('INSERT INTO ai_messages (role, ai_module, content, created_at, session_id) VALUES (?, ?, ?, ?, ?)')
+    .run(role, aiModule, content, now, sessionId)
+  // 消息入会话即视为活跃（会话列表按 updated_at 排序）
+  d.prepare('UPDATE ai_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId)
   return {
     id: Number(r.lastInsertRowid),
+    session_id: sessionId,
     role,
     ai_module: aiModule,
     content,
     created_at: now
   }
+}
+
+/** 会话标题仍是默认值时，用消息前缀自动命名（去换行，超长截断） */
+function autoTitleSession(sessionId: number, message: string): void {
+  const d = getDb()
+  const s = d.prepare('SELECT title FROM ai_sessions WHERE id = ?').get(sessionId) as
+    | { title: string }
+    | undefined
+  if (!s || s.title !== DEFAULT_SESSION_TITLE) return
+  const title = message.replace(/\s+/g, ' ').trim().slice(0, AUTO_TITLE_LEN) || DEFAULT_SESSION_TITLE
+  d.prepare('UPDATE ai_sessions SET title = ? WHERE id = ?').run(title, sessionId)
+}
+
+/** 系统消息（辩真阁验证过程等）落激活会话；无激活会话则自动新建一个接收，返回带 session_id 的消息 */
+export function appendSystemToActiveSession(content: string): AiMessage {
+  let sid = getActiveSessionId()
+  if (sid == null) {
+    const title = content.replace(/\s+/g, ' ').trim().slice(0, AUTO_TITLE_LEN) || DEFAULT_SESSION_TITLE
+    const s = createAiSession(title)
+    setActiveSessionId(s.id)
+    sid = s.id
+  }
+  return appendAiMessage('system', content, null, sid)
 }
 
 const MODULE_LABELS: Record<string, string> = {
@@ -37,11 +125,12 @@ const MODULE_LABELS: Record<string, string> = {
   profile: '个人中心'
 }
 
-/** AI 边栏对话：历史 + 模块感知 system prompt（样式 specs §4.1） */
-export async function aiChat(userMessage: string, currentModule: string): Promise<AiMessage> {
-  // 先落用户消息（持久化 v1 单会话全历史）
-  const userMsg = appendAiMessage('user', userMessage, currentModule)
-  const history = listAiMessages()
+/** AI 边栏对话：会话内历史 + 模块感知 system prompt（样式 specs §4.1；多会话改造） */
+export async function aiChat(userMessage: string, currentModule: string, sessionId: number): Promise<AiMessage> {
+  // 首条用户消息自动命名会话，再落用户消息（持久化该会话全历史）
+  autoTitleSession(sessionId, userMessage)
+  const userMsg = appendAiMessage('user', userMessage, currentModule, sessionId)
+  const history = listAiMessages(sessionId)
     .filter((m) => m.role !== 'system')
     .slice(-30)
     .map((m) => ({ role: m.role, content: m.content }) as { role: 'user' | 'assistant'; content: string })
@@ -51,13 +140,13 @@ export async function aiChat(userMessage: string, currentModule: string): Promis
     messages: [{ role: 'system', content: system }, ...history],
     temperature: 0.8
   })
-  const assistantMsg = appendAiMessage('assistant', res.content, currentModule)
+  const assistantMsg = appendAiMessage('assistant', res.content, currentModule, sessionId)
   return assistantMsg
 }
 
-// ---------- 格言生成（格言库 specs §3） ----------
+// ---------- 格言生成（格言库 specs §3 / v2.0 §7.3-§7.4） ----------
 
-function parseJsonArray(raw: string): { content: string; source: string }[] {
+function parseJsonArray(raw: string): { content: string; source: string; kind?: string }[] {
   // 兼容 ```json 包裹与裸 JSON；兼容 {"mottos":[...]} 对象包裹（json_object 模式下多数服务强制顶层为对象，无法直接返回数组）
   const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
   let parsed: unknown = JSON.parse(text)
@@ -66,10 +155,14 @@ function parseJsonArray(raw: string): { content: string; source: string }[] {
     parsed = Object.values(parsed).find((v) => Array.isArray(v)) ?? parsed
   }
   if (!Array.isArray(parsed)) throw new Error('LLM 未返回 JSON 数组')
-  const out: { content: string; source: string }[] = []
+  const out: { content: string; source: string; kind?: string }[] = []
   for (const item of parsed) {
     if (item && typeof item.content === 'string' && typeof item.source === 'string') {
-      out.push({ content: item.content.trim(), source: item.source.trim() })
+      out.push({
+        content: item.content.trim(),
+        source: item.source.trim(),
+        kind: typeof item.kind === 'string' ? item.kind : undefined
+      })
     }
   }
   if (out.length === 0) throw new Error('LLM 返回数组为空或字段缺失')
@@ -79,9 +172,19 @@ function parseJsonArray(raw: string): { content: string; source: string }[] {
 export interface GenerateMottosResult {
   generated: number
   inserted: number
+  /** 入库的摘录条数（v2.0 §7.3） */
+  excerptInserted: number
+  /** 入库的编撰条数（v2.0 §7.3） */
+  composedInserted: number
 }
 
-/** 「来10条格言」：正式区风格样本 → LLM 生成 → 查重入库草稿区（specs §3.1） */
+/** kind 缺失/非法时按出处含「AI 编撰」推断（v2.0 §7.3 解析容错） */
+function mottoKind(kind: string | undefined, source: string): 'excerpt' | 'composed' {
+  if (kind === 'excerpt' || kind === 'composed') return kind
+  return /ai\s*编撰/i.test(source) ? 'composed' : 'excerpt'
+}
+
+/** 「来10条格言」（v2.0：5 摘录 + 5 编撰）：正式区风格样本 → LLM 生成 → 增强查重入库草稿区 */
 export async function generateMottos(): Promise<GenerateMottosResult> {
   const d = getDb()
   const formal = d
@@ -90,13 +193,20 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const samples = formal.length
     ? formal.map((m) => `- ${m.content} —— ${m.source}`).join('\n')
     : '（暂无，可自由发挥）'
-  const prompt = `以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言。可以摘取现实书籍作品中的名言，也可以自行编撰；每条必须标明出处（编撰的标「AI 编撰」）。以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处"}]}，mottos 数组内恰好 10 项，不要输出其他任何内容。`
+  // 去重清单（§7.4.1/§7.4.3）：三区 + 回收站全部格言（不过滤 deleted_at），最多 500 条防 prompt 超长
+  const existingRows = d
+    .prepare('SELECT content FROM mottos ORDER BY updated_at DESC LIMIT 500')
+    .all() as { content: string }[]
+  const avoidList = existingRows.length
+    ? existingRows.map((r) => `- ${r.content}`).join('\n')
+    : '（暂无）'
+  const prompt = `以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
     jsonMode: true
   })
-  let items: { content: string; source: string }[]
+  let items: { content: string; source: string; kind?: string }[]
   try {
     items = parseJsonArray(res.content)
   } catch {
@@ -108,14 +218,9 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
     })
     items = parseJsonArray(retry.content)
   }
-  // 入库前查重：规范化比对三区全部格言
-  const existing = new Set(
-    (
-      d.prepare('SELECT content FROM mottos WHERE deleted_at IS NULL').all() as {
-        content: string
-      }[]
-    ).map((r) => normalizeText(r.content))
-  )
+  // 入库前查重（§7.4.2/§7.4.3）：规范化一致或互为子串（长度门槛内）即重复；
+  // 比对集合 = 三区 + 回收站全部格言，且随本批插入逐步扩充（批内互斥）
+  const allNorms = existingRows.map((r) => normalizeText(r.content))
   const now = nowIso()
   // 插到草稿区开头（优化建议区「序号+拖拽排序」决策：新格言插区首）：
   // 逐条 MIN(sort)-1 递减，先插入的排更前
@@ -126,20 +231,24 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   ).m
   if (headSort == null) headSort = 1
   const ins = d.prepare(
-    "INSERT INTO mottos (content, source, status, origin, sort, created_at, updated_at) VALUES (?, ?, 'draft', 'ai', ?, ?, ?)"
+    "INSERT INTO mottos (content, source, status, origin, gen_kind, sort, tags, created_at, updated_at) VALUES (?, ?, 'draft', 'ai', ?, ?, '[]', ?, ?)"
   )
   let inserted = 0
-  const seen = new Set<string>()
+  let excerptInserted = 0
+  let composedInserted = 0
   for (const it of items) {
     const key = normalizeText(it.content)
-    if (!key || existing.has(key) || seen.has(key)) continue
-    seen.add(key)
+    if (!key || isDupMotto(allNorms, key)) continue
+    allNorms.push(key)
     headSort -= 1
-    ins.run(it.content, it.source, headSort, now, now)
-    existing.add(key)
+    // gen_kind 落库（DB v6）：驱动 AI 徽章仅编撰条显示、摘录条不打
+    const kind = mottoKind(it.kind, it.source)
+    ins.run(it.content, it.source, kind, headSort, now, now)
+    if (kind === 'composed') composedInserted++
+    else excerptInserted++
     inserted++
   }
-  return { generated: items.length, inserted }
+  return { generated: items.length, inserted, excerptInserted, composedInserted }
 }
 
 // ---------- 知识卡片生成（万象库 specs §3.1） ----------

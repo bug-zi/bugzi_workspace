@@ -507,3 +507,168 @@
 .grow {
   flex: 1;
 }
+
+/* ===== 格言库 v2.0：搜索 + 标签 ===== */
+/* 吸顶导航栏右侧：标签筛选 + 搜索（滚动时常驻可用） */
+.zone-nav-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 图标按钮激活态（弹层展开 / 搜索展开 / 筛选生效） */
+.zone-nav-btn.on {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.zone-nav .nav-search {
+  width: 190px;
+  padding: 3px 10px;
+  font-size: 0.86em;
+}
+/* 标签弹层：锚在导航栏标签图标下方，单行显示（横向滚动） */
+.zone-nav-pop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.tag-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  /* 单行胶囊：超宽横向滚动，不折行 */
+  max-width: min(640px, 62vw);
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--acrylic-border);
+  background: var(--acrylic-bg);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+.tag-pop .tag-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* 浮层内细滚动条 */
+.tag-pop::-webkit-scrollbar {
+  height: 5px;
+}
+.tag-pop::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+.tag-pop::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tag-pop-empty {
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+}
+/* 标签筛选条：聚合全部标签（按使用数降序），单选切换 */
+.tag-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.tag-bar-icon {
+  font-size: 16px;
+  color: var(--color-text-secondary);
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  font-size: 0.82em;
+  cursor: pointer;
+}
+.tag-chip:hover {
+  border-color: var(--color-primary-soft);
+}
+.tag-chip.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.tag-chip-count {
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+/* 行上标签胶囊（最多 3 个 + 溢出计数） */
+.motto-tags {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.tag-chip.mini {
+  padding: 0 8px;
+  font-size: 0.74em;
+  cursor: default;
+}
+.tag-chip.mini.more {
+  color: var(--color-text-secondary);
+}
+/* 行内标签编辑条（行下方展开） */
+.tag-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 4px 34px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--color-primary-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.tag-edit-row .tag-input {
+  flex: 1;
+  min-width: 150px;
+  padding: 2px 8px;
+}
+.tag-chip.removable {
+  cursor: default;
+}
+.tag-chip.removable button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  display: inline-flex;
+  cursor: pointer;
+}
+.tag-chip.removable button .material-symbols-outlined {
+  font-size: 12px;
+}
+.tag-chip.removable button:hover {
+  color: var(--color-danger);
+}
+/* 快速添加已有标签：虚线胶囊，hover 转实线示意可加 */
+.tag-chip.addable {
+  border-style: dashed;
+  cursor: pointer;
+}
+.tag-chip.addable:hover {
+  border-style: solid;
+  border-color: var(--color-primary);
+}
+.tag-chip.addable .material-symbols-outlined {
+  font-size: 12px;
+}
+/* 弹窗内快速添加胶囊行 */
+.dialog-quick-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

@@ -10,6 +10,10 @@ export interface MottoRecord {
   origin: 'manual' | 'ai'
   /** 区内排序（越小越靠前，DB v3） */
   sort: number
+  /** 标签（DB v5，JSON 列解析而来；可能为空数组） */
+  tags: string[]
+  /** 生成类型（DB v6）：excerpt=现实摘录 | composed=AI 编撰 | null=手动录入/未知 */
+  gen_kind: 'excerpt' | 'composed' | null
   created_at: string
   updated_at: string
   deleted_at: string | null
@@ -73,10 +77,19 @@ export interface RecycleRow {
 
 export interface AiMessageRow {
   id: number
+  /** 所属会话 */
+  session_id: number
   role: 'user' | 'assistant' | 'system'
   ai_module: string | null
   content: string
   created_at: string
+}
+
+export interface AiSessionRow {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
 }
 
 export interface LlmConfig {
@@ -148,22 +161,45 @@ export interface Api {
     delete(id: number): Promise<boolean>
   }
   ai: {
-    messages(): Promise<AiMessageRow[]>
-    chat(message: string, currentModule: string): Promise<{ id: number; role: string; content: string }>
+    messages(sessionId: number): Promise<AiMessageRow[]>
+    chat(
+      message: string,
+      currentModule: string,
+      sessionId: number
+    ): Promise<{ id: number; role: string; content: string }>
     configured(): Promise<boolean>
     pushSystem(content: string): Promise<boolean>
+    deleteMessage(id: number): Promise<boolean>
     onMessage(cb: (msg: AiMessageRow) => void): () => void
+  }
+  aiSession: {
+    /** 会话列表（最近活跃在前） */
+    list(): Promise<AiSessionRow[]>
+    create(): Promise<AiSessionRow>
+    rename(id: number, title: string): Promise<boolean>
+    /** 删除会话（连同消息）；删的是激活会话时主进程自动切换/清除激活 */
+    delete(id: number): Promise<boolean>
+    active(): Promise<number | null>
   }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
-    create(content: string, source: string, status: string): Promise<number>
-    update(id: number, content: string, source: string): Promise<boolean>
+    create(content: string, source: string, status: string, tags?: string[]): Promise<number>
+    update(id: number, content: string, source: string, tags?: string[]): Promise<boolean>
     setStatus(id: number, status: string): Promise<boolean>
+    /** 覆盖式设置标签（v2.0，传空数组即清空） */
+    setTags(id: number, tags: string[]): Promise<boolean>
     /** 区内重排（sort 覆盖为 0..n-1） */
     reorder(moves: { id: number; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
-    generate(): Promise<{ generated: number; inserted: number }>
+    generate(): Promise<{
+      generated: number
+      inserted: number
+      excerptInserted: number
+      composedInserted: number
+    }>
     normalize(s: string): Promise<string>
+    /** 未删除区内判重（v2.0：规范化一致或包含关系） */
+    checkDuplicate(content: string): Promise<boolean>
   }
   wiki: {
     sections(): Promise<WikiSection[]>

@@ -1,14 +1,20 @@
 // IPC 全通道注册（主进程）：渲染层 window.api.* 的后端
 import { ipcMain, dialog, BrowserWindow, shell, app, clipboard } from 'electron'
-import { getDb, nowIso, normalizeText } from './db/db'
+import { getDb, nowIso, normalizeText, isDupMotto } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
 import {
   listAiMessages,
-  appendAiMessage,
+  appendSystemToActiveSession,
   aiChat,
+  listAiSessions,
+  createAiSession,
+  renameAiSession,
+  deleteAiSession,
+  getActiveSessionId,
+  deleteAiMessage,
   generateMottos,
   generateWikiCard,
   runVerification,
@@ -28,9 +34,9 @@ function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
 }
 
-/** AI 边栏系统消息推送：写库 + webContents 发送 */
+/** AI 边栏系统消息推送：写入激活会话 + webContents 发送 */
 export function pushAiSystemMessage(content: string): void {
-  const msg = appendAiMessage('system', content, null)
+  const msg = appendSystemToActiveSession(content)
   win()?.webContents.send('ai:message', msg)
 }
 
@@ -133,26 +139,66 @@ export function registerIpc(): void {
     return true
   })
 
-  // ---------- AI 边栏 ----------
-  ipcMain.handle('ai:messages', () => listAiMessages())
-  ipcMain.handle('ai:chat', async (_e, message: string, currentModule: string) => {
-    const msgs = await aiChat(message, currentModule)
-    return msgs
+  // ---------- AI 边栏（多会话：优化建议区「对话记录管理」） ----------
+  ipcMain.handle('ai:messages', (_e, sessionId: number) => listAiMessages(sessionId))
+  ipcMain.handle('ai:chat', async (_e, message: string, currentModule: string, sessionId: number) => {
+    return await aiChat(message, currentModule, sessionId)
   })
   ipcMain.handle('ai:configured', () => isLlmConfigured())
   ipcMain.handle('ai:pushSystem', (_e, content: string) => {
     pushAiSystemMessage(content)
     return true
   })
+  ipcMain.handle('ai:deleteMessage', (_e, id: number) => {
+    deleteAiMessage(id)
+    return true
+  })
+
+  // ---------- AI 会话管理 ----------
+  ipcMain.handle('aiSession:list', () => listAiSessions())
+  ipcMain.handle('aiSession:create', () => createAiSession())
+  ipcMain.handle('aiSession:rename', (_e, id: number, title: string) => {
+    renameAiSession(id, title)
+    return true
+  })
+  ipcMain.handle('aiSession:delete', (_e, id: number) => {
+    deleteAiSession(id)
+    return true
+  })
+  ipcMain.handle('aiSession:active', () => getActiveSessionId())
 
   // ---------- 格言库 ----------
+  /** mottos.tags 列（JSON 字符串）→ string[]，容错解析 */
+  const parseTags = (raw: unknown): string[] => {
+    if (typeof raw !== 'string' || !raw) return []
+    try {
+      const v = JSON.parse(raw) as unknown
+      return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : []
+    } catch {
+      return []
+    }
+  }
+  /** 标签清洗：trim、去空、去重（渲染层传入数组的统一入口） */
+  const sanitizeTags = (tags: unknown): string[] => {
+    if (!Array.isArray(tags)) return []
+    const out: string[] = []
+    for (const t of tags) {
+      if (typeof t !== 'string') continue
+      const s = t.trim()
+      if (s && !out.includes(s)) out.push(s)
+    }
+    return out
+  }
   ipcMain.handle('mottos:list', (_e, status?: string) => {
     const d = getDb()
     const base = 'SELECT * FROM mottos WHERE deleted_at IS NULL'
-    const rows = status
-      ? d.prepare(`${base} AND status = ? ORDER BY sort, id`).all(status)
-      : d.prepare(`${base} ORDER BY sort, id`).all()
-    return rows
+    const rows = (
+      status
+        ? d.prepare(`${base} AND status = ? ORDER BY sort, id`).all(status)
+        : d.prepare(`${base} ORDER BY sort, id`).all()
+    ) as { tags?: string | null }[]
+    // tags JSON 列 → 数组（v2.0 §7.1）
+    return rows.map((r) => ({ ...r, tags: parseTags(r.tags) }))
   })
   /** 区内最小 sort（空区返回 0），新条目插到区首 */
   const mottoHeadSort = (d: ReturnType<typeof getDb>, status: string): number => {
@@ -161,25 +207,55 @@ export function registerIpc(): void {
       .get(status) as { m: number | null }
     return row.m == null ? 0 : row.m - 1
   }
-  ipcMain.handle('mottos:create', (_e, content: string, source: string, status: string) => {
-    const d = getDb()
-    const now = nowIso()
-    const r = d
-      .prepare(
-        'INSERT INTO mottos (content, source, status, origin, note_path, sort, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)'
-      )
-      .run(content, source, status, 'manual', mottoHeadSort(d, status), now, now)
-    const id = Number(r.lastInsertRowid)
-    if (status === 'formal') {
-      const notePath = `md/mottos/${id}.md`
-      d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
-      mdCreate(notePath, `# ${content}\n\n> ${source}\n`)
+  ipcMain.handle(
+    'mottos:create',
+    (_e, content: string, source: string, status: string, tags?: string[]) => {
+      const d = getDb()
+      const now = nowIso()
+      const r = d
+        .prepare(
+          'INSERT INTO mottos (content, source, status, origin, note_path, sort, tags, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)'
+        )
+        .run(content, source, status, 'manual', mottoHeadSort(d, status), JSON.stringify(sanitizeTags(tags)), now, now)
+      const id = Number(r.lastInsertRowid)
+      if (status === 'formal') {
+        const notePath = `md/mottos/${id}.md`
+        d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
+        mdCreate(notePath, `# ${content}\n\n> ${source}\n`)
+      }
+      return id
     }
-    return id
-  })
-  ipcMain.handle('mottos:update', (_e, id: number, content: string, source: string) => {
-    getDb().prepare('UPDATE mottos SET content = ?, source = ?, updated_at = ? WHERE id = ?').run(content, source, nowIso(), id)
+  )
+  ipcMain.handle(
+    'mottos:update',
+    (_e, id: number, content: string, source: string, tags?: string[]) => {
+      // tags 未传（undefined）= 不改动标签；传数组（含空）= 覆盖
+      if (tags === undefined) {
+        getDb()
+          .prepare('UPDATE mottos SET content = ?, source = ?, updated_at = ? WHERE id = ?')
+          .run(content, source, nowIso(), id)
+      } else {
+        getDb()
+          .prepare('UPDATE mottos SET content = ?, source = ?, tags = ?, updated_at = ? WHERE id = ?')
+          .run(content, source, JSON.stringify(sanitizeTags(tags)), nowIso(), id)
+      }
+      return true
+    }
+  )
+  ipcMain.handle('mottos:setTags', (_e, id: number, tags: string[]) => {
+    getDb()
+      .prepare('UPDATE mottos SET tags = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(sanitizeTags(tags)), nowIso(), id)
     return true
+  })
+  /** 手动新增/批量导入查重（v2.0 §7.4：仅未删除区，与生成同款判重规则） */
+  ipcMain.handle('mottos:checkDuplicate', (_e, content: string) => {
+    const existing = (
+      getDb()
+        .prepare('SELECT content FROM mottos WHERE deleted_at IS NULL')
+        .all() as { content: string }[]
+    ).map((r) => normalizeText(r.content))
+    return isDupMotto(existing, normalizeText(content))
   })
   ipcMain.handle('mottos:setStatus', (_e, id: number, status: string) => {
     const d = getDb()

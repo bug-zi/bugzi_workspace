@@ -38,16 +38,27 @@ const api = {
     delete: (id: number): Promise<boolean> => ipcRenderer.invoke('recycle:delete', id)
   },
   ai: {
-    messages: (): Promise<
-      { id: number; role: 'user' | 'assistant' | 'system'; ai_module: string | null; content: string; created_at: string }[]
-    > => ipcRenderer.invoke('ai:messages'),
+    messages: (
+      sessionId: number
+    ): Promise<
+      {
+        id: number
+        session_id: number
+        role: 'user' | 'assistant' | 'system'
+        ai_module: string | null
+        content: string
+        created_at: string
+      }[]
+    > => ipcRenderer.invoke('ai:messages', sessionId),
     chat: (
       message: string,
-      currentModule: string
+      currentModule: string,
+      sessionId: number
     ): Promise<{ id: number; role: string; content: string }> =>
-      ipcRenderer.invoke('ai:chat', message, currentModule),
+      ipcRenderer.invoke('ai:chat', message, currentModule, sessionId),
     configured: (): Promise<boolean> => ipcRenderer.invoke('ai:configured'),
     pushSystem: (content: string): Promise<boolean> => ipcRenderer.invoke('ai:pushSystem', content),
+    deleteMessage: (id: number): Promise<boolean> => ipcRenderer.invoke('ai:deleteMessage', id),
     onMessage: (cb: (msg: unknown) => void): (() => void) => {
       const listener = (_e: unknown, msg: unknown): void => {
         cb(msg)
@@ -56,20 +67,43 @@ const api = {
       return () => ipcRenderer.removeListener('ai:message', listener)
     }
   },
+  aiSession: {
+    /** 会话列表（最近活跃在前） */
+    list: (): Promise<
+      { id: number; title: string; created_at: string; updated_at: string }[]
+    > => ipcRenderer.invoke('aiSession:list'),
+    create: (): Promise<{ id: number; title: string; created_at: string; updated_at: string }> =>
+      ipcRenderer.invoke('aiSession:create'),
+    rename: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('aiSession:rename', id, title),
+    /** 删除会话（连同消息）；删的是激活会话时主进程自动切换/清除激活 */
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('aiSession:delete', id),
+    active: (): Promise<number | null> => ipcRenderer.invoke('aiSession:active')
+  },
   mottos: {
     list: (status?: string): Promise<unknown[]> => ipcRenderer.invoke('mottos:list', status),
-    create: (content: string, source: string, status: string): Promise<number> =>
-      ipcRenderer.invoke('mottos:create', content, source, status),
-    update: (id: number, content: string, source: string): Promise<boolean> =>
-      ipcRenderer.invoke('mottos:update', id, content, source),
+    create: (content: string, source: string, status: string, tags?: string[]): Promise<number> =>
+      ipcRenderer.invoke('mottos:create', content, source, status, tags),
+    update: (id: number, content: string, source: string, tags?: string[]): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:update', id, content, source, tags),
     setStatus: (id: number, status: string): Promise<boolean> =>
       ipcRenderer.invoke('mottos:setStatus', id, status),
+    /** 覆盖式设置标签（v2.0 §7.1，传空数组即清空） */
+    setTags: (id: number, tags: string[]): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:setTags', id, tags),
     reorder: (moves: { id: number; sort: number }[]): Promise<boolean> =>
       ipcRenderer.invoke('mottos:reorder', moves),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'mottos', id),
-    generate: (): Promise<{ generated: number; inserted: number }> =>
-      ipcRenderer.invoke('mottos:generate'),
-    normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s)
+    generate: (): Promise<{
+      generated: number
+      inserted: number
+      excerptInserted: number
+      composedInserted: number
+    }> => ipcRenderer.invoke('mottos:generate'),
+    normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s),
+    /** 未删除区内判重（v2.0 §7.4：规范化一致或包含关系） */
+    checkDuplicate: (content: string): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:checkDuplicate', content)
   },
   wiki: {
     sections: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:sections'),

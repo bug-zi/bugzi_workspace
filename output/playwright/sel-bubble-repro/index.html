@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>sel-bubble repro</title>
+<style>
+  body { font: 16px sans-serif; padding: 40px; }
+  .md-view { width: 480px; border: 1px solid #ccc; padding: 16px; line-height: 1.8; user-select: text; }
+  .sel-bubble { position: fixed; z-index: 300; display: flex; gap: 4px; padding: 4px; border: 1px solid #999; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+  .sel-bubble button { padding: 3px 10px; }
+</style>
+</head>
+<body>
+  <!-- 1:1 复刻 MdDialog.tsx 划词气泡的交互模式 -->
+  <div class="md-view" id="body">纳什均衡是博弈论中的一个重要概念。在纳什均衡状态下，任何一方单独改变策略都不会得到更多收益。它是约翰·福布斯·纳什在1950年提出的。</div>
+  <script>
+    const FIXED = new URLSearchParams(location.search).get('fixed') === '1'
+    window.results = { mode: FIXED ? 'fixed' : 'buggy', bubbleShown: 0, clicked: 0 }
+    const body = document.getElementById('body')
+    let bubble = null
+    const removeBubble = () => { if (bubble) { bubble.remove(); bubble = null } }
+    const onMouseUp = (e) => {
+      // 修复开关：mouseup 起点在气泡内时不移除，交给按钮 click 处理
+      if (FIXED && bubble && e.target instanceof Node && bubble.contains(e.target)) return
+      removeBubble() // ← 与 MdDialog.tsx 相同：每次 mouseup 无条件先移除气泡
+      const sel = window.getSelection()
+      const text = sel?.toString().trim() ?? ''
+      if (!text || !sel) return
+      const range = sel.getRangeAt(0)
+      if (!body.contains(range.commonAncestorContainer)) return
+      const rect = range.getBoundingClientRect()
+      bubble = document.createElement('div')
+      bubble.className = 'sel-bubble'
+      const b = document.createElement('button')
+      b.textContent = '高光'
+      b.addEventListener('click', (ev) => {
+        window.results.clicked++
+        ev.stopPropagation()
+        removeBubble()
+        sel.removeAllRanges()
+      })
+      bubble.appendChild(b)
+      document.body.appendChild(bubble)
+      window.results.bubbleShown++
+      const bw = 150
+      bubble.style.left = Math.max(8, rect.left + rect.width / 2 - bw / 2) + 'px'
+      bubble.style.top = Math.max(8, rect.top - 40) + 'px'
+    }
+    document.addEventListener('mouseup', onMouseUp)
+  </script>
+</body>
+</html>

@@ -199,6 +199,52 @@ function migrate(): void {
     }
     d.exec('PRAGMA user_version = 3')
   }
+
+  if (version < 4) {
+    // v4：AI 助手多会话（优化建议区「对话记录管理」）。新建会话表、消息挂会话；
+    // 存量消息归入「历史对话」会话并设为激活——升级后原记录可见、可继续聊。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS ai_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL DEFAULT '新对话',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      ALTER TABLE ai_messages ADD COLUMN session_id INTEGER REFERENCES ai_sessions(id);
+      CREATE INDEX IF NOT EXISTS idx_ai_messages_session ON ai_messages(session_id);
+    `)
+    const legacyCount = (d.prepare('SELECT COUNT(*) AS c FROM ai_messages').get() as { c: number }).c
+    if (legacyCount > 0) {
+      const now = nowIso()
+      const r = d
+        .prepare("INSERT INTO ai_sessions (title, created_at, updated_at) VALUES ('历史对话', ?, ?)")
+        .run(now, now)
+      const sid = Number(r.lastInsertRowid)
+      d.prepare('UPDATE ai_messages SET session_id = ? WHERE session_id IS NULL').run(sid)
+      d.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+        'ai_active_session_id',
+        String(sid)
+      )
+    }
+    d.exec('PRAGMA user_version = 4')
+  }
+
+  if (version < 5) {
+    // v5：格言标签（格言库 v2.0 §7.1）。JSON 字符串数组，存量默认空。
+    d.exec("ALTER TABLE mottos ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+    d.exec('PRAGMA user_version = 5')
+  }
+
+  if (version < 6) {
+    // v6：生成格言类型标记（开发者指令：AI 徽章仅编撰条显示，摘录条不打）。
+    // gen_kind：'excerpt'=现实摘录 | 'composed'=AI 编撰 | NULL=手动录入；
+    // 存量 ai 行按出处含「AI…编撰」回填（v1 prompt 约定编撰条出处标「AI 编撰」）。
+    d.exec('ALTER TABLE mottos ADD COLUMN gen_kind TEXT')
+    d.exec(
+      "UPDATE mottos SET gen_kind = CASE WHEN source LIKE '%AI%编撰%' THEN 'composed' ELSE 'excerpt' END WHERE origin = 'ai'"
+    )
+    d.exec('PRAGMA user_version = 6')
+  }
 }
 
 // ---------- 通用工具 ----------
@@ -212,4 +258,27 @@ export function normalizeText(s: string): string {
     .trim()
     .replace(/[，。！？；：、""''（）【】《》…—·,.!?;:()"[\]<>~\s]/g, '')
     .toLowerCase()
+}
+
+/** 包含判重的最短规范化长度门槛（格言库 v2.0 §7.4：防短句子串误杀） */
+const DUP_SUBSTR_MIN_LEN = 6
+
+/**
+ * 格言判重（格言库 v2.0 §7.4.2）：规范化后与已有任一条完全一致，
+ * 或互为子串且双方规范化长度均 ≥ 门槛 → 重复
+ */
+export function isDupMotto(existing: Iterable<string>, norm: string): boolean {
+  if (!norm) return true
+  for (const e of existing) {
+    if (!e) continue
+    if (e === norm) return true
+    if (
+      e.length >= DUP_SUBSTR_MIN_LEN &&
+      norm.length >= DUP_SUBSTR_MIN_LEN &&
+      (e.includes(norm) || norm.includes(e))
+    ) {
+      return true
+    }
+  }
+  return false
 }

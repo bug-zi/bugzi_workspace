@@ -1,7 +1,6 @@
 // 全局 md 弹窗组件（样式 specs §5）：默认渲染态，双击编辑，退出保存
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { renderMd } from './MdView'
 import './MdDialog.css'
 
 export interface MdDialogProps {
@@ -19,14 +18,6 @@ export interface MdDialogProps {
   }
   /** 头部标题可编辑（灵感泉：标题改后列表同步） */
   onTitleChange?: (title: string) => void
-}
-
-marked.use({ gfm: true, breaks: true })
-
-/** md → 安全 HTML；==高光== → <mark> */
-function renderMd(md: string): string {
-  const html = marked.parse(md) as string
-  return DOMPurify.sanitize(html, { ADD_ATTR: ['target'] })
 }
 
 export default function MdDialog(props: MdDialogProps) {
@@ -60,8 +51,7 @@ export default function MdDialog(props: MdDialogProps) {
   // loading 翻回 false 重新挂上 bodyRef 后需重跑本 effect，否则首开渲染空白（进编辑态再退出才显示）
   useEffect(() => {
     if (!open || loading || !bodyRef.current) return
-    const html = renderMd(content)
-    bodyRef.current.innerHTML = html.replace(/==([^=\n]+)==/g, '<mark>$1</mark>')
+    bodyRef.current.innerHTML = renderMd(content)
     // 链接拦截：外链走系统浏览器
     bodyRef.current.querySelectorAll('a').forEach((a) => {
       const href = a.getAttribute('href') ?? ''
@@ -115,7 +105,10 @@ export default function MdDialog(props: MdDialogProps) {
       bubble?.remove()
       bubble = null
     }
-    const onMouseUp = (): void => {
+    const onMouseUp = (e: MouseEvent): void => {
+      // 点击气泡本身：不移除，交给按钮 click 处理。若在此移除，click 派发前按钮已脱离
+      // DOM，click 事件不会触发（「高光/问 AI」点击无响应的根因，DOM 顺序 mousedown→mouseup→click）
+      if (bubble && e.target instanceof Node && bubble.contains(e.target)) return
       removeBubble()
       const sel = window.getSelection()
       const text = sel?.toString().trim() ?? ''
