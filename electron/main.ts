@@ -5,6 +5,7 @@ import { initDb } from './db/db'
 import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
 import { registerIpc } from './ipc'
 import { startSchedulers } from './services/scheduler'
+import { applyDataDirAtStartup } from './services/storage'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
 if (process.env.NODE_ENV === 'production' && !process.versions.electron) {
@@ -50,6 +51,8 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   // 必须在 app ready 之前注册特权 scheme（bzres:// 头像/背景图）
   registerBzresSchemes()
+  // 数据目录切换（优化建议区 #2）：默认 D 盘，data_home.json 指针支持自定义；须在 ready 前 setPath
+  applyDataDirAtStartup()
 
   app.on('second-instance', () => {
     const wins = BrowserWindow.getAllWindows()

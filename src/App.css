@@ -189,6 +189,29 @@
   color: #fff;
 }
 
+/* 格言单行：格言居左 + 出处右侧对齐（同一行，超长省略） */
+.motto-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.motto-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.motto-source {
+  margin-left: auto;
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+}
+
 /* ===== 上下文菜单（板块悬浮菜单等） ===== */
 .ctx-menu {
   position: absolute;

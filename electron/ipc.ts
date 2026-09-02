@@ -1,5 +1,5 @@
 // IPC 全通道注册（主进程）：渲染层 window.api.* 的后端
-import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
+import { ipcMain, dialog, BrowserWindow, shell, app } from 'electron'
 import { getDb, nowIso, normalizeText } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
@@ -21,6 +21,7 @@ import type { LlmConfig, McpConfig } from '../src/shared/types'
 import { copyFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir } from './db/db'
+import { currentDataDir, migrateDataDir } from './services/storage'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -297,6 +298,30 @@ export function registerIpc(): void {
   ipcMain.handle('llm:test', (_e, config: LlmConfig) => testLlmConnection(config))
   ipcMain.handle('llm:models', (_e, config: LlmConfig) => listUpstreamModels(config))
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())
+
+  // ---------- 个人中心：数据存储（优化建议区 #2） ----------
+  ipcMain.handle('storage:currentDir', () => currentDataDir())
+  ipcMain.handle('storage:pickDir', async () => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择新的数据存储位置（将在该位置下创建 bugzi_workspace 数据）',
+      properties: ['openDirectory']
+    })
+    return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+  })
+  ipcMain.handle('storage:migrate', (_e, newDir: string) => {
+    migrateDataDir(newDir)
+    return true
+  })
+  ipcMain.handle('storage:openDir', (_e, dir: string) => {
+    void shell.openPath(dir)
+    return true
+  })
+  ipcMain.handle('storage:relaunch', () => {
+    // 迁移完成后重启：closeDb 已在 migrate 内完成，直接 relaunch
+    app.relaunch()
+    app.quit()
+    return true
+  })
 
   // ---------- 外链 ----------
   ipcMain.handle('shell:openExternal', (_e, url: string) => {

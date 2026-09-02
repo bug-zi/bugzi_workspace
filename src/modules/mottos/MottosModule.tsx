@@ -199,10 +199,12 @@ export default function MottosModule(props: MottosModuleProps) {
                     onClick={() => m.status === 'formal' && m.note_path && setViewId(m.id)}
                   >
                     <div className="row-main">
-                      <div className="row-title" title={m.content}>
-                        {m.content}
+                      <div className="motto-line">
+                        <span className="motto-content" title={m.content}>
+                          {m.content}
+                        </span>
+                        <span className="motto-source">—— {m.source || '（出处待补）'}</span>
                       </div>
-                      <div className="row-sub">—— {m.source || '（出处待补）'}</div>
                     </div>
                     <div className="row-actions" onClick={(e) => e.stopPropagation()}>
                       {m.origin === 'ai' && <span className="badge">AI</span>}

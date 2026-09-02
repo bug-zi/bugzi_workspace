@@ -11,6 +11,19 @@ export function getDb(): DatabaseSync {
   return db
 }
 
+/** 关闭数据库（迁移数据目录前调用，WAL 落盘） */
+export function closeDb(): void {
+  if (db) {
+    try {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+      db.close()
+    } catch {
+      /* 已关闭 */
+    }
+    db = null
+  }
+}
+
 export function userDataDir(): string {
   return app.getPath('userData')
 }
@@ -136,8 +149,8 @@ function migrate(): void {
     // v2 修复+种子：
     // 1) 旧 bug 产物清理：image:pick 曾把背景图存为 bg/bg-light（无扩展名）而 settings 记
     //    bg-light.png → 404。将无扩展旧文件改名为规范名。
-    // 2) 种子默认背景图：项目根 bg-light.png / bg-dark.png 首次启动复制入 userData/bg/
-    //    （开发者要求默认即用项目内背景图，见 问题疑惑区 #2）。
+    // 2) 种子默认背景图：resources/bg-light.png / resources/bg-dark.png 首次启动复制入
+    //    userData/bg/（开发者要求默认即用项目内背景图，见 问题疑惑区 #2）。
     const bgDir = join(userDataDir(), 'bg')
     for (const kind of ['bg-light', 'bg-dark'] as const) {
       const bare = join(bgDir, kind)
@@ -157,7 +170,7 @@ function migrate(): void {
       }
       // 种子（缺文件才复制，不覆盖用户已上传的）
       if (!existsSync(canonical)) {
-        const src = join(app.getAppPath(), `${kind}.png`)
+        const src = join(app.getAppPath(), 'resources', `${kind}.png`)
         try {
           copyFileSync(src, canonical)
         } catch {

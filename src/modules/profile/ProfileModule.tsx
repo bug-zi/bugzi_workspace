@@ -37,6 +37,10 @@ export default function ProfileModule() {
   const [mcps, setMcps] = useState<McpConfig[]>([])
   const [mcpForm, setMcpForm] = useState<{ name: string; url: string } | null>(null)
   const [delMcp, setDelMcp] = useState<McpConfig | null>(null)
+  // 数据存储（优化建议区 #2）
+  const [dataDir, setDataDir] = useState('')
+  const [migrating, setMigrating] = useState(false)
+  const [migrateConfirm, setMigrateConfirm] = useState<{ dir: string } | null>(null)
 
   // 载入
   useEffect(() => {
@@ -50,6 +54,7 @@ export default function ProfileModule() {
     try {
       setMcps(JSON.parse(settings[SettingsKeys.McpConfigs] ?? '[]'))
     } catch { /* 空值 */ }
+    void window.api.storage.currentDir().then(setDataDir)
   }, [settings])
 
   const saveJson = useCallback(
@@ -199,6 +204,36 @@ export default function ProfileModule() {
     }
   }
 
+  // ---------- 数据存储（优化建议区 #2） ----------
+  const pickDataDir = async (): Promise<void> => {
+    const dir = await window.api.storage.pickDir()
+    if (!dir) return
+    setMigrateConfirm({ dir })
+  }
+
+  const doMigrate = async (): Promise<void> => {
+    if (!migrateConfirm) return
+    setMigrating(true)
+    try {
+      await window.api.storage.migrate(migrateConfirm.dir)
+      toast('迁移完成，即将重启…')
+      await new Promise((r) => setTimeout(r, 800)) // 让 toast 可见
+      await window.api.storage.relaunch()
+    } catch (e) {
+      const code = String((e as Error).message)
+      const msg =
+        code === 'SAME_DIR'
+          ? '新位置与当前存储位置相同'
+          : code === 'TARGET_HAS_DATA'
+            ? '目标位置已存在数据（bugzi.db），请换一个空目录'
+            : code.startsWith('POINTER_WRITE_FAILED')
+              ? `指针写入失败：${code.slice(code.indexOf(':') + 1)}`
+              : `迁移失败：${code}`
+      toast(msg)
+      setMigrating(false)
+    }
+  }
+
   const fontSettings = settings
 
   return (
@@ -302,6 +337,40 @@ export default function ProfileModule() {
             <button className="btn" onClick={() => void pickBg('bg-dark')}>
               <span className="material-symbols-outlined">image</span>
               更换
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* 数据存储（优化建议区 #2） */}
+      <section className="zone">
+        <div className="zone-header"><span>数据存储</span></div>
+        <div className="zone-body" style={{ padding: 0 }}>
+          <div className="setting-row">
+            <span className="setting-label">当前存储位置</span>
+            <span
+              className="grow"
+              style={{ wordBreak: 'break-all', fontSize: '0.85em', color: 'var(--color-text-secondary)' }}
+              title={dataDir}
+            >
+              {dataDir || '读取中…'}
+            </span>
+            <button
+              className="btn"
+              onClick={() => dataDir && void window.api.storage.openDir(dataDir)}
+              disabled={!dataDir}
+              title="在资源管理器中打开"
+            >
+              <span className="material-symbols-outlined">folder_open</span>
+              打开
+            </button>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">修改存储位置</span>
+            <span className="grow module-sub">迁移全部数据（数据库/文档/图片）到新位置，完成后自动重启</span>
+            <button className="btn" onClick={() => void pickDataDir()} disabled={migrating}>
+              <span className="material-symbols-outlined">drive_file_move</span>
+              {migrating ? '迁移中…' : '修改'}
             </button>
           </div>
         </div>
@@ -467,6 +536,26 @@ export default function ProfileModule() {
           </div>
         </div>
       )}
+
+      {/* 数据迁移二次确认（优化建议区 #2） */}
+      <ConfirmDialog
+        open={migrateConfirm != null}
+        title="修改数据存储位置"
+        confirmText={migrating ? '迁移中…' : '开始迁移'}
+        danger
+        onConfirm={() => void doMigrate()}
+        onCancel={() => !migrating && setMigrateConfirm(null)}
+      >
+        将把全部数据从
+        <br />
+        <span style={{ wordBreak: 'break-all' }}>{dataDir}</span>
+        <br />
+        迁移到
+        <br />
+        <span style={{ wordBreak: 'break-all' }}>{migrateConfirm?.dir}</span>
+        <br />
+        迁移完成后旧位置数据将被清理，App 自动重启。
+      </ConfirmDialog>
 
       {/* 删除确认 */}
       <ConfirmDialog

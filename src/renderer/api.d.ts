@@ -177,6 +177,18 @@ export interface Api {
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>
   }
+  storage: {
+    /** 当前数据存储目录（绝对路径） */
+    currentDir(): Promise<string>
+    /** 选择目录（系统对话框），返回绝对路径或 null */
+    pickDir(): Promise<string | null>
+    /** 迁移数据到新目录；成功后需重启 App 生效 */
+    migrate(newDir: string): Promise<boolean>
+    /** 在资源管理器中打开目录 */
+    openDir(dir: string): Promise<boolean>
+    /** 迁移完成后重启 App */
+    relaunch(): Promise<boolean>
+  }
   shell: {
     openExternal(url: string): Promise<boolean>
   }

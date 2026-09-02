@@ -88,6 +88,7 @@ npm run dev
 ```
 ├─ electron/        # 主进程：IPC、SQLite、md 文件服务、LLM/MCP、定时任务、回收站
 ├─ src/             # 渲染进程（React）：六模块 UI、主题、AI 助手边栏、通用组件（md 弹窗等）
+├─ resources/       # 随仓库分发的静态资源（默认背景图 bg-light / bg-dark，首次启动种入用户数据目录）
 ├─ docs/            # 项目文档库（design.md / designs-specs.md / 开发日志）
 └─ out/             # 构建产物（git 忽略）
 ```

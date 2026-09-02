@@ -119,6 +119,18 @@ const api = {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
       ipcRenderer.invoke('mcp:listEnabled')
   },
+  storage: {
+    /** 当前数据存储目录（绝对路径） */
+    currentDir: (): Promise<string> => ipcRenderer.invoke('storage:currentDir'),
+    /** 选择目录（系统对话框），返回绝对路径或 null */
+    pickDir: (): Promise<string | null> => ipcRenderer.invoke('storage:pickDir'),
+    /** 迁移数据到新目录；成功后需重启 App 生效 */
+    migrate: (newDir: string): Promise<boolean> => ipcRenderer.invoke('storage:migrate', newDir),
+    /** 在资源管理器中打开目录 */
+    openDir: (dir: string): Promise<boolean> => ipcRenderer.invoke('storage:openDir', dir),
+    /** 迁移完成后重启 App */
+    relaunch: (): Promise<boolean> => ipcRenderer.invoke('storage:relaunch')
+  },
   shell: {
     openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke('shell:openExternal', url)
   }
