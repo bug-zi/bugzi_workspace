@@ -14,6 +14,21 @@ export interface WikiModuleProps {
 
 type View = { kind: 'overview' } | { kind: 'section'; id: number } | { kind: 'notebook' }
 
+/** 手动生成弹窗的占位词条名示例：初始板块各配一个代表词，自定义板块用通用示例 */
+const SECTION_TERM_EXAMPLES: Record<string, string> = {
+  经济学: '通货膨胀',
+  法学: '无罪推定',
+  心理学: '认知失调',
+  博弈论: '囚徒困境',
+  历史神话: '特洛伊战争'
+}
+const GENERIC_TERM_EXAMPLE = '词条名'
+
+/** 按板块名取占位示例词（未匹配到初始板块时回退通用词） */
+function termExampleOf(sectionName: string): string {
+  return SECTION_TERM_EXAMPLES[sectionName] ?? GENERIC_TERM_EXAMPLE
+}
+
 export default function WikiModule(props: WikiModuleProps) {
   const { toast } = useToast()
   const [view, setView] = useState<View>({ kind: 'overview' })
@@ -384,7 +399,7 @@ export default function WikiModule(props: WikiModuleProps) {
                 className="field"
                 value={manualTerm}
                 onChange={(e) => setManualTerm(e.target.value)}
-                placeholder="词条名（如：机会成本）"
+                placeholder={`词条名（如：${termExampleOf(sections.find((s) => s.id === manualSection)?.name ?? '')}）`}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && manualTerm.trim()) {
                     setManualOpen(false)

@@ -3,8 +3,40 @@
 /* Material Symbols Outlined（本地 npm 包，禁 emoji） */
 @import 'material-symbols/index.css';
 
+/* 内置中文字体（优化建议区「字体更换」）：随应用打包，无需用户安装 */
+@font-face {
+  font-family: 'Liyu Shoushu';
+  src: url('../renderer/assets/fonts/liyu-shoushu.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Honglei Banshu';
+  src: url('../renderer/assets/fonts/honglei-banshu.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'LXGW WenKai';
+  src: url('../renderer/assets/fonts/lxgw-wenkai.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'XuanZong Ti';
+  src: url('../renderer/assets/fonts/xuanzongti.otf') format('opentype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Youran Xiaokai';
+  src: url('../renderer/assets/fonts/youran-xiaokai.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
-  --font-size: 15px;
+  --font-size: 16px;
   --font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
   --font-weight: 400;
   --sidebar-width: 76px;
@@ -26,6 +58,10 @@
   --color-border: rgba(209, 127, 165, 0.35);
   --color-danger: #b0577d;
   --color-selection: rgba(232, 160, 191, 0.45);
+  /* 亚克力材质（吸顶导航条用）：半透明底 + 主题色描边 + 顶部高光 */
+  --acrylic-bg: rgba(255, 255, 255, 0.55);
+  --acrylic-border: rgba(209, 127, 165, 0.45);
+  --acrylic-highlight: rgba(255, 255, 255, 0.85);
   --bg-image: none;
 }
 
@@ -37,11 +73,15 @@
   --color-text: #ffffff;
   --color-text-secondary: #9aa8c7;
   --color-surface: rgba(21, 38, 74, 0.6);
-  --color-surface-strong: rgba(13, 23, 47, 0.92);
+  --color-surface-strong: rgba(13, 23,  47, 0.92);
   --color-border: rgba(102, 164, 255, 0.25);
   --color-danger: #e87a93;
   /* 划词高亮取参考图点缀蓝（#66a4ff）半透明，深色下保证选中区与背景有区分度 */
   --color-selection: rgba(102, 164, 255, 0.45);
+  /* 亚克力材质（吸顶导航条用）：半透明底 + 高饱和描边 + 顶部高光 */
+  --acrylic-bg: rgba(13, 23, 47, 0.55);
+  --acrylic-border: rgba(102, 164, 255, 0.35);
+  --acrylic-highlight: rgba(255, 255, 255, 0.22);
   --bg-image: none;
 }
 
@@ -334,4 +374,14 @@ select {
 }
 :root[data-theme='dark'] .md-view mark {
   color: #fff;
+}
+
+/* 研究中/加载中旋转图标（Material Symbols progress_activity 配套） */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1s linear infinite;
 }

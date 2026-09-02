@@ -38,6 +38,9 @@ export interface ChatResult {
   content: string
 }
 
+/** 429 限流自动重试次数（中转服务账号并发超限属瞬态错误，等待后重试即可） */
+const RATE_LIMIT_RETRIES = 3
+
 /** 调用默认 LLM 的一次 chat completion。失败抛带 message 的 Error（渲染层 toast 展示） */
 export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   const cfg = getDefaultLlm() // 未配置时抛 LlmNotConfiguredError
@@ -51,17 +54,28 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   if (opts.jsonMode) body.response_format = { type: 'json_object' }
 
   let res: Response
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`
-      },
-      body: JSON.stringify(body)
-    })
-  } catch (e) {
-    throw new Error(`网络请求失败：${(e as Error).message}`)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfg.apiKey}`
+        },
+        body: JSON.stringify(body)
+      })
+    } catch (e) {
+      throw new Error(`网络请求失败：${(e as Error).message}`)
+    }
+    // 429 账号并发/限流：尊重 Retry-After 头，否则指数退避 2s/4s/8s 后自动重试
+    if (res.status !== 429 || attempt >= RATE_LIMIT_RETRIES) break
+    const retryAfter = Number(res.headers.get('retry-after'))
+    const backoff = [2000, 4000, 8000]
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 15_000)
+        : (backoff[attempt] ?? 8000)
+    await new Promise((r) => setTimeout(r, waitMs))
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '')

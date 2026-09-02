@@ -92,6 +92,31 @@ export interface McpConfig {
   name: string
   url: string
   enabled: boolean
+  /** 鉴权方式（可选，缺省 none；bearer 时请求带 Authorization 头） */
+  authType?: 'none' | 'bearer'
+  /** bearer 鉴权的 API Key */
+  apiKey?: string
+}
+
+/** AI 辅助 MCP 配置：需填写的密钥信息 */
+export interface McpResearchKey {
+  name: string
+  description: string
+  /** 申请入口链接 */
+  applyUrl: string
+}
+
+/** AI 辅助 MCP 配置：研究结果 */
+export interface McpResearch {
+  title: string
+  description: string
+  /** 远程端点模板；含 {apiKey} 占位符时用用户填写的 key 替换后存储 */
+  urlTemplate: string
+  authType: 'none' | 'bearer'
+  keys: McpResearchKey[]
+  docsUrl: string
+  source: 'registry' | 'docs' | 'llm'
+  notes: string
 }
 
 // preload 暴露的完整 API 形状（与 electron/preload.ts 保持同步）
@@ -180,6 +205,15 @@ export interface Api {
   }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>
+    /** AI 辅助配置：研究 MCP 配置元数据（Registry/文档/LLM 三步降级） */
+    research(name: string): Promise<McpResearch>
+    /** 测试连接：initialize + tools/list，返回工具名列表 */
+    test(config: {
+      name: string
+      url: string
+      authType?: 'none' | 'bearer'
+      apiKey?: string
+    }): Promise<{ tools: string[] }>
   }
   storage: {
     /** 当前数据存储目录（绝对路径） */

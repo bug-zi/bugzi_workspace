@@ -1,18 +1,30 @@
 // 个人中心模块（个人中心 specs 全量）
 import { useCallback, useEffect, useState } from 'react'
-import type { LlmConfig, McpConfig } from '../../renderer/api'
+import type { LlmConfig, McpConfig, McpResearch } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { SettingsKeys } from '../../shared/types'
 
+// 内置字体（优化建议区「字体更换」：删除宋体/黑体/等线，随应用打包 5 款手写/楷体字体，
+// 对应 global.css @font-face；楷体为系统字体保留）
 const FONT_FAMILIES = [
   { label: '默认（系统）', value: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif" },
-  { label: '宋体', value: "'SimSun', 'STSong', serif" },
-  { label: '黑体', value: "'SimHei', 'Microsoft YaHei', sans-serif" },
-  { label: '楷体', value: "'KaiTi', 'STKaiti', serif" },
-  { label: '等线', value: "'DengXian', sans-serif" }
+  { label: '漓雨手书', value: "'Liyu Shoushu', 'KaiTi', serif" },
+  { label: '鸿雷板书简体', value: "'Honglei Banshu', sans-serif" },
+  { label: '霞鹜文楷', value: "'LXGW WenKai', 'KaiTi', serif" },
+  { label: '玄宗体', value: "'XuanZong Ti', serif" },
+  { label: '演示悠然小楷', value: "'Youran Xiaokai', 'KaiTi', serif" },
+  { label: '楷体', value: "'KaiTi', 'STKaiti', serif" }
 ]
+
+/** 字体大小默认/范围（优化建议区：默认 16px，10-24px） */
+const FONT_SIZE_DEFAULT = 16
+const FONT_SIZE_MIN = 10
+const FONT_SIZE_MAX = 24
+
+/** 字体粗细 100-900 每 100 一档（优化建议区「粗细细化」） */
+const FONT_WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900] as const
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10)
@@ -37,6 +49,14 @@ export default function ProfileModule() {
   const [mcps, setMcps] = useState<McpConfig[]>([])
   const [mcpForm, setMcpForm] = useState<{ name: string; url: string } | null>(null)
   const [delMcp, setDelMcp] = useState<McpConfig | null>(null)
+  // AI 辅助 MCP 配置（问题疑惑区方案）：输入名 → 研究 → 填 key → 测试 → 保存
+  const [aiQuery, setAiQuery] = useState<{ name: string; url: string } | null>(null)
+  const [researching, setResearching] = useState(false)
+  const [research, setResearch] = useState<McpResearch | null>(null)
+  const [researchErr, setResearchErr] = useState<string | null>(null)
+  const [aiKey, setAiKey] = useState('')
+  const [mcpTesting, setMcpTesting] = useState(false)
+  const [mcpTestOk, setMcpTestOk] = useState<string[] | null>(null)
   // 数据存储（优化建议区 #2）
   const [dataDir, setDataDir] = useState('')
   const [migrating, setMigrating] = useState(false)
@@ -196,6 +216,92 @@ export default function ProfileModule() {
     toast('已删除')
   }
 
+  // ---------- AI 辅助 MCP 配置（问题疑惑区方案） ----------
+  /** 启动研究：三步降级（Registry → 文档 → LLM），成功后进入结果表单 */
+  const doResearch = async (): Promise<void> => {
+    if (!aiQuery?.name.trim()) {
+      toast('请先填写 MCP 名称')
+      return
+    }
+    setResearching(true)
+    setResearch(null)
+    setResearchErr(null)
+    setAiKey('')
+    setMcpTestOk(null)
+    try {
+      const r = await window.api.mcp.research(aiQuery.name.trim())
+      setResearch(r)
+    } catch (e) {
+      setResearchErr(String((e as Error).message))
+    } finally {
+      setResearching(false)
+    }
+  }
+
+  /** 研究结果的端点：{apiKey} 占位符用用户填写的 key 替换（无占位符则原样） */
+  const resolvedUrl = (r: McpResearch, key: string): string =>
+    r.urlTemplate.includes('{apiKey}') && key.trim()
+      ? r.urlTemplate.replace('{apiKey}', encodeURIComponent(key.trim()))
+      : r.urlTemplate
+
+  /** 测试连接：跑 initialize + tools/list */
+  const doTestMcp = async (): Promise<void> => {
+    if (!research) return
+    const url = resolvedUrl(research, aiKey)
+    if (!/^https?:\/\//.test(url)) {
+      toast('端点地址无效')
+      return
+    }
+    setMcpTesting(true)
+    setMcpTestOk(null)
+    try {
+      const r = await window.api.mcp.test({
+        name: research.title,
+        url,
+        authType: research.authType,
+        apiKey: research.authType === 'bearer' ? aiKey.trim() : undefined
+      })
+      setMcpTestOk(r.tools)
+    } catch (e) {
+      toast(`连接失败：${String((e as Error).message).slice(0, 160)}`)
+    } finally {
+      setMcpTesting(false)
+    }
+  }
+
+  /** 保存研究结果为 MCP 配置（需密钥时必填 + 已测试通过才可保存） */
+  const saveResearched = async (): Promise<void> => {
+    if (!research || !aiQuery) return
+    const needKey = research.keys.length > 0
+    if (needKey && !aiKey.trim()) {
+      toast(`请先填写 ${research.keys[0].name}`)
+      return
+    }
+    if (needKey && !mcpTestOk) {
+      toast('请先测试连接通过')
+      return
+    }
+    const next = [
+      ...mcps,
+      {
+        id: uid(),
+        name: research.title || aiQuery.name.trim(),
+        url: resolvedUrl(research, aiKey),
+        kind: 'http' as const,
+        enabled: true,
+        authType: research.authType,
+        apiKey: research.authType === 'bearer' ? aiKey.trim() : undefined
+      }
+    ]
+    setMcps(next)
+    await saveJson(SettingsKeys.McpConfigs, next)
+    setAiQuery(null)
+    setResearch(null)
+    setAiKey('')
+    setMcpTestOk(null)
+    toast('MCP 已添加')
+  }
+
   const pickBg = async (kind: 'bg-light' | 'bg-dark'): Promise<void> => {
     const r = await window.api.image.pick(kind)
     if (r) {
@@ -235,6 +341,11 @@ export default function ProfileModule() {
   }
 
   const fontSettings = settings
+  // 旧值兜底：已删除的字体（宋体/黑体/等线等不在列表的存量值）回退显示默认
+  const fontFamilyValue = fontSettings[SettingsKeys.FontFamily] ?? ''
+  const fontFamilySelected = FONT_FAMILIES.some((f) => f.value === fontFamilyValue)
+    ? fontFamilyValue
+    : FONT_FAMILIES[0].value
 
   return (
     <div className="profile-page">
@@ -281,20 +392,20 @@ export default function ProfileModule() {
             <span className="setting-label">字体大小</span>
             <input
               type="range"
-              min={12}
-              max={20}
+              min={FONT_SIZE_MIN}
+              max={FONT_SIZE_MAX}
               step={1}
-              value={Number(fontSettings[SettingsKeys.FontSize] ?? 15)}
+              value={Number(fontSettings[SettingsKeys.FontSize] ?? FONT_SIZE_DEFAULT)}
               onChange={(e) => void applyFont(SettingsKeys.FontSize, e.target.value)}
               style={{ flex: 1, accentColor: 'var(--color-primary)' }}
             />
-            <span className="badge">{fontSettings[SettingsKeys.FontSize] ?? 15}px</span>
+            <span className="badge">{fontSettings[SettingsKeys.FontSize] ?? FONT_SIZE_DEFAULT}px</span>
           </div>
           <div className="setting-row">
             <span className="setting-label">字体样式</span>
             <select
               className="field grow"
-              value={fontSettings[SettingsKeys.FontFamily] ?? FONT_FAMILIES[0].value}
+              value={fontFamilySelected}
               onChange={(e) => void applyFont(SettingsKeys.FontFamily, e.target.value)}
             >
               {FONT_FAMILIES.map((f) => (
@@ -304,15 +415,16 @@ export default function ProfileModule() {
           </div>
           <div className="setting-row">
             <span className="setting-label">字体粗细</span>
-            <select
-              className="field grow"
-              value={fontSettings[SettingsKeys.FontWeight] ?? '400'}
+            <input
+              type="range"
+              min={100}
+              max={900}
+              step={100}
+              value={Number(fontSettings[SettingsKeys.FontWeight] ?? 400)}
               onChange={(e) => void applyFont(SettingsKeys.FontWeight, e.target.value)}
-            >
-              <option value="400">常规 400</option>
-              <option value="500">中等 500</option>
-              <option value="700">加粗 700</option>
-            </select>
+              style={{ flex: 1, accentColor: 'var(--color-primary)' }}
+            />
+            <span className="badge">{fontSettings[SettingsKeys.FontWeight] ?? 400}</span>
           </div>
           <div className="setting-row">
             <span className="setting-label">主题</span>
@@ -432,6 +544,18 @@ export default function ProfileModule() {
           <span>MCP 配置</span>
           <span className="zone-count">{mcps.length}</span>
           <div className="zone-actions">
+            <button
+              className="btn"
+              onClick={() => {
+                setAiQuery({ name: '', url: '' })
+                setResearch(null)
+                setResearchErr(null)
+              }}
+              title="输入名称，AI 自动研究配置文档"
+            >
+              <span className="material-symbols-outlined">auto_awesome</span>
+              AI 帮我配置
+            </button>
             <button className="btn" onClick={() => setMcpForm({ name: '', url: '' })}>
               <span className="material-symbols-outlined">add</span>
               新增
@@ -448,7 +572,10 @@ export default function ProfileModule() {
           {mcps.map((m) => (
             <div className="mcp-item" key={m.id}>
               <div className="row-main">
-                <div className="row-title">{m.name}</div>
+                <div className="row-title">
+                  {m.name}
+                  {m.authType === 'bearer' && <span className="badge">Bearer</span>}
+                </div>
                 <div className="row-sub">{m.url}</div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.85em' }}>
@@ -532,6 +659,155 @@ export default function ProfileModule() {
             <div className="dialog-footer">
               <button className="btn" onClick={() => setMcpForm(null)}>取消</button>
               <button className="btn btn-primary" onClick={() => void saveMcp()}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI 辅助 MCP 配置弹窗（问题疑惑区方案）：输入名称 → 研究 → 填 key → 测试 → 保存 */}
+      {aiQuery && (
+        <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setAiQuery(null)}>
+          <div className="dialog" style={{ width: 560 }}>
+            <div className="dialog-header">AI 帮我配置 MCP</div>
+            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* 阶段一：输入名称 */}
+              {!research && (
+                <>
+                  <div className="module-sub">
+                    输入 MCP 名称，AI 自动研究官方配置文档（端点地址、鉴权方式、密钥申请入口）
+                  </div>
+                  <input
+                    className="field"
+                    placeholder="名称（如 Tavily、Firecrawl）"
+                    value={aiQuery.name}
+                    onChange={(e) => setAiQuery({ ...aiQuery, name: e.target.value })}
+                    onKeyDown={(e) => e.key === 'Enter' && void doResearch()}
+                    autoFocus
+                  />
+                  {researching && (
+                    <div className="module-sub" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="material-symbols-outlined spin">progress_activity</span>
+                      研究中（查 Registry → 读官方文档 → 模型知识，约需数十秒）…
+                    </div>
+                  )}
+                  {researchErr && (
+                    <div className="field" style={{ padding: 10, lineHeight: 1.7, wordBreak: 'break-all' }}>
+                      {researchErr}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* 阶段二：研究结果表单 */}
+              {research && (
+                <>
+                  <div>
+                    <div className="row-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {research.title}
+                      <span className="badge">
+                        {research.source === 'registry' ? '官方 Registry' : research.source === 'docs' ? '官方文档' : '模型知识'}
+                      </span>
+                    </div>
+                    {research.description && (
+                      <div className="row-sub" style={{ marginTop: 4 }}>{research.description}</div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="module-sub">端点地址{research.urlTemplate.includes('{apiKey}') && '（保存时自动拼入密钥）'}</div>
+                    <div className="field" style={{ marginTop: 4, wordBreak: 'break-all', fontSize: '0.85em' }}>
+                      {research.urlTemplate}
+                    </div>
+                  </div>
+
+                  {/* 密钥填写（无鉴权服务不显示） */}
+                  {research.keys.length > 0 ? (
+                    <div>
+                      <div className="module-sub">
+                        {research.keys[0].description || '该服务需要 API 密钥'}
+                        {research.keys[0].applyUrl && (
+                          <>
+                            {' '}
+                            <a
+                              href={research.keys[0].applyUrl}
+                              onClick={(e) => {
+                                e.preventDefault()
+                                void window.api.shell.openExternal(research.keys[0].applyUrl)
+                              }}
+                              style={{ color: 'var(--color-primary)' }}
+                            >
+                              去申请
+                            </a>
+                          </>
+                        )}
+                      </div>
+                      <input
+                        className="field"
+                        style={{ marginTop: 4 }}
+                        type="password"
+                        placeholder={research.keys[0].name}
+                        value={aiKey}
+                        onChange={(e) => {
+                          setAiKey(e.target.value)
+                          setMcpTestOk(null) // key 变更后需重新测试
+                        }}
+                        autoFocus
+                      />
+                      <div className="row-sub" style={{ marginTop: 4 }}>
+                        鉴权：{research.authType === 'bearer' ? 'Bearer 请求头' : 'URL 参数'}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="module-sub">该端点无需鉴权</div>
+                  )}
+
+                  {mcpTestOk && (
+                    <div className="module-sub" style={{ color: 'var(--color-primary)' }}>
+                      连接成功，可用工具 {mcpTestOk.length} 个：{mcpTestOk.slice(0, 6).join('、')}
+                      {mcpTestOk.length > 6 ? ' 等' : ''}
+                    </div>
+                  )}
+
+                  {research.docsUrl && (
+                    <div className="row-sub">
+                      参考：
+                      <a
+                        href={research.docsUrl}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          void window.api.shell.openExternal(research.docsUrl)
+                        }}
+                        style={{ color: 'var(--color-primary)' }}
+                      >
+                        {research.docsUrl}
+                      </a>
+                    </div>
+                  )}
+                  <div className="row-sub" style={{ wordBreak: 'break-all' }}>{research.notes}</div>
+                </>
+              )}
+            </div>
+            <div className="dialog-footer">
+              {research ? (
+                <>
+                  <button className="btn" onClick={() => { setResearch(null); setResearchErr(null) }}>
+                    重新研究
+                  </button>
+                  <button className="btn" onClick={() => void doTestMcp()} disabled={mcpTesting}>
+                    {mcpTesting ? '测试中…' : '测试连接'}
+                  </button>
+                  <button className="btn btn-primary" onClick={() => void saveResearched()}>
+                    保存
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="btn" onClick={() => setAiQuery(null)}>取消</button>
+                  <button className="btn btn-primary" onClick={() => void doResearch()} disabled={researching}>
+                    {researching ? '研究中…' : '开始研究'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

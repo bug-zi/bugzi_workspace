@@ -373,6 +373,55 @@
   accent-color: var(--color-primary);
 }
 
+/* ===== 区快速导航（格言库：草稿/沉淀/正式跳转，优化建议区） ===== */
+/* 吸顶：跳到下方区（如正式区）后导航仍在视野内，可随时跳回；
+   亚克力材质：半透明底 + 模糊提饱和 + 顶部内高光，内容从条下穿过时呈磨砂玻璃质感 */
+.zone-nav {
+  position: sticky;
+  /* -18px 抵消 main-area 的 padding-top（Chromium 滚动容器上内边距不随滚动消失，
+     top:0 会停在距顶 18px 处留缝），吸顶时贴住主栏真正的顶边 */
+  top: -18px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 5px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--acrylic-border);
+  background: var(--acrylic-bg);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  /* 玻璃受光：顶部内侧一道亮边 + 底部微暗，增强厚度感 */
+  box-shadow:
+    inset 0 1px 0 var(--acrylic-highlight),
+    0 2px 10px rgba(0, 0, 0, 0.12);
+}
+.zone-nav-btn {
+  padding: 5px 14px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  /* 玻璃钮扣：透明底让亚克力磨砂整体透出，悬停以高光层回应 */
+  background: transparent;
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88em;
+}
+.zone-nav-btn:hover {
+  background: var(--acrylic-highlight);
+  border-color: var(--acrylic-border);
+}
+.zone-nav-btn .zone-count {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+/* 跳转定位补偿：scrollIntoView 时目标区顶部下移一个吸顶条高度，避免区标题被盖住 */
+.mottos-page .zone {
+  scroll-margin-top: 50px;
+}
+
 /* ===== 回收站页签 ===== */
 .recycle-tabs {
   display: flex;

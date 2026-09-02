@@ -47,6 +47,17 @@ export default function MottosModule(props: MottosModuleProps) {
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
   // 拖拽排序（区内）
   const dragIdRef = useRef<number | null>(null)
+  // 快速导航（优化建议区）：跳转到目标区——折叠则先展开，再平滑滚动到该区
+  const zoneRefs = useRef<Record<string, HTMLElement | null>>({})
+  const jumpToZone = (status: string): void => {
+    if (collapsed[status]) setCollapsed((c) => ({ ...c, [status]: false }))
+    // 折叠刚展开时 DOM 未渲染，等下一帧再滚动
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        zoneRefs.current[status]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    })
+  }
 
   const load = useCallback(async () => {
     const rows = await window.api.mottos.list()
@@ -176,18 +187,34 @@ export default function MottosModule(props: MottosModuleProps) {
   }
 
   return (
-    <div className="module-page">
+    <div className="module-page mottos-page">
       <div className="module-header">
         <span className="material-symbols-outlined">format_quote</span>
         <span className="module-title">格言库</span>
         <span className="module-sub">三级流转：草稿 → 沉淀 → 正式</span>
       </div>
 
+      {/* 快速导航（优化建议区）：点击跳转到对应区 */}
+      <div className="zone-nav">
+        {ZONES.map((z) => (
+          <button key={z.status} className="zone-nav-btn" onClick={() => jumpToZone(z.status)}>
+            <span>{z.label}</span>
+            <span className="zone-count">{mottos.filter((m) => m.status === z.status).length}</span>
+          </button>
+        ))}
+      </div>
+
       {ZONES.map((z) => {
         const items = mottos.filter((m) => m.status === z.status)
         const isCollapsed = collapsed[z.status]
         return (
-          <section className="zone" key={z.status}>
+          <section
+            className="zone"
+            key={z.status}
+            ref={(el) => {
+              zoneRefs.current[z.status] = el
+            }}
+          >
             <div
               className="zone-header"
               onClick={() => setCollapsed((c) => ({ ...c, [z.status]: !c[z.status] }))}

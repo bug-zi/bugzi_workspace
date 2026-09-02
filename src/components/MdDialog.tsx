@@ -56,8 +56,10 @@ export default function MdDialog(props: MdDialogProps) {
   }, [open, filePath])
 
   // ==text== → <mark>（渲染后处理，避免 marked 不识别）
+  // deps 含 loading：加载中 bodyRef 被 loading 分支卸载，读完 setContent 时 ref 还是 null 会早退；
+  // loading 翻回 false 重新挂上 bodyRef 后需重跑本 effect，否则首开渲染空白（进编辑态再退出才显示）
   useEffect(() => {
-    if (!open || !bodyRef.current) return
+    if (!open || loading || !bodyRef.current) return
     const html = renderMd(content)
     bodyRef.current.innerHTML = html.replace(/==([^=\n]+)==/g, '<mark>$1</mark>')
     // 链接拦截：外链走系统浏览器
@@ -70,7 +72,7 @@ export default function MdDialog(props: MdDialogProps) {
         })
       }
     })
-  }, [content, open, editing])
+  }, [content, open, editing, loading])
 
   const saveAndExit = useCallback(async () => {
     if (draft !== content) {

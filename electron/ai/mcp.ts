@@ -24,12 +24,23 @@ export class McpSession {
   private initialized = false
 
   constructor(
-    private config: { name: string; url: string },
+    private config: { name: string; url: string; authType?: 'none' | 'bearer'; apiKey?: string },
     private onLog?: (msg: string) => void
   ) {}
 
   private log(msg: string): void {
     this.onLog?.(msg)
+  }
+
+  /** 通用请求头：bearer 鉴权时带 Authorization（问题疑惑区 MCP 方案） */
+  private headers(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...(this.config.authType === 'bearer' && this.config.apiKey
+        ? { Authorization: `Bearer ${this.config.apiKey}` }
+        : {})
+    }
   }
 
   private async rpc(method: string, params?: unknown): Promise<any> {
@@ -38,11 +49,7 @@ export class McpSession {
     try {
       res = await fetch(this.config.url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
-        },
+        headers: { ...this.headers(), ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}) },
         body: JSON.stringify(body)
       })
     } catch (e) {
@@ -54,10 +61,15 @@ export class McpSession {
       throw new Error(`MCP ${this.config.name} 返回 ${res.status}`)
     }
     const ct = res.headers.get('content-type') ?? ''
-    if (ct.includes('text/event-stream')) {
-      return await parseSseResponse(res)
+    const payload = ct.includes('text/event-stream') ? await parseSseResponse(res) : await res.json()
+    // JSON-RPC 信封解包：响应是 {"result": ...} / {"error": {...}}，工具等数据在 result 里
+    // （实测 Firecrawl/Tavily 的 SSE data 即完整信封；不解包则 listTools 恒为空数组）
+    if (payload && typeof payload === 'object') {
+      const p = payload as { result?: unknown; error?: { message?: string } }
+      if (p.error) throw new Error(`MCP ${this.config.name} 返回错误：${p.error.message ?? JSON.stringify(p.error)}`)
+      if ('result' in p) return p.result
     }
-    return await res.json()
+    return payload
   }
 
   async initialize(): Promise<void> {
@@ -71,10 +83,7 @@ export class McpSession {
     try {
       await fetch(this.config.url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
-        },
+        headers: { ...this.headers(), ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}) },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })
       })
     } catch {

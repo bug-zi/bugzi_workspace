@@ -14,14 +14,9 @@ const TABS: { source: RecycleRow['source']; label: string; backTo: string }[] = 
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** 剩余存活文案（specs §2：「剩 2 天」「今天到期」） */
-function remainText(createdAt: string): string {
-  const elapsed = Date.now() - new Date(createdAt).getTime()
-  const remainMs = 3 * DAY_MS - elapsed
-  if (remainMs <= 0) return '即将清理'
-  const days = Math.floor(remainMs / DAY_MS)
-  if (days >= 1) return `剩 ${days} 天`
-  return '今天到期'
+/** 彻底删除时间点 = 入站时间 + 3 天（与 recycle.cleanupExpired 的清理口径一致） */
+function purgeTime(createdAt: string): string {
+  return fmtTime(new Date(new Date(createdAt).getTime() + 3 * DAY_MS).toISOString())
 }
 
 /** 摘要（各来源 payload 快照提取） */
@@ -120,8 +115,8 @@ export default function RecycleModule() {
             <div className="row-item" key={r.id} style={{ cursor: 'default' }}>
               <div className="row-main">
                 <div className="row-title" title={summaryOf(r)}>{summaryOf(r)}</div>
-                <div className="row-sub">
-                  入站 {fmtTime(r.created_at)} ｜ {remainText(r.created_at)}
+                <div className="row-sub" title="放入回收站时间 ｜ 彻底删除时间">
+                  {fmtTime(r.created_at)} ｜ {purgeTime(r.created_at)}
                 </div>
               </div>
               <div className="row-actions">

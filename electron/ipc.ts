@@ -16,6 +16,7 @@ import {
 } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { getEnabledMcps } from './ai/mcp'
+import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
 import { SettingsKeys } from '../src/shared/types'
 import type { LlmConfig, McpConfig } from '../src/shared/types'
 import { copyFileSync, unlinkSync } from 'node:fs'
@@ -240,9 +241,11 @@ export function registerIpc(): void {
     getDb().prepare('UPDATE wiki_entries SET term = ?, summary = ?, updated_at = ? WHERE id = ?').run(term, summary, nowIso(), id)
     return true
   })
-  ipcMain.handle('wiki:generate', (_e, term: string | null, sectionId: number | null) => {
+  ipcMain.handle('wiki:generate', async (_e, term: string | null, sectionId: number | null) => {
     try {
-      return { ok: true as const, data: generateWikiCard(term, sectionId) }
+      // 必须在此 await：若把 generateWikiCard 的 Promise 嵌进返回对象，
+      // ipcMain.handle 只 await 顶层值，嵌套 Promise 序列化失败 → 渲染层 invoke 永不 settle（卡"生成中"）
+      return { ok: true as const, data: await generateWikiCard(term, sectionId) }
     } catch (e) {
       const msg = (e as Error).message
       if (msg.startsWith('CONFLICT:')) return { ok: false as const, conflict: msg.slice(9) }
@@ -317,6 +320,9 @@ export function registerIpc(): void {
   ipcMain.handle('llm:test', (_e, config: LlmConfig) => testLlmConnection(config))
   ipcMain.handle('llm:models', (_e, config: LlmConfig) => listUpstreamModels(config))
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())
+  // AI 辅助 MCP 配置（问题疑惑区方案）：研究配置元数据 / 测试连接
+  ipcMain.handle('mcp:research', (_e, name: string) => researchMcpConfig(name))
+  ipcMain.handle('mcp:test', (_e, config: McpConfig) => testMcpConnection(config))
 
   // ---------- 个人中心：数据存储（优化建议区 #2） ----------
   ipcMain.handle('storage:currentDir', () => currentDataDir())

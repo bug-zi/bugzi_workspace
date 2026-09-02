@@ -119,7 +119,17 @@ const api = {
   },
   mcp: {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
-      ipcRenderer.invoke('mcp:listEnabled')
+      ipcRenderer.invoke('mcp:listEnabled'),
+    /** AI 辅助配置：研究 MCP 配置元数据（Registry/文档/LLM 三步降级） */
+    research: (name: string): Promise<import('../src/shared/types').McpResearch> =>
+      ipcRenderer.invoke('mcp:research', name),
+    /** 测试连接：initialize + tools/list，返回工具名列表 */
+    test: (config: {
+      name: string
+      url: string
+      authType?: 'none' | 'bearer'
+      apiKey?: string
+    }): Promise<{ tools: string[] }> => ipcRenderer.invoke('mcp:test', config)
   },
   storage: {
     /** 当前数据存储目录（绝对路径） */
