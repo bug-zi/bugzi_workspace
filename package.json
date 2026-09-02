@@ -1,0 +1,30 @@
+{
+  "name": "bugzi_workspace",
+  "version": "1.0.0",
+  "description": "bug子的workspace —— 生活化个人专属工作台",
+  "main": "out/main/index.js",
+  "author": "bugzi",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "smoke": "electron-vite build && electron . --smoke"
+  },
+  "dependencies": {
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "dompurify": "^3.4.14",
+    "electron": "^44.1.1",
+    "electron-vite": "^5.0.0",
+    "marked": "^18.0.11",
+    "material-symbols": "^0.47.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

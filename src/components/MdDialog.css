@@ -1,0 +1,52 @@
+/* MdDialog 专属样式 */
+.md-dialog {
+  width: min(720px, 92vw);
+  height: 80vh;
+}
+.md-dialog .dialog-body {
+  padding: 20px 26px;
+  user-select: text;
+}
+.md-dialog.editing .dialog-body {
+  padding: 0;
+}
+.md-dialog textarea.editor {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  padding: 20px 26px;
+  line-height: 1.8;
+  font-family: 'Cascadia Code', Consolas, var(--font-family);
+  font-size: 0.95em;
+}
+.md-dialog .edit-hint {
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+  margin-left: auto;
+}
+
+/* 划词气泡（万象卡片） */
+.sel-bubble {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+.sel-bubble button {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: var(--color-text);
+}
+.sel-bubble button:hover {
+  background: var(--color-primary-soft);
+}

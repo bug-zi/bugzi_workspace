@@ -1,0 +1,114 @@
+/* AI 助手边栏 */
+.ai-sidebar {
+  width: var(--ai-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  min-height: 0;
+}
+.ai-sidebar.collapsed {
+  width: var(--ai-width-collapsed);
+  align-items: center;
+  padding-top: 8px;
+}
+.ai-toggle {
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+}
+.ai-toggle:hover {
+  background: var(--color-primary-soft);
+}
+.ai-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+.ai-title {
+  flex: 1;
+}
+.ai-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-empty {
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin-top: 30%;
+  line-height: 1.8;
+}
+.ai-msg-role {
+  font-size: 0.75em;
+  color: var(--color-text-secondary);
+  margin-bottom: 3px;
+}
+.ai-msg.user .ai-msg-content {
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: var(--radius) var(--radius) var(--radius-sm) var(--radius);
+}
+:root[data-theme='dark'] .ai-msg.user .ai-msg-content {
+  color: #fff;
+}
+.ai-msg.assistant .ai-msg-content {
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius) var(--radius) var(--radius-sm) var(--radius);
+}
+.ai-msg.system .ai-msg-content {
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.88em;
+}
+.ai-msg-content {
+  padding: 8px 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-msg-content :is(p, ul, ol) {
+  margin: 0.2em 0;
+}
+.ai-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+  align-items: flex-end;
+}
+.ai-input {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  outline: none;
+}
+.ai-input:focus {
+  border-color: var(--color-primary);
+}
+.ai-send {
+  padding: 8px;
+}
+.ai-need-config {
+  margin: 10px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  line-height: 1.6;
+}

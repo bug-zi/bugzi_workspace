@@ -1,0 +1,128 @@
+// preload：contextBridge 暴露类型化 IPC API（window.api.*）
+import { contextBridge, ipcRenderer } from 'electron'
+
+const api = {
+  settings: {
+    getAll: (): Promise<Record<string, string>> => ipcRenderer.invoke('settings:getAll'),
+    get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
+    set: (key: string, value: string): Promise<boolean> => ipcRenderer.invoke('settings:set', key, value)
+  },
+  md: {
+    read: (path: string): Promise<string> => ipcRenderer.invoke('md:read', path),
+    write: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('md:write', path, content),
+    create: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('md:create', path, content),
+    delete: (path: string): Promise<boolean> => ipcRenderer.invoke('md:delete', path)
+  },
+  image: {
+    /** 选择并落盘图片；kind: avatar | bg-light | bg-dark */
+    pick: (kind: 'avatar' | 'bg-light' | 'bg-dark'): Promise<boolean | null> =>
+      ipcRenderer.invoke('image:pick', kind)
+  },
+  item: {
+    discard: (table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records', id: number): Promise<boolean> =>
+      ipcRenderer.invoke('item:discard', table, id),
+    onRecycleChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('recycle:changed', listener)
+      return () => ipcRenderer.removeListener('recycle:changed', listener)
+    }
+  },
+  recycle: {
+    list: (): Promise<
+      { id: number; source: 'mottos' | 'wiki' | 'inspirations' | 'verify'; item_id: number; payload: string; created_at: string }[]
+    > => ipcRenderer.invoke('recycle:list'),
+    restore: (id: number): Promise<{ source: string; item_id: number }> =>
+      ipcRenderer.invoke('recycle:restore', id),
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('recycle:delete', id)
+  },
+  ai: {
+    messages: (): Promise<
+      { id: number; role: 'user' | 'assistant' | 'system'; ai_module: string | null; content: string; created_at: string }[]
+    > => ipcRenderer.invoke('ai:messages'),
+    chat: (
+      message: string,
+      currentModule: string
+    ): Promise<{ id: number; role: string; content: string }> =>
+      ipcRenderer.invoke('ai:chat', message, currentModule),
+    configured: (): Promise<boolean> => ipcRenderer.invoke('ai:configured'),
+    pushSystem: (content: string): Promise<boolean> => ipcRenderer.invoke('ai:pushSystem', content),
+    onMessage: (cb: (msg: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, msg: unknown): void => {
+        cb(msg)
+      }
+      ipcRenderer.on('ai:message', listener)
+      return () => ipcRenderer.removeListener('ai:message', listener)
+    }
+  },
+  mottos: {
+    list: (status?: string): Promise<unknown[]> => ipcRenderer.invoke('mottos:list', status),
+    create: (content: string, source: string, status: string): Promise<number> =>
+      ipcRenderer.invoke('mottos:create', content, source, status),
+    update: (id: number, content: string, source: string): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:update', id, content, source),
+    setStatus: (id: number, status: string): Promise<boolean> =>
+      ipcRenderer.invoke('mottos:setStatus', id, status),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'mottos', id),
+    generate: (): Promise<{ generated: number; inserted: number }> =>
+      ipcRenderer.invoke('mottos:generate'),
+    normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s)
+  },
+  wiki: {
+    sections: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:sections'),
+    createSection: (name: string): Promise<number> => ipcRenderer.invoke('wiki:createSection', name),
+    renameSection: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:renameSection', id, name),
+    deleteSection: (id: number): Promise<boolean> => ipcRenderer.invoke('wiki:deleteSection', id),
+    entries: (sectionId: number): Promise<unknown[]> => ipcRenderer.invoke('wiki:entries', sectionId),
+    entry: (id: number): Promise<unknown> => ipcRenderer.invoke('wiki:entry', id),
+    updateEntry: (id: number, term: string, summary: string): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:updateEntry', id, term, summary),
+    generate: (
+      term: string | null,
+      sectionId: number | null
+    ): Promise<{ ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }> =>
+      ipcRenderer.invoke('wiki:generate', term, sectionId),
+    highlights: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:highlights'),
+    addHighlight: (entryId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:addHighlight', entryId, text),
+    deleteHighlight: (id: number): Promise<boolean> => ipcRenderer.invoke('wiki:deleteHighlight', id),
+    discardEntry: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'wiki_entries', id)
+  },
+  inspirations: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('inspirations:list'),
+    create: (title: string, status: string): Promise<number> =>
+      ipcRenderer.invoke('inspirations:create', title, status),
+    updateTitle: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('inspirations:updateTitle', id, title),
+    move: (id: number, status: string, sort: number): Promise<boolean> =>
+      ipcRenderer.invoke('inspirations:move', id, status, sort),
+    reorder: (moves: { id: number; status: string; sort: number }[]): Promise<boolean> =>
+      ipcRenderer.invoke('inspirations:reorder', moves),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'inspirations', id)
+  },
+  verify: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('verify:list'),
+    get: (id: number): Promise<unknown> => ipcRenderer.invoke('verify:get', id),
+    findDuplicate: (claim: string): Promise<{ id: number; claim: string; created_at: string } | null> =>
+      ipcRenderer.invoke('verify:findDuplicate', claim),
+    run: (claim: string): Promise<{ recordId: number; credibility: number }> =>
+      ipcRenderer.invoke('verify:run', claim),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'verify_records', id)
+  },
+  llm: {
+    test: (config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', config)
+  },
+  mcp: {
+    listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
+      ipcRenderer.invoke('mcp:listEnabled')
+  },
+  shell: {
+    openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke('shell:openExternal', url)
+  }
+}
+
+contextBridge.exposeInMainWorld('api', api)
+
+export type Api = typeof api
