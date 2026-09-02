@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目性质
 
-本项目是「bugzi's workspace」——「生活化个人专属工作台」桌面端 App 的 AI coding 项目。技术栈定为 Electron + React + TypeScript，本地单机运行。**当前仓库只包含项目文档（docs/），尚无任何代码**——不存在构建、测试、lint 命令。开发工作从 `designs-specs.md` 文档生成代码开始。数据存储：结构化数据存 SQLite，md 文档（格言笔记/灵感文档/万象卡片/辩真记录）存真实 .md 文件，均在用户数据目录下。
+本项目是「bugzi's workspace」——「生活化个人专属工作台」桌面端 App 的 AI coding 项目。技术栈 Electron 44 + React 19 + TypeScript，electron-vite 构建，本地单机运行。**v1.0 代码已全部生成**（260902，基于 7 份 designs-specs.md）：主进程在 `electron/`（DB/IPC/LLM/MCP/定时器/回收站服务），渲染层在 `src/`（主题/三栏布局/全局组件/六模块）。常用命令：`npm install`（`.npmrc` 已配 legacy-peer-deps + 国内镜像，直接裸装即可）、`npm run dev`（开发启动）、`npm run typecheck`（双 tsconfig 类型检查）、`npm run build`。数据存储：结构化数据存 SQLite（node:sqlite，用户数据目录 bugzi.db），md 文档（格言笔记/灵感文档/万象卡片/辩真记录）存真实 .md 文件，均在用户数据目录下；头像/背景图经 bzres:// 协议加载。
 
 ## 文档体系与维护权责（最重要）
 
@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/project/需求（功能模块）/总需求文档.md`           | 开发者主导        | 跨模块的全局硬性规则；AI 可提建议，或在开发者要求下协助完善（需审核通过）         |
 | `docs/project/问题疑惑区.md`                          | **开发者**        | 开发者记录问题疑惑处；**AI 不要主动查阅**，开发者指明时才阅读并答疑               |
 
-工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。7 份 designs-specs.md 已于 260902 全部生成，待开发者简单审核后即可开始开发。
+工作流程：开发者写 design.md → AI 据此生成 designs-specs.md → AI 按 designs-specs.md 开发。7 份 designs-specs.md 已于 260902 全部生成，v1.0 代码已于同日全部生成（typecheck/build 通过，待人工冒烟）。
 
 ## 全局硬性规则（来自 总需求文档.md 与 样式/design.md）
 
