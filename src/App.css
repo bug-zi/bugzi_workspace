@@ -141,6 +141,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 灵感泉 v2.0：标题 + AI 徽标同行（标题省略、徽标不缩） */
+.row-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.row-title-wrap .row-title {
+  min-width: 0;
+}
+.insp-ai-badge {
+  flex-shrink: 0;
+  font-size: 0.7em;
+  padding: 0 6px;
+}
 .row-sub {
   font-size: 0.8em;
   color: var(--color-text-secondary);
@@ -236,11 +251,10 @@
   color: var(--color-text-secondary);
 }
 
-/* ===== 上下文菜单（板块悬浮菜单等） ===== */
+/* ===== 上下文菜单（板块悬浮菜单等）=====
+   定位由调用处内联传入（锚定触发按钮，优化建议区：原写死 top:60/left:300 不跟随按钮） */
 .ctx-menu {
-  position: absolute;
-  top: 60px;
-  left: 300px;
+  position: fixed;
   min-width: 120px;
   background: var(--color-surface-strong);
   border: 1px solid var(--color-border);
@@ -253,11 +267,18 @@
 }
 .ctx-menu .btn {
   justify-content: flex-start;
+  gap: 6px;
   border: none;
   background: transparent;
 }
 .ctx-menu .btn:hover {
   background: var(--color-primary-soft);
+}
+/* 通用菜单分组分隔线（灵感泉 v2.0 §3.5：移动组 | AI 组） */
+.ctx-menu-sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 6px;
 }
 
 /* ===== 灵感泉四区看板 ===== */
@@ -671,4 +692,78 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* ===== 万象库测一测（优化建议区）===== */
+.quiz-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+.quiz-meta {
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+.quiz-question {
+  font-size: 1.05em;
+  line-height: 1.7;
+  margin-bottom: 4px;
+}
+.quiz-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.6;
+}
+.quiz-opt:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+}
+.quiz-opt:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+.quiz-opt.correct {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  opacity: 1;
+}
+.quiz-opt.wrong {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  opacity: 1;
+}
+.quiz-opt-key {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  font-size: 0.8em;
+}
+.quiz-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+.quiz-score {
+  font-size: 2.2em;
+  font-weight: 600;
+  color: var(--color-primary-deep);
 }

@@ -17,6 +17,10 @@ import {
   deleteAiMessage,
   generateMottos,
   generateWikiCard,
+  suggestWikiTerm,
+  generateWikiQuiz,
+  generateInspirations,
+  refineInspiration,
   runVerification,
   isLlmConfigured
 } from './ai/services'
@@ -283,6 +287,15 @@ export function registerIpc(): void {
   })
   ipcMain.handle('mottos:generate', () => generateMottos())
   ipcMain.handle('mottos:normalize', (_e, s: string) => normalizeText(s))
+  ipcMain.handle('mottos:deleteForever', (_e, id: number) => {
+    // 直接删除（优化建议区）：越过回收站彻底删除，连带笔记 md（同 hardDelete 的处理口径）
+    const row = getDb().prepare('SELECT note_path FROM mottos WHERE id = ?').get(id) as
+      | { note_path: string | null }
+      | undefined
+    getDb().prepare('DELETE FROM mottos WHERE id = ?').run(id)
+    if (row?.note_path) mdDelete(row.note_path)
+    return true
+  })
 
   // ---------- 万象库 ----------
   ipcMain.handle('wiki:sections', () =>
@@ -328,6 +341,26 @@ export function registerIpc(): void {
       throw e
     }
   })
+  // 随机词条名（手动弹窗骰子/指定板块随机生成）：只构思词条名不生成卡片
+  ipcMain.handle('wiki:suggestTerm', async (_e, sectionId: number | null) => {
+    const r = await suggestWikiTerm(sectionId)
+    return r.term
+  })
+  // 测一测：随机 5 张卡片批量出四选一（优化建议区）
+  ipcMain.handle('wiki:quiz', async () => {
+    return await generateWikiQuiz()
+  })
+  // 直接删除词条（生成审核流）：越过回收站删卡片 md + 高光 + 词条行（同 hardDelete wiki 口径）
+  ipcMain.handle('wiki:deleteForeverEntry', (_e, id: number) => {
+    const d = getDb()
+    const row = d.prepare('SELECT md_path FROM wiki_entries WHERE id = ?').get(id) as
+      | { md_path: string | null }
+      | undefined
+    d.prepare('DELETE FROM wiki_highlights WHERE entry_id = ?').run(id)
+    d.prepare('DELETE FROM wiki_entries WHERE id = ?').run(id)
+    if (row?.md_path) mdDelete(row.md_path)
+    return true
+  })
   ipcMain.handle('wiki:highlights', () =>
     getDb().prepare('SELECT h.*, e.term AS term FROM wiki_highlights h JOIN wiki_entries e ON h.entry_id = e.id WHERE e.deleted_at IS NULL ORDER BY h.id DESC').all()
   )
@@ -372,6 +405,29 @@ export function registerIpc(): void {
     const d = getDb()
     const stmt = d.prepare('UPDATE inspirations SET status = ?, sort = ?, updated_at = ? WHERE id = ?')
     for (const m of moves) stmt.run(m.status, m.sort, nowIso(), m.id)
+    return true
+  })
+  // 灵感泉 v2.0（specs §6.1）：AI 生成 / AI 完善
+  ipcMain.handle('inspirations:generate', async () => generateInspirations())
+  ipcMain.handle('inspirations:refine', async (_e, id: number) => refineInspiration(id))
+  /** AI 完善确认后追加进 md：拼接收敛主进程，避免前端 read-modify-write 与打开中的 MdDialog 竞态 */
+  ipcMain.handle('inspirations:appendRefine', (_e, id: number, content: string) => {
+    const d = getDb()
+    const row = d.prepare('SELECT md_path FROM inspirations WHERE id = ?').get(id) as
+      | { md_path: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    let prev: string
+    try {
+      prev = mdRead(row.md_path)
+    } catch {
+      throw new Error('NOT_FOUND')
+    }
+    // 段落标题时间戳以追加时刻为准（specs §6.3），格式同回收站时间显示
+    const t = new Date()
+    const stamp = `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+    mdWrite(row.md_path, `${prev.replace(/\s+$/, '')}\n\n## AI 补充 · ${stamp}\n\n${content.trim()}\n`)
+    d.prepare('UPDATE inspirations SET updated_at = ? WHERE id = ?').run(nowIso(), id)
     return true
   })
 

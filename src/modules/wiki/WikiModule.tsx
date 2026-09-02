@@ -1,6 +1,6 @@
 // 万象库模块（万象库 specs 全量）：总览/板块页/板块管理/卡片生成/划词/笔记本
 import { useCallback, useEffect, useState } from 'react'
-import type { WikiEntry, WikiSection, WikiHighlightRow } from '../../renderer/api'
+import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -12,7 +12,7 @@ export interface WikiModuleProps {
   bumpAi: () => void
 }
 
-type View = { kind: 'overview' } | { kind: 'section'; id: number } | { kind: 'notebook' }
+type View = { kind: 'overview' } | { kind: 'section'; id: number } | { kind: 'notebook' } | { kind: 'quiz' }
 
 /** 手动生成弹窗的占位词条名示例：初始板块各配一个代表词，自定义板块用通用示例 */
 const SECTION_TERM_EXAMPLES: Record<string, string> = {
@@ -44,16 +44,20 @@ export default function WikiModule(props: WikiModuleProps) {
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTerm, setManualTerm] = useState('')
   const [manualSection, setManualSection] = useState<number | null>(null)
+  // 手动弹窗骰子：随机词条名加载中
+  const [suggesting, setSuggesting] = useState(false)
   const [conflictTerm, setConflictTerm] = useState<string | null>(null)
   const [conflictEntry, setConflictEntry] = useState<WikiEntry | null>(null)
   const [goConfig, setGoConfig] = useState<'llm' | 'mcp' | null>(null)
   const [failMsg, setFailMsg] = useState<string | null>(null)
-  // 板块管理
-  const [sectionMenu, setSectionMenu] = useState<WikiSection | null>(null)
+  // 板块管理（菜单锚定触发按钮，优化建议区：原 ctx-menu 写死 top/left 不跟随按钮）
+  const [sectionMenu, setSectionMenu] = useState<{ section: WikiSection; left: number; top: number } | null>(null)
   const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [newSectionName, setNewSectionName] = useState('')
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
+  // 改名目标（存量 bug 修复：原条件 renameOpen && sectionMenu，但点改名即关菜单 → 弹窗永不显示）
+  const [renameTarget, setRenameTarget] = useState<WikiSection | null>(null)
   const [delSectionTarget, setDelSectionTarget] = useState<WikiSection | null>(null)
   // 词条编辑
   const [editEntry, setEditEntry] = useState<WikiEntry | null>(null)
@@ -65,6 +69,16 @@ export default function WikiModule(props: WikiModuleProps) {
   const [delHighlightTarget, setDelHighlightTarget] = useState<WikiHighlightRow | null>(null)
   // 跳转：笔记本 → 原卡片
   const [jumpEntryId, setJumpEntryId] = useState<number | null>(null)
+  // 生成审核（优化建议区：第一遍生成弹窗三选 加入/丢弃/直接删除）
+  const [reviewing, setReviewing] = useState(false)
+  const [reviewDelete, setReviewDelete] = useState<WikiEntry | null>(null)
+  // 测一测（优化建议区）
+  const [quizLoading, setQuizLoading] = useState(false)
+  const [quizQuestions, setQuizQuestions] = useState<WikiQuizQuestion[]>([])
+  const [quizIdx, setQuizIdx] = useState(0)
+  const [quizPick, setQuizPick] = useState<number | null>(null)
+  const [quizPicks, setQuizPicks] = useState<number[]>([])
+  const [quizFinished, setQuizFinished] = useState(false)
 
   const loadSections = useCallback(async () => {
     const rows = await window.api.wiki.sections()
@@ -118,6 +132,19 @@ export default function WikiModule(props: WikiModuleProps) {
   }, [cardEntry, loadSections])
 
   // ---------- 生成 ----------
+  /** 手动弹窗骰子：随机填一个词条名（当前所选板块），只构思词条不生成卡片 */
+  const suggestTerm = async (): Promise<void> => {
+    if (suggesting || manualSection == null) return
+    setSuggesting(true)
+    try {
+      setManualTerm(await window.api.wiki.suggestTerm(manualSection))
+    } catch (e) {
+      setFailMsg(String((e as Error).message))
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
   const runGenerate = async (term: string | null, sectionId: number | null): Promise<void> => {
     if (generating) return
     setGenerating(true)
@@ -126,8 +153,9 @@ export default function WikiModule(props: WikiModuleProps) {
       if (r.ok) {
         toast(`已生成词条「${r.data.term}」`)
         await loadSections()
-        // 打开新卡片
+        // 打开新卡片（生成审核态：读完三选 加入/丢弃/直接删除）
         const e = await window.api.wiki.entry(r.data.entryId)
+        setReviewing(true)
         setCardEntry(e)
         setMdVersion((v) => v + 1)
       } else {
@@ -182,10 +210,62 @@ export default function WikiModule(props: WikiModuleProps) {
     await window.api.wiki.discardEntry(discardTarget.id)
     toast('已放入回收站')
     setDiscardTarget(null)
+    setReviewing(false)
     setCardEntry(null)
     await loadSections()
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   }
+
+  /** 生成审核「直接删除」：彻底删卡片（含高光），不进回收站 */
+  const doReviewDelete = async (): Promise<void> => {
+    if (!reviewDelete) return
+    await window.api.wiki.deleteForeverEntry(reviewDelete.id)
+    toast('已彻底删除')
+    setReviewDelete(null)
+    setReviewing(false)
+    setCardEntry(null)
+    await loadSections()
+    if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
+  }
+
+  // ---------- 测一测（优化建议区：随机 5 张卡片各 1 题，逐题反馈） ----------
+  const startQuiz = async (): Promise<void> => {
+    if (quizLoading) return
+    setView({ kind: 'quiz' })
+    setQuizLoading(true)
+    setQuizQuestions([])
+    setQuizIdx(0)
+    setQuizPick(null)
+    setQuizPicks([])
+    setQuizFinished(false)
+    try {
+      setQuizQuestions(await window.api.wiki.quiz())
+    } catch (e) {
+      const msg = String((e as Error).message)
+      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
+      else setFailMsg(msg)
+      setView({ kind: 'overview' })
+    } finally {
+      setQuizLoading(false)
+    }
+  }
+
+  const pickOption = (i: number): void => {
+    if (quizPick != null) return
+    setQuizPick(i)
+    setQuizPicks((arr) => [...arr, i])
+  }
+
+  const quizNext = (): void => {
+    if (quizPick == null) return
+    if (quizIdx + 1 >= quizQuestions.length) setQuizFinished(true)
+    else {
+      setQuizIdx((v) => v + 1)
+      setQuizPick(null)
+    }
+  }
+
+  const quizScore = (): number => quizPicks.filter((p, i) => quizQuestions[i] && p === quizQuestions[i].answer).length
 
   const saveEntryEdit = async (): Promise<void> => {
     if (!editEntry) return
@@ -231,6 +311,10 @@ export default function WikiModule(props: WikiModuleProps) {
               <span className="material-symbols-outlined">edit_note</span>
               手动输入生成
             </button>
+            <button className="btn" onClick={() => void startQuiz()} disabled={quizLoading}>
+              <span className="material-symbols-outlined">quiz</span>
+              {quizLoading ? '出题中…' : '测一测'}
+            </button>
             <span className="module-sub" style={{ marginLeft: 'auto' }}>AI 按固定模板生成知识卡片</span>
           </div>
 
@@ -260,7 +344,14 @@ export default function WikiModule(props: WikiModuleProps) {
                   </div>
                   <span className="zone-count">{counts[s.id] ?? 0}</span>
                   <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-                    <button className="icon-btn" title="板块管理" onClick={() => setSectionMenu(s)}>
+                    <button
+                      className="icon-btn"
+                      title="板块管理"
+                      onClick={(e) => {
+                        const r = e.currentTarget.getBoundingClientRect()
+                        setSectionMenu({ section: s, left: r.right, top: r.bottom + 4 })
+                      }}
+                    >
                       <span className="material-symbols-outlined">more_vert</span>
                     </button>
                   </div>
@@ -290,6 +381,16 @@ export default function WikiModule(props: WikiModuleProps) {
             <span className="material-symbols-outlined">folder_open</span>
             <span>{currentSection.name}</span>
             <span className="zone-count">{entries.length}</span>
+            <div className="row-actions" style={{ marginLeft: 'auto' }} onClick={(e) => e.stopPropagation()}>
+              <button
+                className="icon-btn"
+                title="本板块随机来一条"
+                disabled={generating}
+                onClick={() => void runGenerate(null, currentSection.id)}
+              >
+                <span className={`material-symbols-outlined${generating ? ' spin' : ''}`}>casino</span>
+              </button>
+            </div>
           </div>
           <div className="zone-body">
             {entries.length === 0 && (
@@ -368,14 +469,105 @@ export default function WikiModule(props: WikiModuleProps) {
       )}
 
       {/* 卡片 MdDialog（划词能力仅此处启用） */}
+      {/* 测一测（优化建议区）：随机 5 题逐题反馈 */}
+      {view.kind === 'quiz' && (
+        <div className="zone">
+          <div className="zone-header" style={{ cursor: 'default' }}>
+            <span className="material-symbols-outlined">quiz</span>
+            <span>测一测</span>
+            {quizQuestions.length > 0 && !quizFinished && (
+              <span className="zone-count">{quizQuestions.length}</span>
+            )}
+          </div>
+          <div className="zone-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {quizLoading && (
+              <div className="empty-state">
+                <span className="material-symbols-outlined spin">progress_activity</span>
+                <div>出题中，约需数秒…</div>
+              </div>
+            )}
+            {!quizLoading && !quizFinished && quizQuestions[quizIdx] && (
+              <div className="card quiz-card">
+                <div className="quiz-meta">
+                  第 {quizIdx + 1} / {quizQuestions.length} 题 · 来源词条「{quizQuestions[quizIdx].term}」
+                </div>
+                <div className="quiz-question">{quizQuestions[quizIdx].question}</div>
+                {quizQuestions[quizIdx].options.map((opt, i) => {
+                  const isAnswer = i === quizQuestions[quizIdx].answer
+                  const picked = quizPick === i
+                  const cls = quizPick == null ? '' : isAnswer ? ' correct' : picked ? ' wrong' : ''
+                  return (
+                    <button
+                      key={i}
+                      className={`quiz-opt${cls}`}
+                      disabled={quizPick != null}
+                      onClick={() => pickOption(i)}
+                    >
+                      <span className="quiz-opt-key">{'ABCD'[i]}</span>
+                      <span>{opt}</span>
+                    </button>
+                  )
+                })}
+                {quizPick != null && (
+                  <div className="quiz-feedback">
+                    <span>
+                      {quizPick === quizQuestions[quizIdx].answer
+                        ? '回答正确'
+                        : `答错了，正确答案是 ${'ABCD'[quizQuestions[quizIdx].answer]}`}
+                    </span>
+                    <button className="btn btn-primary" onClick={quizNext}>
+                      {quizIdx + 1 >= quizQuestions.length ? '查看成绩' : '下一题'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {!quizLoading && quizFinished && (
+              <div className="card quiz-card" style={{ alignItems: 'center', textAlign: 'center' }}>
+                <div className="quiz-score">
+                  {quizScore()} / {quizQuestions.length}
+                </div>
+                <div className="module-sub">
+                  答对率 {Math.round((quizScore() / Math.max(1, quizQuestions.length)) * 100)}%
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                  <button className="btn" onClick={() => setView({ kind: 'overview' })}>
+                    返回总览
+                  </button>
+                  <button className="btn btn-primary" onClick={() => void startQuiz()} disabled={quizLoading}>
+                    <span className="material-symbols-outlined">casino</span>
+                    再来一轮
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <MdDialog
         key={cardEntry?.id ?? 'none'}
         open={cardEntry != null}
         title={cardEntry?.term ?? ''}
         filePath={cardEntry?.md_path ?? ''}
-        onClose={() => setCardEntry(null)}
+        onClose={() => {
+          // 生成审核态关闭 =「加入」保留（优化建议区）
+          if (reviewing) {
+            setReviewing(false)
+            toast('已加入万象库')
+          }
+          setCardEntry(null)
+        }}
         onChanged={() => void refreshCard()}
         selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
+        review={
+          reviewing && cardEntry
+            ? {
+                onDiscard: () => setDiscardTarget(cardEntry),
+                onDelete: () => setReviewDelete(cardEntry)
+              }
+            : undefined
+        }
       />
 
       {/* 手动输入生成 */}
@@ -395,18 +587,29 @@ export default function WikiModule(props: WikiModuleProps) {
                   </option>
                 ))}
               </select>
-              <input
-                className="field"
-                value={manualTerm}
-                onChange={(e) => setManualTerm(e.target.value)}
-                placeholder={`词条名（如：${termExampleOf(sections.find((s) => s.id === manualSection)?.name ?? '')}）`}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && manualTerm.trim()) {
-                    setManualOpen(false)
-                    void runGenerate(manualTerm.trim(), manualSection)
-                  }
-                }}
-              />
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  className="field"
+                  style={{ flex: 1 }}
+                  value={manualTerm}
+                  onChange={(e) => setManualTerm(e.target.value)}
+                  placeholder={`词条名（如：${termExampleOf(sections.find((s) => s.id === manualSection)?.name ?? '')}）`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && manualTerm.trim()) {
+                      setManualOpen(false)
+                      void runGenerate(manualTerm.trim(), manualSection)
+                    }
+                  }}
+                />
+                <button
+                  className="icon-btn"
+                  title="随机填一个词条（当前所选板块）"
+                  disabled={suggesting || manualSection == null}
+                  onClick={() => void suggestTerm()}
+                >
+                  <span className={`material-symbols-outlined${suggesting ? ' spin' : ''}`}>casino</span>
+                </button>
+              </div>
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => setManualOpen(false)}>取消</button>
@@ -452,24 +655,42 @@ export default function WikiModule(props: WikiModuleProps) {
       {sectionMenu && (
         <>
           <div className="dialog-overlay" style={{ background: 'transparent' }} onMouseDown={() => setSectionMenu(null)} />
-          <div className="ctx-menu" style={{ position: 'fixed', zIndex: 300 }}>
+          <div
+            className="ctx-menu"
+            style={{ position: 'fixed', top: sectionMenu.top, left: Math.max(8, sectionMenu.left - 150), zIndex: 300 }}
+          >
+            <button
+              className="btn btn-ghost"
+              disabled={generating}
+              onClick={() => {
+                const sid = sectionMenu.section.id
+                setSectionMenu(null)
+                void runGenerate(null, sid)
+              }}
+            >
+              <span className="material-symbols-outlined">casino</span>
+              本板块随机来一条
+            </button>
             <button
               className="btn btn-ghost"
               onClick={() => {
-                setRenameName(sectionMenu.name)
+                setRenameTarget(sectionMenu.section)
+                setRenameName(sectionMenu.section.name)
                 setRenameOpen(true)
                 setSectionMenu(null)
               }}
             >
+              <span className="material-symbols-outlined">edit</span>
               改名
             </button>
             <button
               className="btn btn-ghost btn-danger"
               onClick={() => {
-                setDelSectionTarget(sectionMenu)
+                setDelSectionTarget(sectionMenu.section)
                 setSectionMenu(null)
               }}
             >
+              <span className="material-symbols-outlined">delete</span>
               删除
             </button>
           </div>
@@ -505,7 +726,7 @@ export default function WikiModule(props: WikiModuleProps) {
       )}
 
       {/* 板块改名 */}
-      {renameOpen && sectionMenu && (
+      {renameOpen && renameTarget && (
         <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setRenameOpen(false)}>
           <div className="dialog" style={{ width: 360 }}>
             <div className="dialog-header">板块改名</div>
@@ -517,7 +738,7 @@ export default function WikiModule(props: WikiModuleProps) {
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  void window.api.wiki.renameSection(sectionMenu.id, renameName.trim()).then(() => {
+                  void window.api.wiki.renameSection(renameTarget.id, renameName.trim()).then(() => {
                     setRenameOpen(false)
                     void loadSections()
                   })
@@ -581,6 +802,18 @@ export default function WikiModule(props: WikiModuleProps) {
         onCancel={() => setDiscardTarget(null)}
       >
         放入回收站，3 天后自动彻底删除。
+      </ConfirmDialog>
+
+      {/* 生成审核：直接删除二次确认（不进回收站） */}
+      <ConfirmDialog
+        open={reviewDelete != null}
+        title="直接删除"
+        confirmText="彻底删除"
+        danger
+        onConfirm={() => void doReviewDelete()}
+        onCancel={() => setReviewDelete(null)}
+      >
+        将彻底删除词条「{reviewDelete?.term ?? ''}」的知识卡片（含划词高光），不经过回收站，删除后无法恢复。
       </ConfirmDialog>
 
       {/* 高光单删（非破坏性，无二次确认——specs §4） */}

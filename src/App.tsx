@@ -97,7 +97,7 @@ function Shell() {
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
-              {m.id === 'inspirations' && <InspirationsModule />}
+              {m.id === 'inspirations' && <InspirationsModule onOpenAi={openAiWith} />}
               {m.id === 'verify' && (
                 <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}

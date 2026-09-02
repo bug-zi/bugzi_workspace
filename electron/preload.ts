@@ -103,7 +103,9 @@ const api = {
     normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s),
     /** 未删除区内判重（v2.0 §7.4：规范化一致或包含关系） */
     checkDuplicate: (content: string): Promise<boolean> =>
-      ipcRenderer.invoke('mottos:checkDuplicate', content)
+      ipcRenderer.invoke('mottos:checkDuplicate', content),
+    /** 直接删除：越过回收站彻底删除（含笔记 md），需前端二次确认 */
+    deleteForever: (id: number): Promise<boolean> => ipcRenderer.invoke('mottos:deleteForever', id)
   },
   wiki: {
     sections: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:sections'),
@@ -120,6 +122,16 @@ const api = {
       sectionId: number | null
     ): Promise<{ ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }> =>
       ipcRenderer.invoke('wiki:generate', term, sectionId),
+    /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
+    suggestTerm: (sectionId: number | null): Promise<string> =>
+      ipcRenderer.invoke('wiki:suggestTerm', sectionId),
+    /** 测一测：随机 5 张卡片各出 1 道四选一 */
+    quiz: (): Promise<
+      { entryId: number; term: string; question: string; options: string[]; answer: number }[]
+    > => ipcRenderer.invoke('wiki:quiz'),
+    /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
+    deleteForeverEntry: (id: number): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:deleteForeverEntry', id),
     highlights: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:highlights'),
     addHighlight: (entryId: number, text: string): Promise<boolean> =>
       ipcRenderer.invoke('wiki:addHighlight', entryId, text),
@@ -136,7 +148,15 @@ const api = {
       ipcRenderer.invoke('inspirations:move', id, status, sort),
     reorder: (moves: { id: number; status: string; sort: number }[]): Promise<boolean> =>
       ipcRenderer.invoke('inspirations:reorder', moves),
-    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'inspirations', id)
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'inspirations', id),
+    /** 「来5条灵感」：已有灵感画像 → LLM 生成 5 条入草稿区（specs §6.2） */
+    generate: (): Promise<{ generated: number; inserted: number }> =>
+      ipcRenderer.invoke('inspirations:generate'),
+    /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
+    refine: (id: number): Promise<string> => ipcRenderer.invoke('inspirations:refine', id),
+    /** 确认追加：以「## AI 补充 · 时间」段追加到该条 md 末尾 */
+    appendRefine: (id: number, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('inspirations:appendRefine', id, content)
   },
   verify: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('verify:list'),

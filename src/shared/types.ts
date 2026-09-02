@@ -137,6 +137,8 @@ export interface InspirationRecord {
   status: 'draft' | 'project' | 'develop' | 'archive'
   md_path: string
   sort: number
+  /** 来源（DB v7）：manual=手动新建 | ai=「来5条灵感」生成（列表 AI 徽标依据） */
+  origin: 'manual' | 'ai'
   created_at: string
   updated_at: string
   deleted_at: string | null

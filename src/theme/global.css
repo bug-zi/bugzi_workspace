@@ -57,6 +57,8 @@
   --color-surface-strong: rgba(255, 255, 255, 0.92);
   --color-border: rgba(209, 127, 165, 0.35);
   --color-danger: #b0577d;
+  /* 更深一档的删除色（比 danger 更重的破坏性操作，如「直接删除」） */
+  --color-danger-deep: #8c3a5e;
   --color-selection: rgba(232, 160, 191, 0.45);
   /* 亚克力材质（吸顶导航条用）：半透明底 + 主题色描边 + 顶部高光 */
   --acrylic-bg: rgba(255, 255, 255, 0.55);
@@ -76,6 +78,8 @@
   --color-surface-strong: rgba(13, 23,  47, 0.92);
   --color-border: rgba(102, 164, 255, 0.25);
   --color-danger: #e87a93;
+  /* 更深一档的删除色（深色主题下比 danger 更沉更重，用于「直接删除」等更重操作） */
+  --color-danger-deep: #d34a6d;
   /* 划词高亮取参考图点缀蓝（#66a4ff）半透明，深色下保证选中区与背景有区分度 */
   --color-selection: rgba(102, 164, 255, 0.45);
   /* 亚克力材质（吸顶导航条用）：半透明底 + 高饱和描边 + 顶部高光 */
@@ -197,6 +201,9 @@ select {
 }
 .btn-danger {
   color: var(--color-danger);
+}
+.btn-danger-deep {
+  color: var(--color-danger-deep);
 }
 .btn-ghost {
   border-color: transparent;

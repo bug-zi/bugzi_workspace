@@ -18,10 +18,16 @@ export interface MdDialogProps {
   }
   /** 头部标题可编辑（灵感泉：标题改后列表同步） */
   onTitleChange?: (title: string) => void
+  /** 生成审核流（万象库第一遍生成，优化建议区）：底部三选——加入=关闭（走 onClose），
+   *  丢弃/直接删除由调用方处理（需自行二次确认）；Esc/遮罩关闭同样视为「加入」 */
+  review?: {
+    onDiscard: () => void
+    onDelete: () => void
+  }
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, filePath, onClose, onChanged, selectionActions, onTitleChange } = props
+  const { open, title, filePath, onClose, onChanged, selectionActions, onTitleChange, review } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -187,7 +193,7 @@ export default function MdDialog(props: MdDialogProps) {
             <button className="btn btn-primary" onClick={() => void saveAndExit()}>
               完成
             </button>
-          ) : (
+          ) : review ? null : (
             <button
               className="btn btn-ghost close-btn"
               onClick={close}
@@ -215,6 +221,20 @@ export default function MdDialog(props: MdDialogProps) {
             <div className="md-view" ref={bodyRef} />
           )}
         </div>
+        {/* 生成审核三选（优化建议区）：加入=关闭并保留，丢弃/直接删除由调用方确认后执行 */}
+        {review && !editing && (
+          <div className="dialog-footer">
+            <button className="btn btn-danger-deep" onClick={review.onDelete}>
+              直接删除
+            </button>
+            <button className="btn btn-danger" onClick={review.onDiscard}>
+              丢弃
+            </button>
+            <button className="btn btn-primary" onClick={close}>
+              加入
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

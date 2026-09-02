@@ -2,7 +2,7 @@
 import { getDb, nowIso, normalizeText, isDupMotto } from '../db/db'
 import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
-import { mdWrite } from '../services/files'
+import { mdRead, mdWrite, mdCreate } from '../services/files'
 import { SettingsKeys } from '../../src/shared/types'
 import type { AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
 
@@ -251,6 +251,131 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   return { generated: items.length, inserted, excerptInserted, composedInserted }
 }
 
+// ---------- 灵感泉 v2.0（灵感泉 specs §6：从零生成 + AI 完善） ----------
+
+/** 解析 LLM 返回的灵感数组（兼容 ```json 与 {"inspirations":[...]} 对象包裹，同 parseJsonArray 容错） */
+function parseInspirationArray(raw: string): { title: string; summary: string }[] {
+  const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
+  let parsed: unknown = JSON.parse(text)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    parsed = Object.values(parsed).find((v) => Array.isArray(v)) ?? parsed
+  }
+  if (!Array.isArray(parsed)) throw new Error('LLM 未返回 JSON 数组')
+  const out: { title: string; summary: string }[] = []
+  for (const item of parsed) {
+    // title/summary 任一缺失或空白即跳过（specs §6.2 解析容错）
+    if (
+      item &&
+      typeof item.title === 'string' &&
+      typeof item.summary === 'string' &&
+      item.title.trim() &&
+      item.summary.trim()
+    ) {
+      out.push({ title: item.title.trim(), summary: item.summary.trim() })
+    }
+  }
+  if (out.length === 0) throw new Error('LLM 返回数组为空或字段缺失')
+  return out
+}
+
+/** 读灵感 md 正文（跳过首行 `# 标题`；读失败返回空串），截 maxLen 字；flatten 时压缩空白（画像单行场景） */
+function inspirationBody(mdPath: string, maxLen: number, flatten: boolean): string {
+  let raw: string
+  try {
+    raw = mdRead(mdPath)
+  } catch {
+    return ''
+  }
+  const body = raw.replace(/^#\s.*\n?/, '').trim()
+  return (flatten ? body.replace(/\s+/g, ' ') : body).slice(0, maxLen).trim()
+}
+
+export interface GenerateInspirationsResult {
+  generated: number
+  inserted: number
+}
+
+/** 「来5条灵感」（specs §6.2）：已有灵感画像 → LLM 生成 5 条标题+简介 → 标题查重入草稿区（origin='ai'） */
+export async function generateInspirations(): Promise<GenerateInspirationsResult> {
+  const d = getDb()
+  // 兴趣画像：全部未删除灵感（四区含归档），最近更新 50 条；正文截 100 字
+  const profileRows = d
+    .prepare(
+      'SELECT title, md_path FROM inspirations WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 50'
+    )
+    .all() as { title: string; md_path: string }[]
+  const profile = profileRows.length
+    ? profileRows
+        .map((r) => {
+          const body = inspirationBody(r.md_path, 100, true)
+          return body ? `- ${r.title}：${body}` : `- ${r.title}`
+        })
+        .join('\n')
+    : '（暂无已有灵感，可自由发散各类项目创意）'
+  // 避免清单（specs §6.2）：全部标题（含回收站，不过滤 deleted_at），最多 500 条防 prompt 超长
+  const existingRows = d
+    .prepare('SELECT title FROM inspirations ORDER BY updated_at DESC LIMIT 500')
+    .all() as { title: string }[]
+  const avoidList = existingRows.length ? existingRows.map((r) => `- ${r.title}`).join('\n') : '（暂无）'
+  const prompt = `以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.9,
+    jsonMode: true
+  })
+  let items: { title: string; summary: string }[]
+  try {
+    items = parseInspirationArray(res.content)
+  } catch {
+    // 解析失败自动重试一次（同 generateMottos）
+    const retry = await chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.9,
+      jsonMode: true
+    })
+    items = parseInspirationArray(retry.content)
+  }
+  // 入库：标题精确查重（含回收站 + 批内互斥）→ 插草稿区末尾（specs §6.2，与 moveTo 区末尾语义一致）
+  const titles = new Set(existingRows.map((r) => r.title.trim()))
+  let tailSort = (
+    d.prepare("SELECT MAX(sort) AS m FROM inspirations WHERE status = 'draft' AND deleted_at IS NULL").get() as {
+      m: number | null
+    }
+  ).m
+  if (tailSort == null) tailSort = 0
+  const now = nowIso()
+  const ins = d.prepare(
+    "INSERT INTO inspirations (title, status, md_path, sort, origin, created_at, updated_at) VALUES (?, 'draft', 'PENDING', ?, 'ai', ?, ?)"
+  )
+  let inserted = 0
+  for (const it of items) {
+    if (titles.has(it.title)) continue
+    titles.add(it.title)
+    tailSort += 1
+    const r = ins.run(it.title, tailSort, now, now)
+    const id = Number(r.lastInsertRowid)
+    const mdPath = `md/inspirations/${id}.md`
+    d.prepare('UPDATE inspirations SET md_path = ? WHERE id = ?').run(mdPath, id)
+    mdCreate(mdPath, `# ${it.title}\n\n${it.summary}\n`)
+    inserted++
+  }
+  return { generated: items.length, inserted }
+}
+
+/** AI 完善（specs §6.3）：基于标题+正文生成三小节扩展建议；只生成不写库，追加由 inspirations:appendRefine 完成 */
+export async function refineInspiration(id: number): Promise<string> {
+  const row = getDb().prepare('SELECT title, md_path FROM inspirations WHERE id = ?').get(id) as
+    | { title: string; md_path: string }
+    | undefined
+  if (!row) throw new Error('NOT_FOUND')
+  const body = inspirationBody(row.md_path, 4000, false) || '（正文暂空）'
+  const prompt = `以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
+  const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
 // ---------- 知识卡片生成（万象库 specs §3.1） ----------
 
 export interface GenerateWikiResult {
@@ -259,33 +384,50 @@ export interface GenerateWikiResult {
   summary: string
 }
 
-/** 生成知识卡片 md（固定模板，specs §3.1），并建词条记录 */
-export async function generateWikiCard(term: string | null, sectionId: number | null): Promise<GenerateWikiResult> {
+/** 构思词条名（优化建议区「指定板块随机生成」）：指定板块用指定，未指定随机挑；规避全部已有词条 */
+export async function suggestWikiTerm(sectionId: number | null): Promise<{ sectionId: number; term: string }> {
   const d = getDb()
-  // 随机生成：随机板块 + 规避已有词条
-  if (!term) {
+  let section: { id: number; name: string }
+  if (sectionId != null) {
+    const s = d.prepare('SELECT id, name FROM wiki_sections WHERE id = ?').get(sectionId) as
+      | { id: number; name: string }
+      | undefined
+    if (!s) throw new Error('板块不存在')
+    section = s
+  } else {
     const sections = d.prepare('SELECT id, name FROM wiki_sections ORDER BY sort').all() as {
       id: number
       name: string
     }[]
     if (sections.length === 0) throw new Error('请先创建板块')
-    const section = sections[Math.floor(Math.random() * sections.length)]
-    sectionId = section.id
-    const existingTerms = (
-      d.prepare('SELECT term FROM wiki_entries WHERE deleted_at IS NULL').all() as { term: string }[]
-    ).map((r) => r.term)
-    const avoid = existingTerms.length ? `（已有词条请避开：${existingTerms.join('、')}）` : ''
-    const res = await chatCompletion({
-      messages: [
-        {
-          role: 'user',
-          content: `请从「${section.name}」领域中构思一个值得收藏的知识词条（${avoid}），只返回词条名本身，不要任何解释和标点。`
-        }
-      ],
-      temperature: 1.0
-    })
-    term = res.content.trim().replace(/^["'《]|["'》]$/g, '')
-    if (!term) throw new Error('未能生成词条名')
+    section = sections[Math.floor(Math.random() * sections.length)]
+  }
+  const existingTerms = (
+    d.prepare('SELECT term FROM wiki_entries WHERE deleted_at IS NULL').all() as { term: string }[]
+  ).map((r) => r.term)
+  const avoid = existingTerms.length ? `（已有词条请避开：${existingTerms.join('、')}）` : ''
+  const res = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `请从「${section.name}」领域中构思一个值得收藏的知识词条（${avoid}），只返回词条名本身，不要任何解释和标点。`
+      }
+    ],
+    temperature: 1.0
+  })
+  const term = res.content.trim().replace(/^["'《]|["'》]$/g, '')
+  if (!term) throw new Error('未能生成词条名')
+  return { sectionId: section.id, term }
+}
+
+/** 生成知识卡片 md（固定模板，specs §3.1），并建词条记录 */
+export async function generateWikiCard(term: string | null, sectionId: number | null): Promise<GenerateWikiResult> {
+  const d = getDb()
+  // 词条名缺省：LLM 构思（板块 = 指定板块，未指定则随机挑）
+  if (!term) {
+    const suggested = await suggestWikiTerm(sectionId)
+    sectionId = suggested.sectionId
+    term = suggested.term
   }
   // 查重（手动输入场景已拦截，随机场景兜底）
   const dup = d
@@ -309,6 +451,84 @@ export async function generateWikiCard(term: string | null, sectionId: number | 
   d.prepare('UPDATE wiki_entries SET md_path = ? WHERE id = ?').run(mdPath, id)
   mdWrite(mdPath, md)
   return { entryId: id, term, summary }
+}
+
+// ---------- 测一测（优化建议区：基于万象库知识出选择题考察掌握程度） ----------
+
+export interface WikiQuizQuestion {
+  /** 来源词条 id */
+  entryId: number
+  /** 来源词条名 */
+  term: string
+  question: string
+  options: string[]
+  /** 正确选项下标 0..3 */
+  answer: number
+}
+
+/** 解析 LLM 返回的测题数组（兼容 ```json 与 {"questions":[...]} 对象包裹，同 parseJsonArray 容错） */
+function parseQuizArray(
+  raw: string,
+  idByTerm: Map<string, number>
+): { entryId: number; term: string; question: string; options: string[]; answer: number }[] {
+  const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
+  let parsed: unknown = JSON.parse(text)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    parsed = Object.values(parsed).find((v) => Array.isArray(v)) ?? parsed
+  }
+  if (!Array.isArray(parsed)) throw new Error('LLM 未返回题目数组')
+  const out: WikiQuizQuestion[] = []
+  for (const item of parsed as Record<string, unknown>[]) {
+    const term = typeof item.term === 'string' ? item.term.trim() : ''
+    const question = typeof item.question === 'string' ? item.question.trim() : ''
+    const options = Array.isArray(item.options)
+      ? item.options.filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
+      : []
+    const answer = typeof item.answer === 'number' ? item.answer : -1
+    const entryId = idByTerm.get(term)
+    // 选项至少 2 个、答案在范围内、能对上来源词条才收
+    if (entryId != null && question && options.length >= 2 && answer >= 0 && answer < options.length) {
+      out.push({ entryId, term, question, options, answer })
+    }
+  }
+  if (out.length === 0) throw new Error('LLM 返回题目为空或字段缺失')
+  return out
+}
+
+/** 每次测 5 题：随机抽 5 张卡片（不足则全取）→ 一次 LLM 调用批量出四选一 */
+export async function generateWikiQuiz(): Promise<WikiQuizQuestion[]> {
+  const d = getDb()
+  const rows = d
+    .prepare('SELECT id, term, md_path FROM wiki_entries WHERE deleted_at IS NULL')
+    .all() as { id: number; term: string; md_path: string }[]
+  if (rows.length === 0) throw new Error('题库为空，请先在万象库生成一些知识卡片')
+  // Fisher-Yates 洗牌后取前 5
+  for (let i = rows.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[rows[i], rows[j]] = [rows[j], rows[i]]
+  }
+  const picked = rows.slice(0, 5)
+  const idByTerm = new Map<string, number>()
+  const cards: string[] = []
+  for (const r of picked) {
+    let md = ''
+    try {
+      md = await mdRead(r.md_path)
+    } catch {
+      /* md 缺失的卡片跳过 */
+    }
+    if (!md) continue
+    idByTerm.set(r.term, r.id)
+    cards.push(`【词条：${r.term}】\n${md.slice(0, 1200)}`)
+  }
+  if (cards.length === 0) throw new Error('卡片内容读取失败')
+  const prompt = `以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7,
+    jsonMode: true
+  })
+  return parseQuizArray(res.content, idByTerm)
 }
 
 // ---------- 辩真阁验证（辩真阁 specs §3） ----------

@@ -67,6 +67,8 @@ export default function MottosModule(props: MottosModuleProps) {
   const [scheduleTime, setScheduleTime] = useState('22:00')
   // 丢弃确认
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
+  // 直接删除二次确认（优化建议区：越过回收站彻底删除）
+  const [foreverTarget, setForeverTarget] = useState<MottoRecord | null>(null)
   // 拖拽排序（区内）
   const dragIdRef = useRef<number | null>(null)
   // 快速导航（优化建议区）：跳转到目标区——折叠则先展开，再平滑滚动到该区
@@ -198,6 +200,14 @@ export default function MottosModule(props: MottosModuleProps) {
     await window.api.mottos.discard(discardTarget.id)
     toast('已放入回收站')
     setDiscardTarget(null)
+    await load()
+  }
+
+  const doDeleteForever = async (): Promise<void> => {
+    if (!foreverTarget) return
+    await window.api.mottos.deleteForever(foreverTarget.id)
+    toast('已彻底删除')
+    setForeverTarget(null)
     await load()
   }
 
@@ -747,10 +757,35 @@ export default function MottosModule(props: MottosModuleProps) {
         title="放入回收站"
         confirmText="丢弃"
         danger
+        extraAction={
+          discardTarget
+            ? {
+                text: '直接删除',
+                deep: true,
+                onAction: () => {
+                  setForeverTarget(discardTarget)
+                  setDiscardTarget(null)
+                }
+              }
+            : undefined
+        }
         onConfirm={() => void doDiscard()}
         onCancel={() => setDiscardTarget(null)}
       >
         放入回收站，3 天后自动彻底删除。
+      </ConfirmDialog>
+
+      {/* 直接删除二次确认（不进回收站） */}
+      <ConfirmDialog
+        open={foreverTarget != null}
+        title="直接删除"
+        confirmText="彻底删除"
+        danger
+        onConfirm={() => void doDeleteForever()}
+        onCancel={() => setForeverTarget(null)}
+      >
+        将彻底删除{foreverTarget ? `「${foreverTarget.content.slice(0, 40)}${foreverTarget.content.length > 40 ? '…' : ''}」` : '该格言'}
+        及其笔记文档，不经过回收站，删除后无法恢复。
       </ConfirmDialog>
 
       {/* LLM 未配置引导 */}

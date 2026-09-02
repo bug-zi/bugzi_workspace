@@ -245,6 +245,13 @@ function migrate(): void {
     )
     d.exec('PRAGMA user_version = 6')
   }
+
+  if (version < 7) {
+    // v7：灵感泉 v2.0（AI 辅助生成）。origin：'manual'=手动新建 | 'ai'=AI「来5条灵感」生成
+    //（列表 AI 徽标依据；回收站 payload 自带该字段，恢复后徽标保留）。
+    d.exec("ALTER TABLE inspirations ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'")
+    d.exec('PRAGMA user_version = 7')
+  }
 }
 
 // ---------- 通用工具 ----------

@@ -46,12 +46,26 @@ export interface WikiHighlightRow {
   term: string
 }
 
+/** 测一测题目（wiki.quiz 返回） */
+export interface WikiQuizQuestion {
+  /** 来源词条 id */
+  entryId: number
+  /** 来源词条名 */
+  term: string
+  question: string
+  options: string[]
+  /** 正确选项下标 0..3 */
+  answer: number
+}
+
 export interface InspirationRecord {
   id: number
   title: string
   status: 'draft' | 'project' | 'develop' | 'archive'
   md_path: string
   sort: number
+  /** 来源（DB v7）：manual=手动新建 | ai=「来5条灵感」生成（列表 AI 徽标依据） */
+  origin: 'manual' | 'ai'
   created_at: string
   updated_at: string
   deleted_at: string | null
@@ -200,6 +214,8 @@ export interface Api {
     normalize(s: string): Promise<string>
     /** 未删除区内判重（v2.0：规范化一致或包含关系） */
     checkDuplicate(content: string): Promise<boolean>
+    /** 直接删除：越过回收站彻底删除（含笔记 md），需前端二次确认 */
+    deleteForever(id: number): Promise<boolean>
   }
   wiki: {
     sections(): Promise<WikiSection[]>
@@ -215,6 +231,12 @@ export interface Api {
     ): Promise<
       { ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }
     >
+    /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
+    suggestTerm(sectionId: number | null): Promise<string>
+    /** 测一测：随机 5 张卡片各出 1 道四选一 */
+    quiz(): Promise<WikiQuizQuestion[]>
+    /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
+    deleteForeverEntry(id: number): Promise<boolean>
     highlights(): Promise<WikiHighlightRow[]>
     addHighlight(entryId: number, text: string): Promise<boolean>
     deleteHighlight(id: number): Promise<boolean>
@@ -227,6 +249,12 @@ export interface Api {
     move(id: number, status: string, sort: number): Promise<boolean>
     reorder(moves: { id: number; status: string; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
+    /** 「来5条灵感」：已有灵感画像 → LLM 生成 5 条入草稿区（specs §6.2） */
+    generate(): Promise<{ generated: number; inserted: number }>
+    /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
+    refine(id: number): Promise<string>
+    /** 确认追加：以「## AI 补充 · 时间」段追加到该条 md 末尾 */
+    appendRefine(id: number, content: string): Promise<boolean>
   }
   verify: {
     list(): Promise<VerifyRecord[]>
