@@ -1,25 +1,55 @@
-// AI 助手边栏（样式 specs §4）：自由对话 + 模块感知 + 多会话管理 + 系统消息推送
+// AI 助手边栏（样式 specs §4 + 频道制）：四频道独立会话 + 模块感知 + 多会话管理 + 系统消息推送 + 画像建议卡片
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { AiMessageRow, AiSessionRow } from '../renderer/api'
+import type { AiChannel, AiMessageRow, AiSessionRow } from '../renderer/api'
 import { SettingsKeys } from '../shared/types'
 import ConfirmDialog from './ConfirmDialog'
 import MdView from './MdView'
+import { useToast } from './Toast'
 import './AiSidebar.css'
 
 export interface AiSidebarProps {
   collapsed: boolean
   onToggle: () => void
   currentModule: string
-  /** 万象库「问 AI」预填文本 */
-  pendingAsk: string | null
-  onPendingAskConsumed: () => void
+  /** 模块动作带来的频道请求（万象问AI/辩真验证/致知己追问）：auto 时切频道后自动发送 */
+  pending: { text: string; channel: AiChannel; auto: boolean } | null
+  onPendingConsumed: () => void
   /** 系统消息（辩真阁验证过程）触发展开 */
   messagesVersion: number
   onNavigateToProfile: () => void
 }
 
 const ROLE_LABEL: Record<string, string> = { user: '我', assistant: 'AI', system: '系统' }
+
+/** 频道清单（DB v9 频道制，致知己 specs §4）：外壳不变，内部按场景分频道 */
+const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
+  { id: 'assistant', label: '助手', icon: 'forum' },
+  { id: 'wiki', label: '万象·问答', icon: 'public' },
+  { id: 'zhijiji', label: '致知己·追问', icon: 'self_improvement' },
+  { id: 'verify', label: '辩真·核查', icon: 'fact_check' }
+]
+
+/** 各频道激活会话的 settings key（与主进程 services.ACTIVE_SESSION_KEYS 同步） */
+const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
+  assistant: SettingsKeys.AiActiveSessionId,
+  wiki: SettingsKeys.AiActiveSessionWiki,
+  zhijiji: SettingsKeys.AiActiveSessionZhijiji,
+  verify: SettingsKeys.AiActiveSessionVerify
+}
+
+/** 画像提炼协议标记（主进程 PROFILE_SUGGEST_INSTRUCTION 约定）：<<<PROFILE_SUGGEST:类别|内容>>> */
+const PROFILE_SUGGEST_RE = /^<<<PROFILE_SUGGEST:([^|>]+)\|([^>]*)>>>\s*$/m
+
+/** 助手消息拆分：正文 + 画像建议（无标记则 suggest 为 null） */
+function splitSuggest(content: string): { body: string; suggest: { category: string; content: string } | null } {
+  const m = content.match(PROFILE_SUGGEST_RE)
+  if (!m) return { body: content, suggest: null }
+  return {
+    body: content.replace(PROFILE_SUGGEST_RE, '').trimEnd(),
+    suggest: { category: m[1].trim(), content: m[2].trim() }
+  }
+}
 
 /** 边栏宽度拖拽范围（px，优化建议区「拖拽调整窗口大小」；默认值同 global.css --ai-width） */
 const AI_WIDTH_MIN = 280
@@ -36,13 +66,15 @@ function applyAiWidth(w: number): void {
 /** 待确认的删除操作（会话或单条消息，均需二次确认） */
 type ConfirmTarget = { kind: 'session'; id: number; title: string } | { kind: 'message'; id: number }
 
-/** 激活会话落库（settings.ai_active_session_id，主进程系统消息推送读它） */
-async function persistActive(id: number | null): Promise<void> {
-  await window.api.settings.set(SettingsKeys.AiActiveSessionId, id == null ? '' : String(id))
+/** 某频道的激活会话落库（主进程系统消息推送按频道读它） */
+async function persistActive(id: number | null, channel: AiChannel): Promise<void> {
+  await window.api.settings.set(ACTIVE_SESSION_KEYS[channel], id == null ? '' : String(id))
 }
 
 export default function AiSidebar(props: AiSidebarProps) {
-  const { collapsed, onToggle, currentModule, pendingAsk, onPendingAskConsumed, messagesVersion, onNavigateToProfile } = props
+  const { collapsed, onToggle, currentModule, pending, onPendingConsumed, messagesVersion, onNavigateToProfile } = props
+  const { toast } = useToast()
+  const [activeChannel, setActiveChannel] = useState<AiChannel>('assistant')
   const [sessions, setSessions] = useState<AiSessionRow[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
   const [messages, setMessages] = useState<AiMessageRow[]>([])
@@ -57,6 +89,9 @@ export default function AiSidebar(props: AiSidebarProps) {
   const listRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<number | null>(null)
   activeIdRef.current = activeId
+  const activeChannelRef = useRef<AiChannel>('assistant')
+  activeChannelRef.current = activeChannel
+  const sendingRef = useRef(false)
   /** 删除消息后要恢复的滚动位置（null = 正常滚底） */
   const keepScrollRef = useRef<number | null>(null)
 
@@ -64,23 +99,42 @@ export default function AiSidebar(props: AiSidebarProps) {
     setMessages(await window.api.ai.messages(sessionId))
   }
 
-  const loadSessions = async (): Promise<void> => {
-    setSessions(await window.api.aiSession.list())
+  const loadSessions = async (channel: AiChannel): Promise<void> => {
+    setSessions(await window.api.aiSession.list(channel))
   }
 
-  // 初始化：会话列表 + 恢复上次激活会话 + 恢复保存的边栏宽度
+  /** 载入某频道：会话列表 + 恢复该频道激活会话（失效则兜底最近活跃），并同步 ref */
+  const loadForChannel = async (channel: AiChannel): Promise<void> => {
+    const [list, active] = await Promise.all([
+      window.api.aiSession.list(channel),
+      window.api.aiSession.active(channel)
+    ])
+    setSessions(list)
+    let aid = active != null && list.some((s) => s.id === active) ? active : null
+    if (aid == null && list.length > 0) {
+      // 激活 id 失效（理论不应发生）→ 兜底切到最近活跃
+      aid = list[0].id
+      await persistActive(aid, channel)
+    }
+    activeIdRef.current = aid
+    setActiveId(aid)
+    if (aid != null) await loadMessages(aid)
+    else setMessages([])
+  }
+
+  // 初始化：恢复上次所在频道 + 该频道会话 + 恢复保存的边栏宽度
   useEffect(() => {
     void (async () => {
-      const [list, active] = await Promise.all([window.api.aiSession.list(), window.api.aiSession.active()])
-      setSessions(list)
-      let aid = active != null && list.some((s) => s.id === active) ? active : null
-      if (aid == null && list.length > 0) {
-        // 激活 id 失效（理论不应发生）→ 兜底切到最近活跃
-        aid = list[0].id
-        await persistActive(aid)
+      let ch: AiChannel = 'assistant'
+      try {
+        const saved = await window.api.settings.get(SettingsKeys.AiActiveChannel)
+        if (saved === 'wiki' || saved === 'zhijiji' || saved === 'verify' || saved === 'assistant') ch = saved
+      } catch {
+        /* 读失败用默认 */
       }
-      setActiveId(aid)
-      if (aid != null) await loadMessages(aid)
+      activeChannelRef.current = ch
+      setActiveChannel(ch)
+      await loadForChannel(ch)
       const savedW = await window.api.settings.get(SettingsKeys.AiWidth)
       const w = savedW ? Number(savedW) : NaN
       if (Number.isFinite(w) && w >= AI_WIDTH_MIN && w <= AI_WIDTH_MAX) {
@@ -90,10 +144,10 @@ export default function AiSidebar(props: AiSidebarProps) {
     })()
   }, [])
 
-  // 系统消息推送到达 → 刷新会话列表；属于当前会话则重载消息并滚动到底
+  // 系统消息推送到达 → 刷新当前频道会话列表；属于当前会话则重载消息并滚动到底
   useEffect(() => {
     return window.api.ai.onMessage((msg) => {
-      void loadSessions()
+      void loadSessions(activeChannelRef.current)
       if (msg && typeof msg === 'object' && (msg as AiMessageRow).session_id === activeIdRef.current) {
         void loadMessages((msg as AiMessageRow).session_id)
       }
@@ -103,7 +157,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   // 辩真阁验证流程触发展开（App 层 messagesVersion）
   useEffect(() => {
     if (messagesVersion > 0) {
-      void loadSessions()
+      void loadSessions(activeChannelRef.current)
       const aid = activeIdRef.current
       if (aid != null) void loadMessages(aid)
     }
@@ -121,32 +175,57 @@ export default function AiSidebar(props: AiSidebarProps) {
     el.scrollTop = el.scrollHeight
   }, [messages, sending])
 
-  // 万象库问 AI 预填
-  useEffect(() => {
-    if (pendingAsk) {
-      setInput(pendingAsk)
-      onPendingAskConsumed()
-    }
-  }, [pendingAsk, onPendingAskConsumed])
+  /** 切换频道：持久化 + 载入该频道会话与消息 */
+  const switchChannel = async (id: AiChannel): Promise<void> => {
+    if (id === activeChannelRef.current) return
+    activeChannelRef.current = id
+    setActiveChannel(id)
+    setPanelOpen(false)
+    setRenamingId(null)
+    await window.api.settings.set(SettingsKeys.AiActiveChannel, id)
+    await loadForChannel(id)
+  }
 
-  /** 切换会话 */
+  // 模块动作请求（万象问AI预填/致知己追问自动发送/辩真验证切频道）
+  useEffect(() => {
+    if (!pending) return
+    let cancelled = false
+    void (async () => {
+      try {
+        if (pending.channel !== activeChannelRef.current) await switchChannel(pending.channel)
+        if (cancelled) return
+        if (pending.auto) await sendText(pending.text)
+        else if (pending.text) setInput(pending.text)
+      } finally {
+        if (!cancelled) onPendingConsumed()
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending])
+
+  /** 切换会话（当前频道内） */
   const switchSession = async (id: number): Promise<void> => {
     if (id === activeId) {
       setPanelOpen(false)
       return
     }
+    activeIdRef.current = id
     setActiveId(id)
     setPanelOpen(false)
     setRenamingId(null)
-    await persistActive(id)
+    await persistActive(id, activeChannelRef.current)
     await loadMessages(id)
   }
 
-  /** 新建会话并切换过去 */
+  /** 新建会话并切换过去（归属当前频道） */
   const newSession = async (): Promise<void> => {
-    const s = await window.api.aiSession.create()
-    await persistActive(s.id)
+    const s = await window.api.aiSession.create(activeChannelRef.current)
+    await persistActive(s.id, activeChannelRef.current)
     setSessions((arr) => [s, ...arr])
+    activeIdRef.current = s.id
     setActiveId(s.id)
     setMessages([])
     setPanelOpen(false)
@@ -158,26 +237,35 @@ export default function AiSidebar(props: AiSidebarProps) {
     setRenamingId(null)
     if (!title) return
     await window.api.aiSession.rename(id, title)
-    await loadSessions()
+    await loadSessions(activeChannelRef.current)
   }
 
-  const send = async (): Promise<void> => {
-    const text = input.trim()
-    if (!text || sending) return
+  /** 发送一条消息（输入框发送与致知己追问 auto 复用；走当前频道人设） */
+  const sendText = async (text: string): Promise<void> => {
+    const t = text.trim()
+    if (!t || sendingRef.current) return
+    sendingRef.current = true
     setSending(true)
-    setInput('')
-    let sid = activeId
+    const channel = activeChannelRef.current
+    let sid = activeIdRef.current
     try {
       if (sid == null) {
-        // 无激活会话（如全删光后直接发消息）→ 自动新建
-        const s = await window.api.aiSession.create()
-        await persistActive(s.id)
+        // 无激活会话（如全删光后直接发消息）→ 在当前频道自动新建
+        const s = await window.api.aiSession.create(channel)
+        await persistActive(s.id, channel)
         sid = s.id
+        activeIdRef.current = sid
         setSessions((arr) => [s, ...arr])
         setActiveId(sid)
       }
-      await window.api.ai.chat(text, currentModule, sid)
-      await loadSessions() // 首条消息自动命名 + updated_at 排序变化
+      // 乐观上屏（优化建议区第11轮）：用户消息先以负 id 临时显示（负 id 不渲染删除键），
+      // 完成后 loadMessages 用 DB 真实记录替换；请求失败保留乐观消息（主进程先落库用户消息，显示与 DB 一致）
+      setMessages((arr) => [
+        ...arr,
+        { id: -Date.now(), session_id: sid ?? -1, role: 'user', ai_module: null, content: t, created_at: '' }
+      ])
+      await window.api.ai.chat(t, currentModule, sid, channel)
+      await loadSessions(channel) // 首条消息自动命名 + updated_at 排序变化
       await loadMessages(sid)
     } catch (e) {
       const msg = String((e as Error).message)
@@ -190,8 +278,36 @@ export default function AiSidebar(props: AiSidebarProps) {
         ])
       }
     } finally {
+      sendingRef.current = false
       setSending(false)
     }
+  }
+
+  const send = (): void => {
+    const text = input.trim()
+    if (!text || sendingRef.current) return
+    setInput('')
+    void sendText(text)
+  }
+
+  /** 画像建议：确认加入（入档 + 剥除消息标记行） */
+  const acceptSuggest = async (msgId: number, raw: string, category: string, content: string): Promise<void> => {
+    try {
+      await window.api.profile.add(category, content, 'ai')
+      await window.api.ai.editMessage(msgId, raw.replace(PROFILE_SUGGEST_RE, '').trimEnd())
+      const aid = activeIdRef.current
+      if (aid != null) await loadMessages(aid)
+      toast('已加入「我的画像」')
+    } catch (e) {
+      toast(`加入失败：${String((e as Error).message).slice(0, 80)}`)
+    }
+  }
+
+  /** 画像建议：忽略（仅剥除消息标记行） */
+  const dismissSuggest = async (msgId: number, raw: string): Promise<void> => {
+    await window.api.ai.editMessage(msgId, raw.replace(PROFILE_SUGGEST_RE, '').trimEnd())
+    const aid = activeIdRef.current
+    if (aid != null) await loadMessages(aid)
   }
 
   /** 拖拽左缘调宽（优化建议区）：移动中实时生效，松手持久化到 settings */
@@ -221,9 +337,14 @@ export default function AiSidebar(props: AiSidebarProps) {
     const target = confirm
     setConfirm(null)
     if (target.kind === 'session') {
-      await window.api.aiSession.delete(target.id)
-      const [list, active] = await Promise.all([window.api.aiSession.list(), window.api.aiSession.active()])
+      const channel = activeChannelRef.current
+      await window.api.aiSession.delete(target.id, channel)
+      const [list, active] = await Promise.all([
+        window.api.aiSession.list(channel),
+        window.api.aiSession.active(channel)
+      ])
       setSessions(list)
+      activeIdRef.current = active
       setActiveId(active)
       if (active != null) await loadMessages(active)
       else setMessages([])
@@ -248,6 +369,8 @@ export default function AiSidebar(props: AiSidebarProps) {
     )
   }
 
+  const channelLabel = CHANNELS.find((c) => c.id === activeChannel)?.label ?? '助手'
+
   return (
     <aside className="ai-sidebar">
       <div className="ai-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
@@ -261,13 +384,27 @@ export default function AiSidebar(props: AiSidebarProps) {
           <span className="material-symbols-outlined">chevron_right</span>
         </button>
       </div>
+      {/* 频道切换条（常驻顶部，随时可切；各频道独立会话历史与人设） */}
+      <div className="ai-channels">
+        {CHANNELS.map((c) => (
+          <button
+            key={c.id}
+            className={`ai-channel${activeChannel === c.id ? ' active' : ''}`}
+            onClick={() => void switchChannel(c.id)}
+            title={`${c.label}频道（独立会话历史）`}
+          >
+            <span className="material-symbols-outlined">{c.icon}</span>
+            <span className="ai-channel-label">{c.label}</span>
+          </button>
+        ))}
+      </div>
       <div className="ai-body">
         {panelOpen && (
           <>
             <div className="ai-session-backdrop" onClick={() => setPanelOpen(false)} />
             <div className="ai-session-panel">
               <div className="ai-session-panel-head">
-                <span>会话</span>
+                <span>会话（{channelLabel}）</span>
                 <button className="btn btn-ghost" onClick={() => void newSession()} title="开启新对话">
                   <span className="material-symbols-outlined">add</span>
                 </button>
@@ -333,29 +470,56 @@ export default function AiSidebar(props: AiSidebarProps) {
         )}
         <div className="ai-list" ref={listRef}>
           {messages.length === 0 && (
-            <div className="ai-empty">和 AI 聊聊吧（感知当前模块：{moduleLabel(currentModule)}）</div>
+            <div className="ai-empty">
+              「{channelLabel}」频道（感知当前模块：{moduleLabel(currentModule)}）
+            </div>
           )}
-          {messages.map((m) => (
-            <div key={m.id} className={`ai-msg ${m.role}`}>
-              <div className="ai-msg-role">
-                <span>{ROLE_LABEL[m.role] ?? m.role}</span>
-                {m.id > 0 && (
-                  <button
-                    className="ai-msg-del"
-                    title="删除该消息"
-                    onClick={() => setConfirm({ kind: 'message', id: m.id })}
-                  >
-                    <span className="material-symbols-outlined">close</span>
-                  </button>
+          {messages.map((m) => {
+            const { body, suggest } =
+              m.role === 'assistant' ? splitSuggest(m.content) : { body: m.content, suggest: null }
+            return (
+              <div key={m.id} className={`ai-msg ${m.role}`}>
+                <div className="ai-msg-role">
+                  <span>{ROLE_LABEL[m.role] ?? m.role}</span>
+                  {m.id > 0 && (
+                    <button
+                      className="ai-msg-del"
+                      title="删除该消息"
+                      onClick={() => setConfirm({ kind: 'message', id: m.id })}
+                    >
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  )}
+                </div>
+                {m.role === 'assistant' ? (
+                  <>
+                    <MdView md={body} className="ai-msg-content" />
+                    {suggest && (
+                      <div className="ai-profile-card">
+                        <div className="ai-profile-tip">AI 想把这条加入「我的画像」</div>
+                        <div className="ai-profile-line">
+                          {suggest.category}：{suggest.content}
+                        </div>
+                        <div className="ai-profile-acts">
+                          <button
+                            className="btn btn-primary"
+                            onClick={() => void acceptSuggest(m.id, m.content, suggest.category, suggest.content)}
+                          >
+                            加入画像
+                          </button>
+                          <button className="btn" onClick={() => void dismissSuggest(m.id, m.content)}>
+                            忽略
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="ai-msg-content">{m.content}</div>
                 )}
               </div>
-              {m.role === 'assistant' ? (
-                <MdView md={m.content} className="ai-msg-content" />
-              ) : (
-                <div className="ai-msg-content">{m.content}</div>
-              )}
-            </div>
-          ))}
+            )
+          })}
           {sending && <div className="ai-msg assistant"><div className="ai-msg-role">AI</div><div className="ai-msg-content">思考中…</div></div>}
         </div>
       </div>
@@ -371,18 +535,18 @@ export default function AiSidebar(props: AiSidebarProps) {
       <div className="ai-input-row">
         <textarea
           className="ai-input"
-          placeholder={`问 AI（当前：${moduleLabel(currentModule)}）`}
+          placeholder={`问 AI（${channelLabel}｜${moduleLabel(currentModule)}）`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              void send()
+              send()
             }
           }}
           rows={2}
         />
-        <button className="btn btn-primary ai-send" onClick={() => void send()} disabled={sending || !input.trim()}>
+        <button className="btn btn-primary ai-send" onClick={send} disabled={sending || !input.trim()}>
           <span className="material-symbols-outlined">send</span>
         </button>
       </div>
@@ -408,6 +572,7 @@ function moduleLabel(m: string): string {
     wiki: '万象库',
     inspirations: '灵感泉',
     verify: '辩真阁',
+    zhijiji: '致知己',
     recycle: '回收站',
     profile: '个人中心'
   }

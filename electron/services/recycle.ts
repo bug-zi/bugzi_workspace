@@ -4,21 +4,23 @@ import { mdDelete } from './files'
 
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 
-export type RecycleSource = 'mottos' | 'wiki' | 'inspirations' | 'verify'
+export type RecycleSource = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
   wiki: 'wiki_entries',
   inspirations: 'inspirations',
-  verify: 'verify_records'
+  verify: 'verify_records',
+  zhijiji: 'zhijiji_questions'
 }
 
-// 各来源的附属 md 路径字段（mottos 仅正式区有笔记）
+// 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md，hardDelete 特判处理）
 const MD_FIELDS: Record<RecycleSource, string | null> = {
   mottos: 'note_path',
   wiki: 'md_path',
   inspirations: 'md_path',
-  verify: 'md_path'
+  verify: 'md_path',
+  zhijiji: null
 }
 
 export interface RecycleRow {
@@ -75,6 +77,13 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回历史记录列表：仅清标记
       d.prepare('UPDATE verify_records SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
+    case 'zhijiji':
+      // 回主列表：清标记 + 触碰 updated_at（浮回列表顶部，版本 md 原样保留）
+      d.prepare('UPDATE zhijiji_questions SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(
+        nowIso(),
+        rb.item_id
+      )
+      break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
   return { source: rb.source, item_id: rb.item_id }
@@ -98,6 +107,17 @@ export function hardDelete(recycleId: number): void {
   }
   if (rb.source === 'wiki') {
     d.prepare('DELETE FROM wiki_highlights WHERE entry_id = ?').run(rb.item_id)
+  }
+  if (rb.source === 'zhijiji') {
+    // 一问题多版本 md：先收齐路径再删行（问题行 + 全部版本行），最后逐个删文件
+    const vs = d
+      .prepare('SELECT md_path FROM zhijiji_versions WHERE question_id = ?')
+      .all(rb.item_id) as { md_path: string }[]
+    d.prepare('DELETE FROM zhijiji_versions WHERE question_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM zhijiji_questions WHERE id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
+    for (const v of vs) mdDelete(v.md_path)
+    return
   }
   d.prepare(`DELETE FROM ${table} WHERE id = ?`).run(rb.item_id)
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)

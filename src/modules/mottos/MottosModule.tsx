@@ -477,11 +477,13 @@ export default function MottosModule(props: MottosModuleProps) {
                   >
                     <span className="row-index">{idx + 1}</span>
                     <div className="row-main">
-                      <div className="motto-line">
-                        <span className="motto-content" title={m.content}>
-                          {m.content}
+                      <div className="motto-content" title={m.content}>
+                        {m.content}
+                      </div>
+                      <div className="motto-sub">
+                        <span className="motto-source" title={m.source || undefined}>
+                          —— {m.source || '（出处待补）'}
                         </span>
-                        <span className="motto-source">—— {m.source || '（出处待补）'}</span>
                         {(m.tags ?? []).length > 0 && (
                           <span className="motto-tags" title={m.tags.join('、')}>
                             {m.tags.slice(0, 3).map((t) => (
@@ -519,7 +521,8 @@ export default function MottosModule(props: MottosModuleProps) {
                           </button>
                         </>
                       )}
-                      {z.status === 'formal' && (
+                      {/* 正式区全部可编辑；草稿/沉淀区仅 AI 编撰条放开（优化建议区：AI 句子允许用户改，摘录条不动），判定与 AI 徽章一致 */}
+                      {(z.status === 'formal' || (m.origin === 'ai' && m.gen_kind !== 'excerpt')) && (
                         <button
                           className="icon-btn"
                           title="编辑"
@@ -599,10 +602,11 @@ export default function MottosModule(props: MottosModuleProps) {
         )
       })}
 
-      {/* 正式区笔记弹窗 */}
+      {/* 正式区笔记弹窗：标题区带出处（优化建议区），正文不再重复句子+出处 */}
       <MdDialog
         open={viewing != null && !!viewing?.note_path}
         title={viewing?.content ?? ''}
+        subtitle={viewing ? `—— ${viewing.source || '（出处待补）'}` : undefined}
         filePath={viewing?.note_path ?? ''}
         onClose={() => setViewId(null)}
         onChanged={load}

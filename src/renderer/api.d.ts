@@ -1,5 +1,8 @@
 // 渲染层全局 window.api 类型（preload 桥）
-export type ModuleId = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'recycle' | 'profile'
+export type ModuleId = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'recycle' | 'profile'
+
+/** AI 边栏频道（DB v9 频道制） */
+export type AiChannel = 'assistant' | 'wiki' | 'zhijiji' | 'verify'
 
 export interface MottoRecord {
   id: number
@@ -83,10 +86,43 @@ export interface VerifyRecord {
 
 export interface RecycleRow {
   id: number
-  source: 'mottos' | 'wiki' | 'inspirations' | 'verify'
+  source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
   item_id: number
   payload: string
   created_at: string
+}
+
+/** 致知己问题（DB v9；列表行聚合版本数） */
+export interface ZhijijiQuestion {
+  id: number
+  title: string
+  tags: string[]
+  version_count: number
+  created_at: string
+  updated_at: string
+}
+
+/** 致知己答案版本（DB v9；标识 v{seq}-{date}） */
+export interface ZhijijiVersion {
+  id: number
+  question_id: number
+  seq: number
+  /** YYMMDD，该版本内容最后写入日（覆盖时更新为覆盖当日） */
+  date: string
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
+/** 我的画像条目（DB v9） */
+export interface ProfileFactRow {
+  id: number
+  category: string
+  content: string
+  /** manual=个人中心手填 | ai=对话中提炼经确认入档 */
+  source: 'manual' | 'ai'
+  created_at: string
+  updated_at: string
 }
 
 export interface AiMessageRow {
@@ -102,6 +138,8 @@ export interface AiMessageRow {
 export interface AiSessionRow {
   id: number
   title: string
+  /** 所属频道（DB v9） */
+  channel: AiChannel
   created_at: string
   updated_at: string
 }
@@ -164,7 +202,7 @@ export interface Api {
   }
   item: {
     discard(
-      table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records',
+      table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions',
       id: number
     ): Promise<boolean>
     onRecycleChanged(cb: () => void): () => void
@@ -179,21 +217,49 @@ export interface Api {
     chat(
       message: string,
       currentModule: string,
-      sessionId: number
+      sessionId: number,
+      channel?: AiChannel
     ): Promise<{ id: number; role: string; content: string }>
     configured(): Promise<boolean>
     pushSystem(content: string): Promise<boolean>
     deleteMessage(id: number): Promise<boolean>
+    /** 改写消息内容（画像建议「加入/忽略」后剥除协议标记行） */
+    editMessage(id: number, content: string): Promise<boolean>
     onMessage(cb: (msg: AiMessageRow) => void): () => void
   }
   aiSession: {
-    /** 会话列表（最近活跃在前） */
-    list(): Promise<AiSessionRow[]>
-    create(): Promise<AiSessionRow>
+    /** 会话列表（最近活跃在前，按频道隔离） */
+    list(channel?: AiChannel): Promise<AiSessionRow[]>
+    create(channel?: AiChannel): Promise<AiSessionRow>
     rename(id: number, title: string): Promise<boolean>
-    /** 删除会话（连同消息）；删的是激活会话时主进程自动切换/清除激活 */
+    /** 删除会话（连同消息）；删的是该频道激活会话时主进程在同频道内自动切换/清除激活 */
+    delete(id: number, channel?: AiChannel): Promise<boolean>
+    active(channel?: AiChannel): Promise<number | null>
+  }
+  zhijiji: {
+    list(): Promise<ZhijijiQuestion[]>
+    /** 新问题：创建即建空白 v1，返回后直接打开弹窗自动进入编辑态 */
+    createQuestion(
+      title: string,
+      tags?: string[]
+    ): Promise<{ questionId: number; versionId: number; mdPath: string }>
+    versions(questionId: number): Promise<ZhijijiVersion[]>
+    /** 保存为新版本：seq=max+1、date=当日 */
+    saveNewVersion(
+      questionId: number,
+      content: string
+    ): Promise<{ versionId: number; seq: number; date: string }>
+    /** 覆盖当前版本：序号不变、日期更新为覆盖当日 */
+    overwriteVersion(versionId: number, content: string): Promise<boolean>
+    renameQuestion(id: number, title: string): Promise<boolean>
+    discard(id: number): Promise<boolean>
+  }
+  profile: {
+    list(): Promise<ProfileFactRow[]>
+    /** source: manual（手填，默认）| ai（对话中提炼经确认入档） */
+    add(category: string, content: string, source?: 'manual' | 'ai'): Promise<number>
+    update(id: number, category: string, content: string): Promise<boolean>
     delete(id: number): Promise<boolean>
-    active(): Promise<number | null>
   }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>

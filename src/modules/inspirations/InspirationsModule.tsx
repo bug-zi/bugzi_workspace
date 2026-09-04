@@ -40,9 +40,26 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const [refineFor, setRefineFor] = useState<InspirationRecord | null>(null)
   const [refineResult, setRefineResult] = useState<string | null>(null)
   const [refining, setRefining] = useState(false)
+  // 正文预览（优化建议区：卡片显示 md 正文前 100 字，看全灵感内容；手动条正文为空不显示）
+  const [previews, setPreviews] = useState<Record<number, string>>({})
 
   const load = useCallback(async () => {
-    setItems(await window.api.inspirations.list())
+    const rows = await window.api.inspirations.list()
+    setItems(rows)
+    // 批量读 md 正文做预览：剥离标题行、压平空白取前 100 字（读取失败静默为空）
+    const entries = await Promise.all(
+      rows.map(async (it) => {
+        let body = ''
+        try {
+          const raw = await window.api.md.read(it.md_path)
+          body = raw.replace(/^#\s.*\n?/, '').replace(/\s+/g, ' ').trim().slice(0, 100)
+        } catch {
+          /* 无正文则不显示预览 */
+        }
+        return [it.id, body] as const
+      })
+    )
+    setPreviews(Object.fromEntries(entries))
   }, [])
 
   useEffect(() => {
@@ -264,13 +281,19 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
                     onClick={() => setOpenDoc(it)}
                   >
                     <div className="row-main">
-                      <div className="row-title-wrap">
-                        <span className="row-title" title={it.title}>
-                          {it.title}
-                        </span>
-                        {it.origin === 'ai' && <span className="badge insp-ai-badge">AI</span>}
+                      {/* 优化建议区：标题换行（最多3行）+ 正文预览，AI 徽标移入日期行不再挤标题 */}
+                      <div className="row-title" title={it.title}>
+                        {it.title}
                       </div>
-                      <div className="row-sub">{fmtDate(it.updated_at)}</div>
+                      {previews[it.id] && (
+                        <div className="row-preview" title={previews[it.id]}>
+                          {previews[it.id]}
+                        </div>
+                      )}
+                      <div className="row-sub">
+                        {it.origin === 'ai' && <span className="badge insp-ai-badge">AI</span>}
+                        <span>{fmtDate(it.updated_at)}</span>
+                      </div>
                     </div>
                     <div className="row-actions" onClick={(e) => e.stopPropagation()}>
                       <button

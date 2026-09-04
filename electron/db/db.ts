@@ -1,7 +1,7 @@
 // 主进程数据库层：node:sqlite 初始化 + 版本化迁移 + 全部建表
 import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
-import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync } from 'node:fs'
+import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 let db: DatabaseSync | null = null
@@ -30,8 +30,8 @@ export function userDataDir(): string {
 
 export function initDb(): void {
   const userData = userDataDir()
-  // 目录：md 四模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'bg']) {
+  // 目录：md 五模块子目录 + bg
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -252,11 +252,119 @@ function migrate(): void {
     d.exec("ALTER TABLE inspirations ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'")
     d.exec('PRAGMA user_version = 7')
   }
+
+  if (version < 8) {
+    // v8：格言笔记正文去重（优化建议区）。句子+出处改由笔记弹窗标题区展示，新笔记正文
+    // 从空白开始；存量笔记剥离旧模板头（`# 句子\n\n> 出处`），头部以下自写内容保留，
+    // 已自行改写过头部的不动。查询不过滤 deleted_at：回收站中的软删格言的笔记同样剥离，
+    // 恢复后再转正不会重现旧头（转正处 setStatus 还有同款兜底）。
+    const rows = d
+      .prepare('SELECT note_path, content, source FROM mottos WHERE note_path IS NOT NULL')
+      .all() as { note_path: string; content: string; source: string }[]
+    for (const r of rows) stripMottoNoteHeader(r.note_path, r.content, r.source)
+    d.exec('PRAGMA user_version = 8')
+  }
+
+  if (version < 9) {
+    // v9：致知己（问题+多版本答案）+ 我的画像 + AI 边栏频道制（问题疑惑区 260905 共识）。
+    // 版本日期 YYMMDD 存 DB（覆盖当前版本时只改 DB 日期，md 文件名 {qid}-v{seq}.md 稳定不重命名）；
+    // ai_sessions.channel 存量归 'assistant'（DEFAULT 兜底，零迁移）。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS zhijiji_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS zhijiji_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_id INTEGER NOT NULL REFERENCES zhijiji_questions(id),
+        seq INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        md_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_zhijiji_versions_q ON zhijiji_versions(question_id);
+
+      CREATE TABLE IF NOT EXISTS profile_facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
+    `)
+    // 种子问题（仅空表时预置）：四锚点材料随 v1 落 md，待开发者用自己的话写出 v1
+    const cnt = (d.prepare('SELECT COUNT(*) AS c FROM zhijiji_questions').get() as { c: number }).c
+    if (cnt === 0) {
+      const now = nowIso()
+      const r = d
+        .prepare(
+          "INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)"
+        )
+        .run('线性代数和 AI 有什么渊源？', '["线性代数","AI"]', now, now)
+      const qid = Number(r.lastInsertRowid)
+      const mdPath = `md/zhijiji/${qid}-v1.md`
+      d.prepare(
+        'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)'
+      ).run(qid, yyMMdd(), mdPath, now, now)
+      writeFileSync(
+        join(userDataDir(), mdPath),
+        '> 以下是预填的思考锚点材料，请用自己的话写出属于你的 v1 答案，完成后可删除本段：\n>\n> ① 神经网络每一层就是一次矩阵乘法 y=σ(Wx+b)，训练就是学出 W\n> ② 词语被表示为向量，语义相似度 = 向量夹角\n> ③ 注意力 QKᵀV 本质是线性代数运算，LoRA 靠低秩近似\n> ④ AI 每生成一个字，背后都是海量矩阵运算\n',
+        'utf-8'
+      )
+    }
+    d.exec('PRAGMA user_version = 9')
+  }
 }
 
 // ---------- 通用工具 ----------
 export function nowIso(): string {
   return new Date().toISOString()
+}
+
+/** 版本日期标识 YYMMDD（致知己版本 `v{序号}-{YYMMDD}`） */
+export function yyMMdd(t: Date = new Date()): string {
+  return `${String(t.getFullYear()).slice(2)}${String(t.getMonth() + 1).padStart(2, '0')}${String(
+    t.getDate()
+  ).padStart(2, '0')}`
+}
+
+/** 正则字面量转义（stripMottoNoteHeader 宽松匹配用） */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * 剥离格言笔记的旧模板头（v8 起：句子+出处由弹窗标题区展示，正文不再重复）。
+ * 旧模板：`# {句子}\n\n> {出处}\n`。先精确匹配现库句子+出处；不中则退一步——
+ * 标题行与句子一致且后跟一行 > 引用（句子未改而出处后来被改过的情形）；
+ * 仍不中（用户已自行编辑头部）则不动。剥后清掉残留的行首空行。
+ */
+export function stripMottoNoteHeader(relPath: string, content: string, source: string): void {
+  let c: string
+  try {
+    c = readFileSync(join(userDataDir(), relPath), 'utf-8')
+  } catch {
+    return // 笔记文件缺失等，跳过（不阻断迁移/转正）
+  }
+  const header = `# ${content}\n\n> ${source}\n`
+  let rest: string | null = null
+  if (c === header) rest = ''
+  else if (c.startsWith(header)) rest = c.slice(header.length)
+  else {
+    const m = c.match(new RegExp(`^# ${escapeRegExp(content)}\\n\\n> [^\\n]*\\n`))
+    if (m) rest = c.slice(m[0].length)
+  }
+  if (rest === null) return
+  writeFileSync(join(userDataDir(), relPath), rest.replace(/^\n+/, ''), 'utf-8')
 }
 
 /** 规范化文本：去首尾空白 + 中英文标点统一（格言查重等） */

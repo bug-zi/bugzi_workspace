@@ -19,8 +19,10 @@ const api = {
       ipcRenderer.invoke('image:pick', kind)
   },
   item: {
-    discard: (table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records', id: number): Promise<boolean> =>
-      ipcRenderer.invoke('item:discard', table, id),
+    discard: (
+      table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions',
+      id: number
+    ): Promise<boolean> => ipcRenderer.invoke('item:discard', table, id),
     onRecycleChanged: (cb: () => void): (() => void) => {
       const listener = (): void => {
         cb()
@@ -31,7 +33,7 @@ const api = {
   },
   recycle: {
     list: (): Promise<
-      { id: number; source: 'mottos' | 'wiki' | 'inspirations' | 'verify'; item_id: number; payload: string; created_at: string }[]
+      { id: number; source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'; item_id: number; payload: string; created_at: string }[]
     > => ipcRenderer.invoke('recycle:list'),
     restore: (id: number): Promise<{ source: string; item_id: number }> =>
       ipcRenderer.invoke('recycle:restore', id),
@@ -53,12 +55,16 @@ const api = {
     chat: (
       message: string,
       currentModule: string,
-      sessionId: number
+      sessionId: number,
+      channel?: string
     ): Promise<{ id: number; role: string; content: string }> =>
-      ipcRenderer.invoke('ai:chat', message, currentModule, sessionId),
+      ipcRenderer.invoke('ai:chat', message, currentModule, sessionId, channel),
     configured: (): Promise<boolean> => ipcRenderer.invoke('ai:configured'),
     pushSystem: (content: string): Promise<boolean> => ipcRenderer.invoke('ai:pushSystem', content),
     deleteMessage: (id: number): Promise<boolean> => ipcRenderer.invoke('ai:deleteMessage', id),
+    /** 改写消息内容（画像建议「加入/忽略」后剥除协议标记行） */
+    editMessage: (id: number, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('ai:editMessage', id, content),
     onMessage: (cb: (msg: unknown) => void): (() => void) => {
       const listener = (_e: unknown, msg: unknown): void => {
         cb(msg)
@@ -68,17 +74,23 @@ const api = {
     }
   },
   aiSession: {
-    /** 会话列表（最近活跃在前） */
-    list: (): Promise<
-      { id: number; title: string; created_at: string; updated_at: string }[]
-    > => ipcRenderer.invoke('aiSession:list'),
-    create: (): Promise<{ id: number; title: string; created_at: string; updated_at: string }> =>
-      ipcRenderer.invoke('aiSession:create'),
+    /** 会话列表（最近活跃在前，按频道隔离） */
+    list: (channel?: string): Promise<
+      { id: number; title: string; channel: string; created_at: string; updated_at: string }[]
+    > => ipcRenderer.invoke('aiSession:list', channel),
+    create: (channel?: string): Promise<{
+      id: number
+      title: string
+      channel: string
+      created_at: string
+      updated_at: string
+    }> => ipcRenderer.invoke('aiSession:create', channel),
     rename: (id: number, title: string): Promise<boolean> =>
       ipcRenderer.invoke('aiSession:rename', id, title),
-    /** 删除会话（连同消息）；删的是激活会话时主进程自动切换/清除激活 */
-    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('aiSession:delete', id),
-    active: (): Promise<number | null> => ipcRenderer.invoke('aiSession:active')
+    /** 删除会话（连同消息）；删的是该频道激活会话时主进程在同频道内自动切换/清除激活 */
+    delete: (id: number, channel?: string): Promise<boolean> =>
+      ipcRenderer.invoke('aiSession:delete', id, channel),
+    active: (channel?: string): Promise<number | null> => ipcRenderer.invoke('aiSession:active', channel)
   },
   mottos: {
     list: (status?: string): Promise<unknown[]> => ipcRenderer.invoke('mottos:list', status),
@@ -166,6 +178,31 @@ const api = {
     run: (claim: string): Promise<{ recordId: number; credibility: number }> =>
       ipcRenderer.invoke('verify:run', claim),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'verify_records', id)
+  },
+  zhijiji: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:list'),
+    /** 新问题：创建即建空白 v1，返回后由渲染层直接打开弹窗自动进入编辑态 */
+    createQuestion: (title: string, tags?: string[]): Promise<{ questionId: number; versionId: number; mdPath: string }> =>
+      ipcRenderer.invoke('zhijiji:createQuestion', title, tags),
+    versions: (questionId: number): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:versions', questionId),
+    /** 保存为新版本：seq=max+1、date=当日，返回新版本标识 */
+    saveNewVersion: (questionId: number, content: string): Promise<{ versionId: number; seq: number; date: string }> =>
+      ipcRenderer.invoke('zhijiji:saveNewVersion', questionId, content),
+    /** 覆盖当前版本：序号不变、日期更新为覆盖当日 */
+    overwriteVersion: (versionId: number, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('zhijiji:overwriteVersion', versionId, content),
+    renameQuestion: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('zhijiji:renameQuestion', id, title),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id)
+  },
+  profile: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
+    /** source: manual（手填，默认）| ai（对话中提炼经确认入档） */
+    add: (category: string, content: string, source?: 'manual' | 'ai'): Promise<number> =>
+      ipcRenderer.invoke('profile:add', category, content, source),
+    update: (id: number, category: string, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('profile:update', id, category, content),
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('profile:delete', id)
   },
   llm: {
     test: (config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', config),

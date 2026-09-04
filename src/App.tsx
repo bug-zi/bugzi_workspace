@@ -7,10 +7,11 @@ import MottosModule from './modules/mottos/MottosModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
 import VerifyModule from './modules/verify/VerifyModule'
+import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
-import type { ModuleId } from './shared/types'
+import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
@@ -18,9 +19,17 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'wiki', label: '万象库', icon: 'public' },
   { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
   { id: 'verify', label: '辩真阁', icon: 'fact_check' },
+  { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
   { id: 'profile', label: '个人中心', icon: 'person' }
 ]
+
+/** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道 */
+const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
+  wiki: 'wiki',
+  verify: 'verify',
+  zhijiji: 'zhijiji'
+}
 
 export default function App() {
   return (
@@ -39,7 +48,7 @@ function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
   const [module, setModule] = useState<ModuleId>('mottos')
   const [aiCollapsed, setAiCollapsed] = useState(false)
-  const [aiPendingAsk, setAiPendingAsk] = useState<string | null>(null)
+  const [aiPending, setAiPending] = useState<{ text: string; channel: AiChannel; auto: boolean } | null>(null)
   const [aiVersion, setAiVersion] = useState(0)
   const [aiForceOpen, setAiForceOpen] = useState(false)
 
@@ -49,12 +58,19 @@ function Shell() {
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
-  // 万象库/辩真阁请求展开 AI 边栏
-  const openAiWith = useCallback((prefill?: string) => {
-    setAiCollapsed(false)
-    setAiForceOpen((v) => !v)
-    if (prefill) setAiPendingAsk(prefill)
-  }, [])
+  // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.auto 时切频道后自动发送）
+  const openAiWith = useCallback(
+    (prefill?: string, opts?: { auto?: boolean }) => {
+      setAiCollapsed(false)
+      setAiForceOpen((v) => !v)
+      setAiPending({
+        text: prefill ?? '',
+        channel: CHANNEL_BY_MODULE[module] ?? 'assistant',
+        auto: opts?.auto ?? false
+      })
+    },
+    [module]
+  )
 
   // 问 AI / 验证过程推送 → messagesVersion 递增通知 AiSidebar 重载
   useEffect(() => {
@@ -101,19 +117,22 @@ function Shell() {
               {m.id === 'verify' && (
                 <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
+              {m.id === 'zhijiji' && (
+                <ZhijijiModule onOpenAi={openAiWith} onNavigateToProfile={() => activateModule('profile')} />
+              )}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}
             </div>
           ))}
         </main>
 
-        {/* 右侧 AI 边栏 */}
+        {/* 右侧 AI 边栏（频道制） */}
         <AiSidebar
           collapsed={aiCollapsed}
           onToggle={() => setAiCollapsed((c) => !c)}
           currentModule={module}
-          pendingAsk={aiPendingAsk}
-          onPendingAskConsumed={() => setAiPendingAsk(null)}
+          pending={aiPending}
+          onPendingConsumed={() => setAiPending(null)}
           messagesVersion={aiVersion}
           onNavigateToProfile={() => activateModule('profile')}
         />

@@ -1,4 +1,4 @@
-// 回收站模块（回收站 specs 全量）：四板块页签、恢复/彻底删除、剩余存活时间
+// 回收站模块（回收站 specs 全量）：五板块页签、恢复/彻底删除、剩余存活时间
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { RecycleRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -9,7 +9,8 @@ const TABS: { source: RecycleRow['source']; label: string; backTo: string }[] = 
   { source: 'mottos', label: '格言库', backTo: '格言库草稿区' },
   { source: 'wiki', label: '万象库', backTo: '原板块' },
   { source: 'inspirations', label: '灵感泉', backTo: '灵感泉草稿区' },
-  { source: 'verify', label: '辩真阁', backTo: '历史记录列表' }
+  { source: 'verify', label: '辩真阁', backTo: '历史记录列表' },
+  { source: 'zhijiji', label: '致知己', backTo: '致知己主列表' }
 ]
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -26,6 +27,7 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'mottos') return String(p.content ?? '')
     if (row.source === 'wiki') return `${p.term ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'inspirations') return String(p.title ?? '')
+    if (row.source === 'zhijiji') return String(p.title ?? '')
     return String(p.claim ?? '')
   } catch {
     return `#${row.item_id}`

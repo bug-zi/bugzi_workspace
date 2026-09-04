@@ -47,6 +47,62 @@
 .ai-title {
   flex: 1;
 }
+/* ---------- 频道切换条（DB v9 频道制）：常驻顶部，可换行防窄边栏溢出 ---------- */
+.ai-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.ai-channel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.78em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-channel .material-symbols-outlined {
+  font-size: 14px;
+}
+.ai-channel:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.ai-channel.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+/* ---------- 画像建议卡片（致知己 specs §3/§4：AI 提炼经确认入档） ---------- */
+.ai-profile-card {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  font-size: 0.9em;
+}
+.ai-profile-tip {
+  font-size: 0.82em;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.ai-profile-line {
+  line-height: 1.6;
+  word-break: break-word;
+}
+.ai-profile-acts {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
 /* 消息区容器（会话浮层的定位上下文） */
 .ai-body {
   position: relative;

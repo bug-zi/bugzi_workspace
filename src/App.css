@@ -141,20 +141,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 灵感泉 v2.0：标题 + AI 徽标同行（标题省略、徽标不缩） */
-.row-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.row-title-wrap .row-title {
-  min-width: 0;
-}
+/* 灵感泉 AI 徽标（卡片日期行内，不缩不换行） */
 .insp-ai-badge {
   flex-shrink: 0;
   font-size: 0.7em;
   padding: 0 6px;
+}
+/* 灵感泉卡片正文预览（优化建议区：md 正文前 100 字灰色小字，最多 3 行） */
+.row-preview {
+  margin-top: 2px;
+  font-size: 0.82em;
+  color: var(--color-text-secondary);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .row-sub {
   font-size: 0.8em;
@@ -225,30 +227,32 @@
   color: #fff;
 }
 
-/* 格言单行：格言居左 + 出处右侧对齐（同一行，超长省略）；行可拖拽排序 */
+/* 格言行双行布局（问题疑惑区 260905 方案一）：主行格言全文自动换行完整呈现（3 行保险上限防极端长文），
+   副行出处 + 标签灰色小字（复用 row-sub 模式）；行可拖拽排序 */
 .motto-row {
   cursor: grab;
 }
-.motto-line {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  min-width: 0;
-}
 .motto-content {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
-.motto-source {
-  margin-left: auto;
-  flex-shrink: 0;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.motto-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
   font-size: 0.8em;
   color: var(--color-text-secondary);
+}
+.motto-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== 上下文菜单（板块悬浮菜单等）=====
@@ -282,15 +286,16 @@
 }
 
 /* ===== 灵感泉四区看板 ===== */
+/* 优化建议区：4 列 → 2×2，卡片宽度翻倍放得下完整灵感内容；窄屏退化为单列 */
 .kanban {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
   align-items: start;
 }
 @media (max-width: 1100px) {
   .kanban {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr;
   }
 }
 .kanban .zone-body {
@@ -298,6 +303,16 @@
 }
 .kanban-card {
   cursor: grab;
+  align-items: flex-start;
+}
+/* 优化建议区：卡片标题换行（最多 3 行，超长截断 + title 兜底），不再单行省略 */
+.kanban-card .row-title {
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .kanban .zone-header {
   cursor: default;

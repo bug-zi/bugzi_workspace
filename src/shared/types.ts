@@ -1,7 +1,17 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
 // 模块标识
-export type ModuleId = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'recycle' | 'profile'
+export type ModuleId =
+  | 'mottos'
+  | 'wiki'
+  | 'inspirations'
+  | 'verify'
+  | 'zhijiji'
+  | 'recycle'
+  | 'profile'
+
+// AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
+export type AiChannel = 'assistant' | 'wiki' | 'zhijiji' | 'verify'
 
 // settings 表 key 常量
 export const SettingsKeys = {
@@ -19,6 +29,11 @@ export const SettingsKeys = {
   MottoSchedule: 'motto_schedule',
   LastMottoRun: 'last_motto_run',
   AiActiveSessionId: 'ai_active_session_id',
+  // 频道制（DB v9）：当前所在频道 + 各频道独立激活会话（assistant 沿用 AiActiveSessionId）
+  AiActiveChannel: 'ai_active_channel',
+  AiActiveSessionWiki: 'ai_active_session_wiki',
+  AiActiveSessionZhijiji: 'ai_active_session_zhijiji',
+  AiActiveSessionVerify: 'ai_active_session_verify',
   AiWidth: 'ai_width'
 } as const
 
@@ -74,10 +89,12 @@ export interface McpResearch {
   notes: string
 }
 
-// AI 边栏会话（ai_sessions 表，DB v4）
+// AI 边栏会话（ai_sessions 表，DB v4；channel 自 DB v9）
 export interface AiSession {
   id: number
   title: string
+  /** 所属频道（DB v9；存量会话为 assistant） */
+  channel: AiChannel
   created_at: string
   updated_at: string
 }
@@ -156,10 +173,44 @@ export interface VerifyRecord {
 
 export interface RecycleItem {
   id: number
-  source: 'mottos' | 'wiki' | 'inspirations' | 'verify'
+  source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
   item_id: number
   payload: string
   created_at: string
+}
+
+// 致知己问题（zhijiji_questions，DB v9；列表行聚合版本数）
+export interface ZhijijiQuestion {
+  id: number
+  title: string
+  /** 领域标签（JSON 列解析而来） */
+  tags: string[]
+  version_count: number
+  created_at: string
+  updated_at: string
+}
+
+// 致知己答案版本（zhijiji_versions，DB v9；标识 v{seq}-{date}）
+export interface ZhijijiVersion {
+  id: number
+  question_id: number
+  seq: number
+  /** YYMMDD，该版本内容最后写入日（覆盖时更新为覆盖当日） */
+  date: string
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
+// 我的画像条目（profile_facts，DB v9；注入全部 AI 上下文）
+export interface ProfileFact {
+  id: number
+  category: string
+  content: string
+  /** manual=个人中心手填 | ai=对话中提炼经确认入档 */
+  source: 'manual' | 'ai'
+  created_at: string
+  updated_at: string
 }
 
 // 统一 IPC 错误形态：invoke 拒绝时 message 为 ErrCode 描述映射后的文案或原始信息

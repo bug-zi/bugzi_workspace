@@ -6,6 +6,8 @@ import './MdDialog.css'
 export interface MdDialogProps {
   open: boolean
   title: string
+  /** 标题下方的小字副标题（格言笔记弹窗：出处行；不传则不渲染） */
+  subtitle?: string
   /** md 相对路径（userData 下） */
   filePath: string
   /** 关闭弹窗（关闭键/遮罩调用；若正处于编辑态会先保存） */
@@ -24,17 +26,36 @@ export interface MdDialogProps {
     onDiscard: () => void
     onDelete: () => void
   }
+  /** 致知己版本化扩展（致知己 specs §2）：版本切换条 + 保存即版本 + 让 AI 追问 */
+  versioned?: {
+    /** 全部版本（seq 倒序），label 如 v3-260905 */
+    versions: { id: number; label: string }[]
+    /** 当前展示版本 id */
+    currentId: number | null
+    /** 切换版本（换 filePath 重载；编辑态下非当前 chip 禁用防误触丢草稿） */
+    onSelect: (id: number) => void
+    /** 保存（编辑退出、内容有变化时）：overwrite=勾选覆盖当前版本，默认存新版本；替代默认 md.write */
+    onSave: (content: string, overwrite: boolean) => Promise<void> | void
+    /** 让 AI 追问（携带当前正文，非编辑态） */
+    onAskAi: (content: string) => void
+  }
+  /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
+  autoEdit?: boolean
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, filePath, onClose, onChanged, selectionActions, onTitleChange, review } = props
+  const { open, title, subtitle, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, autoEdit } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(false)
   const [titleDraft, setTitleDraft] = useState(title)
+  // 致知己：覆盖当前版本勾选（每次进入编辑态重置）
+  const [overwrite, setOverwrite] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  // autoEdit 仅在 open 的首次加载生效（版本切换换 filePath 不再触发）
+  const wasOpenRef = useRef(false)
 
   useEffect(() => {
     setTitleDraft(title)
@@ -42,15 +63,27 @@ export default function MdDialog(props: MdDialogProps) {
 
   // 打开/换文件时加载
   useEffect(() => {
-    if (!open || !filePath) return
+    if (!open || !filePath) {
+      wasOpenRef.current = false
+      return
+    }
+    const firstOpen = !wasOpenRef.current
+    wasOpenRef.current = true
     setLoading(true)
     setEditing(false)
+    setOverwrite(false)
     window.api.md
       .read(filePath)
-      .then((c) => setContent(c))
+      .then((c) => {
+        setContent(c)
+        if (firstOpen && autoEdit) {
+          setDraft(c)
+          setEditing(true)
+        }
+      })
       .catch(() => setContent('（读取失败）'))
       .finally(() => setLoading(false))
-  }, [open, filePath])
+  }, [open, filePath, autoEdit])
 
   // ==text== → <mark>（渲染后处理，避免 marked 不识别）
   // deps 含 loading：加载中 bodyRef 被 loading 分支卸载，读完 setContent 时 ref 还是 null 会早退；
@@ -72,12 +105,19 @@ export default function MdDialog(props: MdDialogProps) {
 
   const saveAndExit = useCallback(async () => {
     if (draft !== content) {
-      await window.api.md.write(filePath, draft)
-      setContent(draft)
-      onChanged?.()
+      if (versioned) {
+        // 致知己：保存即版本（specs §2），写库/写文件由模块处理
+        await versioned.onSave(draft, overwrite)
+        setContent(draft)
+        onChanged?.()
+      } else {
+        await window.api.md.write(filePath, draft)
+        setContent(draft)
+        onChanged?.()
+      }
     }
     setEditing(false)
-  }, [draft, content, filePath, onChanged])
+  }, [draft, content, filePath, onChanged, versioned, overwrite])
 
   /** 关闭：编辑态先保存草稿再关 */
   const close = useCallback((): void => {
@@ -170,29 +210,49 @@ export default function MdDialog(props: MdDialogProps) {
     >
       <div className={`dialog md-dialog${editing ? ' editing' : ''}`}>
         <div className="dialog-header">
-          {onTitleChange ? (
-            <input
-              className="field title-input"
-              value={titleDraft}
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onBlur={commitTitle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-              }}
-              style={{ flex: 1, fontWeight: 500 }}
-            />
-          ) : (
-            <span style={{ flex: 1 }} title={title}>
-              {title}
-            </span>
-          )}
+          <div className="dialog-title-wrap">
+            {onTitleChange ? (
+              <input
+                className="field title-input"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+                style={{ width: '100%', fontWeight: 500 }}
+              />
+            ) : (
+              <span className="dialog-title" title={title}>
+                {title}
+              </span>
+            )}
+            {subtitle && (
+              <span className="dialog-subtitle" title={subtitle}>
+                {subtitle}
+              </span>
+            )}
+          </div>
           {!editing && (
             <span className="edit-hint">双击正文编辑</span>
           )}
           {editing ? (
-            <button className="btn btn-primary" onClick={() => void saveAndExit()}>
-              完成
-            </button>
+            <>
+              {versioned && (
+                <label className="ver-overwrite" title="勾选后保存时序号不变、日期更新为覆盖当日">
+                  <input
+                    type="checkbox"
+                    checked={overwrite}
+                    onChange={(e) => setOverwrite(e.target.checked)}
+                    style={{ accentColor: 'var(--color-primary)' }}
+                  />
+                  覆盖当前版本
+                </label>
+              )}
+              <button className="btn btn-primary" onClick={() => void saveAndExit()}>
+                完成
+              </button>
+            </>
           ) : review ? null : (
             <button
               className="btn btn-ghost close-btn"
@@ -203,6 +263,35 @@ export default function MdDialog(props: MdDialogProps) {
             </button>
           )}
         </div>
+        {/* 版本切换条 + 让 AI 追问（致知己）：一次呈现一个版本，点击切换 */}
+        {versioned && (
+          <div className="dialog-versionbar">
+            {versioned.versions.map((v) => (
+              <button
+                key={v.id}
+                className={`ver-chip${v.id === versioned.currentId ? ' current' : ''}`}
+                onClick={() => v.id !== versioned.currentId && versioned.onSelect(v.id)}
+                disabled={editing && v.id !== versioned.currentId}
+                title={
+                  editing && v.id !== versioned.currentId
+                    ? '编辑态下不可切换（先完成编辑）'
+                    : `切换到 ${v.label}`
+                }
+              >
+                {v.label}
+              </button>
+            ))}
+            <button
+              className="btn btn-ghost ver-ask"
+              onClick={() => !editing && versioned.onAskAi(content)}
+              disabled={editing || loading}
+              title="携带当前版本答案，让 AI 在边栏追问检验"
+            >
+              <span className="material-symbols-outlined">contact_support</span>
+              让 AI 追问
+            </button>
+          </div>
+        )}
         <div className="dialog-body" onDoubleClick={() => !editing && startEditing()}>
           {loading ? (
             <div>加载中…</div>
@@ -241,6 +330,7 @@ export default function MdDialog(props: MdDialogProps) {
 
   function startEditing(): void {
     setDraft(content)
+    setOverwrite(false)
     setEditing(true)
   }
 }

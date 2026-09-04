@@ -1,10 +1,14 @@
-// 个人中心模块（个人中心 specs 全量）
+// 个人中心模块（个人中心 specs 全量 + 我的画像：致知己 specs §3）
 import { useCallback, useEffect, useState } from 'react'
-import type { LlmConfig, McpConfig, McpResearch } from '../../renderer/api'
+import type { LlmConfig, McpConfig, McpResearch, ProfileFactRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { SettingsKeys } from '../../shared/types'
+
+/** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
+const PROFILE_CATEGORIES = ['专业背景', '学习方向', '职业规划', '偏好习惯', '价值观', '其他']
 
 // 内置字体（优化建议区「字体更换」：删除宋体/黑体/等线，随应用打包 5 款手写/楷体字体，
 // 对应 global.css @font-face；楷体为系统字体保留）
@@ -61,6 +65,22 @@ export default function ProfileModule() {
   const [dataDir, setDataDir] = useState('')
   const [migrating, setMigrating] = useState(false)
   const [migrateConfirm, setMigrateConfirm] = useState<{ dir: string } | null>(null)
+  // 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文
+  const [facts, setFacts] = useState<ProfileFactRow[]>([])
+  const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
+  const [delFact, setDelFact] = useState<ProfileFactRow | null>(null)
+
+  /** 画像条目加载 */
+  const loadFacts = useCallback(async () => {
+    setFacts(await window.api.profile.list())
+  }, [])
+
+  useEffect(() => {
+    void loadFacts()
+  }, [loadFacts])
+
+  // keep-alive：切回个人中心时刷新（AI 边栏建议入档后回来看最新）
+  useModuleActivated('profile', () => void loadFacts())
 
   // 载入
   useEffect(() => {
@@ -310,6 +330,31 @@ export default function ProfileModule() {
     }
   }
 
+  // ---------- 我的画像（致知己 specs §3） ----------
+  const saveFact = async (): Promise<void> => {
+    if (!factForm) return
+    if (!factForm.category.trim() || !factForm.content.trim()) {
+      toast('类别与内容必填')
+      return
+    }
+    if (factForm.id != null) {
+      await window.api.profile.update(factForm.id, factForm.category, factForm.content)
+    } else {
+      await window.api.profile.add(factForm.category, factForm.content)
+    }
+    setFactForm(null)
+    await loadFacts()
+    toast('画像已保存（将注入全部 AI 功能）')
+  }
+
+  const doDeleteFact = async (): Promise<void> => {
+    if (!delFact) return
+    await window.api.profile.delete(delFact.id)
+    setDelFact(null)
+    await loadFacts()
+    toast('已删除')
+  }
+
   // ---------- 数据存储（优化建议区 #2） ----------
   const pickDataDir = async (): Promise<void> => {
     const dir = await window.api.storage.pickDir()
@@ -381,6 +426,51 @@ export default function ProfileModule() {
               placeholder="个性签名（失焦保存）"
             />
           </div>
+        </div>
+      </section>
+
+      {/* 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文 */}
+      <section className="zone">
+        <div className="zone-header">
+          <span>我的画像</span>
+          <span className="zone-count">{facts.length}</span>
+          <div className="zone-actions">
+            <button className="btn" onClick={() => setFactForm({ id: null, category: '', content: '' })}>
+              <span className="material-symbols-outlined">add</span>
+              新增
+            </button>
+          </div>
+        </div>
+        <div className="zone-body">
+          {facts.length === 0 && (
+            <div className="empty-state">
+              <span className="material-symbols-outlined">self_improvement</span>
+              暂无画像条目；手填或在与 AI 对话中由 AI 提炼建议、经确认入档。画像会注入全部 AI 功能
+            </div>
+          )}
+          {facts.map((f) => (
+            <div className="row-item" key={f.id} style={{ cursor: 'default' }}>
+              <div className="row-main">
+                <div className="row-title">
+                  {f.category}
+                  {f.source === 'ai' && <span className="badge">AI</span>}
+                </div>
+                <div className="row-sub">{f.content}</div>
+              </div>
+              <div className="row-actions">
+                <button
+                  className="icon-btn"
+                  title="编辑"
+                  onClick={() => setFactForm({ id: f.id, category: f.category, content: f.content })}
+                >
+                  <span className="material-symbols-outlined">edit</span>
+                </button>
+                <button className="icon-btn danger" title="删除" onClick={() => setDelFact(f)}>
+                  <span className="material-symbols-outlined">delete</span>
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -833,7 +923,54 @@ export default function ProfileModule() {
         迁移完成后旧位置数据将被清理，App 自动重启。
       </ConfirmDialog>
 
+      {/* 画像条目编辑弹窗（类别 datalist 预设 + 内容多行） */}
+      {factForm && (
+        <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setFactForm(null)}>
+          <div className="dialog" style={{ width: 440 }}>
+            <div className="dialog-header">{factForm.id != null ? '编辑画像条目' : '新增画像条目'}</div>
+            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <input
+                className="field"
+                placeholder="类别（如：专业背景 / 学习方向 / 职业规划 / 偏好习惯 / 价值观 / 其他）"
+                list="profile-cats"
+                value={factForm.category}
+                onChange={(e) => setFactForm({ ...factForm, category: e.target.value })}
+                autoFocus
+              />
+              <datalist id="profile-cats">
+                {PROFILE_CATEGORIES.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+              <textarea
+                className="field"
+                placeholder="内容（一句话说清，如：计算机相关专业，正在研究 AI 开发与 Python 全栈）"
+                value={factForm.content}
+                onChange={(e) => setFactForm({ ...factForm, content: e.target.value })}
+                rows={3}
+                style={{ resize: 'vertical' }}
+              />
+              <div className="module-sub">画像会注入全部 AI 功能的上下文，让 AI 更懂你</div>
+            </div>
+            <div className="dialog-footer">
+              <button className="btn" onClick={() => setFactForm(null)}>取消</button>
+              <button className="btn btn-primary" onClick={() => void saveFact()}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 删除确认 */}
+      <ConfirmDialog
+        open={delFact != null}
+        title="删除画像条目"
+        danger
+        confirmText="删除"
+        onConfirm={() => void doDeleteFact()}
+        onCancel={() => setDelFact(null)}
+      >
+        确认删除「{delFact?.category}」这条画像？
+      </ConfirmDialog>
       <ConfirmDialog
         open={delLlm != null}
         title="删除 LLM 配置"

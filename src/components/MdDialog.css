@@ -28,6 +28,67 @@
   margin-left: auto;
 }
 
+/* 头部标题列：主标题 + 可选副标题（格言笔记弹窗出处行，优化建议区） */
+.md-dialog .dialog-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.md-dialog .dialog-title-wrap .dialog-subtitle {
+  font-size: 0.82em;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+
+/* 版本切换条 + 让 AI 追问（致知己 specs §2）：头部下方常驻，一次呈现一个版本 */
+.md-dialog .dialog-versionbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px 0;
+}
+.md-dialog .ver-chip {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-size: 0.8em;
+  cursor: pointer;
+}
+.md-dialog .ver-chip:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.md-dialog .ver-chip.current {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  cursor: default;
+}
+.md-dialog .ver-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.md-dialog .ver-ask {
+  margin-left: auto;
+  font-size: 0.82em;
+}
+.md-dialog .ver-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 0.82em;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* 划词气泡（万象卡片） */
 .sel-bubble {
   position: fixed;

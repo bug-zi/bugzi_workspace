@@ -4,7 +4,7 @@ import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
 import { SettingsKeys } from '../../src/shared/types'
-import type { AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
+import type { AiChannel, AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
 
 // ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
 
@@ -14,31 +14,42 @@ const DEFAULT_SESSION_TITLE = '新对话'
 /** 自动命名取消息前 N 字 */
 const AUTO_TITLE_LEN = 20
 
-/** 会话列表（最近活跃在前） */
-export function listAiSessions(): AiSession[] {
-  return getDb()
-    .prepare('SELECT * FROM ai_sessions ORDER BY updated_at DESC, id DESC')
-    .all() as unknown as AiSession[]
+/** 各频道激活会话的 settings key（assistant 沿用既有 key，其余频道各自独立；DB v9 频道制） */
+const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
+  assistant: SettingsKeys.AiActiveSessionId,
+  wiki: SettingsKeys.AiActiveSessionWiki,
+  zhijiji: SettingsKeys.AiActiveSessionZhijiji,
+  verify: SettingsKeys.AiActiveSessionVerify
 }
 
-/** 当前激活会话 id（settings.ai_active_session_id；无或非法 → null） */
-export function getActiveSessionId(): number | null {
-  const v = getSetting(SettingsKeys.AiActiveSessionId)
+/** 会话列表（最近活跃在前，按频道隔离） */
+export function listAiSessions(channel: AiChannel = 'assistant'): AiSession[] {
+  return getDb()
+    .prepare('SELECT * FROM ai_sessions WHERE channel = ? ORDER BY updated_at DESC, id DESC')
+    .all(channel) as unknown as AiSession[]
+}
+
+/** 指定频道的激活会话 id（对应 settings key；无或非法 → null） */
+export function getActiveSessionId(channel: AiChannel = 'assistant'): number | null {
+  const v = getSetting(ACTIVE_SESSION_KEYS[channel] ?? SettingsKeys.AiActiveSessionId)
   const id = v ? Number(v) : NaN
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
-/** 设置激活会话（渲染层切换/新建时经 settings:set 落库；null 清除） */
-export function setActiveSessionId(id: number | null): void {
-  setSetting(SettingsKeys.AiActiveSessionId, id == null ? '' : String(id))
+/** 设置某频道的激活会话（渲染层切换/新建时经 settings:set 落库；null 清除） */
+export function setActiveSessionId(id: number | null, channel: AiChannel = 'assistant'): void {
+  setSetting(ACTIVE_SESSION_KEYS[channel] ?? SettingsKeys.AiActiveSessionId, id == null ? '' : String(id))
 }
 
-export function createAiSession(title: string = DEFAULT_SESSION_TITLE): AiSession {
+export function createAiSession(
+  title: string = DEFAULT_SESSION_TITLE,
+  channel: AiChannel = 'assistant'
+): AiSession {
   const now = nowIso()
   const r = getDb()
-    .prepare('INSERT INTO ai_sessions (title, created_at, updated_at) VALUES (?, ?, ?)')
-    .run(title, now, now)
-  return { id: Number(r.lastInsertRowid), title, created_at: now, updated_at: now }
+    .prepare('INSERT INTO ai_sessions (title, channel, created_at, updated_at) VALUES (?, ?, ?, ?)')
+    .run(title, channel, now, now)
+  return { id: Number(r.lastInsertRowid), title, channel, created_at: now, updated_at: now }
 }
 
 export function renameAiSession(id: number, title: string): void {
@@ -46,17 +57,17 @@ export function renameAiSession(id: number, title: string): void {
   getDb().prepare('UPDATE ai_sessions SET title = ? WHERE id = ?').run(t, id)
 }
 
-/** 删除会话（连同其全部消息）；若删的是激活会话 → 自动切到剩余最近活跃的一个，无剩余则清除激活 */
-export function deleteAiSession(id: number): void {
+/** 删除会话（连同其全部消息）；若删的是该频道激活会话 → 同频道内自动切到剩余最近活跃，无剩余则清除激活 */
+export function deleteAiSession(id: number, channel: AiChannel = 'assistant'): void {
   const d = getDb()
   // 先删消息再删会话（FK 约束下顺序即安全，无需显式事务）
   d.prepare('DELETE FROM ai_messages WHERE session_id = ?').run(id)
   d.prepare('DELETE FROM ai_sessions WHERE id = ?').run(id)
-  if (getActiveSessionId() === id) {
-    const next = d.prepare('SELECT id FROM ai_sessions ORDER BY updated_at DESC, id DESC LIMIT 1').get() as
-      | { id: number }
-      | undefined
-    setActiveSessionId(next ? next.id : null)
+  if (getActiveSessionId(channel) === id) {
+    const next = d
+      .prepare('SELECT id FROM ai_sessions WHERE channel = ? ORDER BY updated_at DESC, id DESC LIMIT 1')
+      .get(channel) as { id: number } | undefined
+    setActiveSessionId(next ? next.id : null, channel)
   }
 }
 
@@ -68,6 +79,11 @@ export function listAiMessages(sessionId: number): AiMessage[] {
 
 export function deleteAiMessage(id: number): void {
   getDb().prepare('DELETE FROM ai_messages WHERE id = ?').run(id)
+}
+
+/** 改写消息内容（渲染层画像建议「加入/忽略」后剥除协议标记行用） */
+export function editAiMessage(id: number, content: string): void {
+  getDb().prepare('UPDATE ai_messages SET content = ? WHERE id = ?').run(content, id)
 }
 
 export function appendAiMessage(
@@ -104,13 +120,13 @@ function autoTitleSession(sessionId: number, message: string): void {
   d.prepare('UPDATE ai_sessions SET title = ? WHERE id = ?').run(title, sessionId)
 }
 
-/** 系统消息（辩真阁验证过程等）落激活会话；无激活会话则自动新建一个接收，返回带 session_id 的消息 */
-export function appendSystemToActiveSession(content: string): AiMessage {
-  let sid = getActiveSessionId()
+/** 系统消息（辩真阁验证过程等）落指定频道的激活会话；该频道无激活会话则自动新建一个接收 */
+export function appendSystemToChannelSession(channel: AiChannel, content: string): AiMessage {
+  let sid = getActiveSessionId(channel)
   if (sid == null) {
     const title = content.replace(/\s+/g, ' ').trim().slice(0, AUTO_TITLE_LEN) || DEFAULT_SESSION_TITLE
-    const s = createAiSession(title)
-    setActiveSessionId(s.id)
+    const s = createAiSession(title, channel)
+    setActiveSessionId(s.id, channel)
     sid = s.id
   }
   return appendAiMessage('system', content, null, sid)
@@ -121,12 +137,44 @@ const MODULE_LABELS: Record<string, string> = {
   wiki: '万象库',
   inspirations: '灵感泉',
   verify: '辩真阁',
+  zhijiji: '致知己',
   recycle: '回收站',
   profile: '个人中心'
 }
 
-/** AI 边栏对话：会话内历史 + 模块感知 system prompt（样式 specs §4.1；多会话改造） */
-export async function aiChat(userMessage: string, currentModule: string, sessionId: number): Promise<AiMessage> {
+/** 频道人设（DB v9 频道制，致知己 specs §4） */
+const CHANNEL_PERSONAS: Record<AiChannel, string> = {
+  assistant: '当前频道是「助手」，你是通用助手，可自由回答各类话题。',
+  wiki:
+    '当前频道是「万象·问答」，你是知识讲解员：用通俗、准确的方式讲解非计算机领域的知识，多用具体例子，必要时指出常见误解。',
+  zhijiji:
+    '当前频道是「致知己·追问」，你是用户请来的「较真的朋友」：用户正在把自己对某个问题的答案写成版本，你的职责是追问检验——找逻辑漏洞、要具体例子、问适用边界，一次提 1~3 个追问。绝不替用户写答案，绝不输出答案文本，只提问与追问。',
+  verify:
+    '当前频道是「辩真·核查」，你是核查员：围绕待验证观点的真实性讨论，结论要有依据，引用来源时给出链接。'
+}
+
+/** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
+const PROFILE_SUGGEST_INSTRUCTION =
+  '当你从对话中识别到关于用户本人的稳定信息（专业背景、学习方向、职业规划、偏好习惯、价值观、人生观等，且下方画像尚未覆盖）时，在回复的最末尾另起一行输出标记：<<<PROFILE_SUGGEST:类别|内容>>>（类别从 专业背景/学习方向/职业规划/偏好习惯/价值观/其他 中选择，内容一句话概括）；没有可补充的就绝不输出该标记。'
+
+/** 我的画像注入块（全部 AI 功能共用，DB v9；空画像返回 ''） */
+export function profileBlock(): string {
+  const rows = getDb()
+    .prepare('SELECT category, content FROM profile_facts ORDER BY id')
+    .all() as { category: string; content: string }[]
+  if (rows.length === 0) return ''
+  return `## 我的画像（用户本人，供你了解 TA 是谁）\n${rows
+    .map((r) => `- ${r.category}：${r.content}`)
+    .join('\n')}`
+}
+
+/** AI 边栏对话（频道制）：会话内历史 + 频道人设 + 我的画像 + 模块感知 system prompt */
+export async function aiChat(
+  userMessage: string,
+  currentModule: string,
+  sessionId: number,
+  channel: AiChannel = 'assistant'
+): Promise<AiMessage> {
   // 首条用户消息自动命名会话，再落用户消息（持久化该会话全历史）
   autoTitleSession(sessionId, userMessage)
   const userMsg = appendAiMessage('user', userMessage, currentModule, sessionId)
@@ -135,7 +183,15 @@ export async function aiChat(userMessage: string, currentModule: string, session
     .slice(-30)
     .map((m) => ({ role: m.role, content: m.content }) as { role: 'user' | 'assistant'; content: string })
   const moduleLabel = MODULE_LABELS[currentModule] ?? currentModule
-  const system = `你是「bug子的workspace」个人工作台的 AI 助手。用户当前所在模块：${moduleLabel}。请优先围绕该模块相关话题提供帮助，同时也可以回答用户的其他问题。回答使用简体中文，简洁友好。`
+  const system = [
+    `你是「bug子的workspace」个人工作台的 AI 助手。用户当前所在模块：${moduleLabel}。`,
+    CHANNEL_PERSONAS[channel] ?? CHANNEL_PERSONAS.assistant,
+    '回答使用简体中文，简洁友好。',
+    PROFILE_SUGGEST_INSTRUCTION,
+    profileBlock()
+  ]
+    .filter(Boolean)
+    .join('\n')
   const res = await chatCompletion({
     messages: [{ role: 'system', content: system }, ...history],
     temperature: 0.8
@@ -200,7 +256,7 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const avoidList = existingRows.length
     ? existingRows.map((r) => `- ${r.content}`).join('\n')
     : '（暂无）'
-  const prompt = `以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
+  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
@@ -317,7 +373,7 @@ export async function generateInspirations(): Promise<GenerateInspirationsResult
     .prepare('SELECT title FROM inspirations ORDER BY updated_at DESC LIMIT 500')
     .all() as { title: string }[]
   const avoidList = existingRows.length ? existingRows.map((r) => `- ${r.title}`).join('\n') : '（暂无）'
-  const prompt = `以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
+  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
@@ -369,7 +425,7 @@ export async function refineInspiration(id: number): Promise<string> {
     | undefined
   if (!row) throw new Error('NOT_FOUND')
   const body = inspirationBody(row.md_path, 4000, false) || '（正文暂空）'
-  const prompt = `以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
+  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
   const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   if (!md) throw new Error('LLM 未返回内容')
@@ -434,7 +490,7 @@ export async function generateWikiCard(term: string | null, sectionId: number | 
     .prepare('SELECT id FROM wiki_entries WHERE term = ? AND deleted_at IS NULL')
     .get(term)
   if (dup) throw new Error('CONFLICT:' + term)
-  const prompt = `请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
+  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
   const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   // 一句话定义提取（模板第一个 ## 段）
@@ -522,7 +578,7 @@ export async function generateWikiQuiz(): Promise<WikiQuizQuestion[]> {
     cards.push(`【词条：${r.term}】\n${md.slice(0, 1200)}`)
   }
   if (cards.length === 0) throw new Error('卡片内容读取失败')
-  const prompt = `以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
+  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
@@ -588,7 +644,7 @@ export async function runVerification(
     messages: [
       {
         role: 'user',
-        content: `观点：「${claim}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料验证该观点。先输出验证分析（引用资料说明依据），然后单独一行输出可信度百分比（0-100 的整数），格式严格为：可信度：N%\n\n分析正文使用 Markdown，若引用了具体来源请在分析中以 Markdown 链接列出。`
+        content: `${profileBlock()}${profileBlock() ? '\n\n' : ''}观点：「${claim}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料验证该观点。先输出验证分析（引用资料说明依据），然后单独一行输出可信度百分比（0-100 的整数），格式严格为：可信度：N%\n\n分析正文使用 Markdown，若引用了具体来源请在分析中以 Markdown 链接列出。`
       }
     ],
     temperature: 0.3

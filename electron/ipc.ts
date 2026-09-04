@@ -1,13 +1,14 @@
 // IPC 全通道注册（主进程）：渲染层 window.api.* 的后端
 import { ipcMain, dialog, BrowserWindow, shell, app, clipboard } from 'electron'
-import { getDb, nowIso, normalizeText, isDupMotto } from './db/db'
+import { getDb, nowIso, normalizeText, isDupMotto, stripMottoNoteHeader } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
 import {
   listAiMessages,
-  appendSystemToActiveSession,
+  appendSystemToChannelSession,
+  editAiMessage,
   aiChat,
   listAiSessions,
   createAiSession,
@@ -28,19 +29,19 @@ import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
 import { SettingsKeys } from '../src/shared/types'
-import type { LlmConfig, McpConfig } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
 import { copyFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { userDataDir } from './db/db'
+import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
 }
 
-/** AI 边栏系统消息推送：写入激活会话 + webContents 发送 */
-export function pushAiSystemMessage(content: string): void {
-  const msg = appendSystemToActiveSession(content)
+/** AI 边栏系统消息推送：写入指定频道的激活会话 + webContents 发送（频道制：辩真过程进核查频道） */
+export function pushAiSystemMessage(content: string, channel: AiChannel = 'verify'): void {
+  const msg = appendSystemToChannelSession(channel, content)
   win()?.webContents.send('ai:message', msg)
 }
 
@@ -113,13 +114,14 @@ export function registerIpc(): void {
     return true
   })
 
-  // ---------- 通用条目操作（四模块列表共用模式） ----------
-  type ItemKind = 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records'
-  const RECYCLE_MAP: Record<string, 'mottos' | 'wiki' | 'inspirations' | 'verify'> = {
+  // ---------- 通用条目操作（五模块列表共用模式） ----------
+  type ItemKind = 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions'
+  const RECYCLE_MAP: Record<string, 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'> = {
     mottos: 'mottos',
     wiki_entries: 'wiki',
     inspirations: 'inspirations',
-    verify_records: 'verify'
+    verify_records: 'verify',
+    zhijiji_questions: 'zhijiji'
   }
 
   ipcMain.handle('item:discard', (_e, table: string, id: number) => {
@@ -143,11 +145,14 @@ export function registerIpc(): void {
     return true
   })
 
-  // ---------- AI 边栏（多会话：优化建议区「对话记录管理」） ----------
+  // ---------- AI 边栏（多会话 + 频道制：致知己 specs §4） ----------
   ipcMain.handle('ai:messages', (_e, sessionId: number) => listAiMessages(sessionId))
-  ipcMain.handle('ai:chat', async (_e, message: string, currentModule: string, sessionId: number) => {
-    return await aiChat(message, currentModule, sessionId)
-  })
+  ipcMain.handle(
+    'ai:chat',
+    async (_e, message: string, currentModule: string, sessionId: number, channel?: string) => {
+      return await aiChat(message, currentModule, sessionId, (channel ?? 'assistant') as AiChannel)
+    }
+  )
   ipcMain.handle('ai:configured', () => isLlmConfigured())
   ipcMain.handle('ai:pushSystem', (_e, content: string) => {
     pushAiSystemMessage(content)
@@ -157,19 +162,29 @@ export function registerIpc(): void {
     deleteAiMessage(id)
     return true
   })
+  ipcMain.handle('ai:editMessage', (_e, id: number, content: string) => {
+    editAiMessage(id, content)
+    return true
+  })
 
-  // ---------- AI 会话管理 ----------
-  ipcMain.handle('aiSession:list', () => listAiSessions())
-  ipcMain.handle('aiSession:create', () => createAiSession())
+  // ---------- AI 会话管理（按频道隔离：list/create/active/delete 均带频道参数） ----------
+  ipcMain.handle('aiSession:list', (_e, channel?: string) =>
+    listAiSessions((channel ?? 'assistant') as AiChannel)
+  )
+  ipcMain.handle('aiSession:create', (_e, channel?: string) =>
+    createAiSession('新对话', (channel ?? 'assistant') as AiChannel)
+  )
   ipcMain.handle('aiSession:rename', (_e, id: number, title: string) => {
     renameAiSession(id, title)
     return true
   })
-  ipcMain.handle('aiSession:delete', (_e, id: number) => {
-    deleteAiSession(id)
+  ipcMain.handle('aiSession:delete', (_e, id: number, channel?: string) => {
+    deleteAiSession(id, (channel ?? 'assistant') as AiChannel)
     return true
   })
-  ipcMain.handle('aiSession:active', () => getActiveSessionId())
+  ipcMain.handle('aiSession:active', (_e, channel?: string) =>
+    getActiveSessionId((channel ?? 'assistant') as AiChannel)
+  )
 
   // ---------- 格言库 ----------
   /** mottos.tags 列（JSON 字符串）→ string[]，容错解析 */
@@ -225,7 +240,8 @@ export function registerIpc(): void {
       if (status === 'formal') {
         const notePath = `md/mottos/${id}.md`
         d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
-        mdCreate(notePath, `# ${content}\n\n> ${source}\n`)
+        // 笔记正文从空白开始（优化建议区：句子+出处由弹窗标题区展示，正文不重复）
+        mdCreate(notePath, '')
       }
       return id
     }
@@ -265,10 +281,16 @@ export function registerIpc(): void {
     const d = getDb()
     const row = d.prepare('SELECT * FROM mottos WHERE id = ?').get(id) as { note_path: string | null; content: string; source: string } | undefined
     if (!row) throw new Error('NOT_FOUND')
-    if (status === 'formal' && !row.note_path) {
-      const notePath = `md/mottos/${id}.md`
-      d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
-      mdCreate(notePath, `# ${row.content}\n\n> ${row.source}\n`)
+    if (status === 'formal') {
+      if (!row.note_path) {
+        const notePath = `md/mottos/${id}.md`
+        d.prepare('UPDATE mottos SET note_path = ? WHERE id = ?').run(notePath, id)
+        // 笔记正文从空白开始（同 mottos:create）
+        mdCreate(notePath, '')
+      } else {
+        // 旧笔记可能仍带「# 句子\n\n> 出处」模板头（v8 前创建、回收站恢复后再转正等），顺带剥离
+        stripMottoNoteHeader(row.note_path, row.content, row.source)
+      }
     }
     // 流转目标区：插到区首（sort 取目标区最小值-1）
     d.prepare('UPDATE mottos SET status = ?, sort = ?, updated_at = ? WHERE id = ?').run(
@@ -446,6 +468,116 @@ export function registerIpc(): void {
   ipcMain.handle('verify:run', async (_e, claim: string) => {
     const result = await runVerification(claim, (msg) => pushAiSystemMessage(msg))
     return result
+  })
+
+  // ---------- 致知己（DB v9，致知己 specs §2：问题 + 多版本答案，AI 只追问不代笔） ----------
+  ipcMain.handle('zhijiji:list', () => {
+    const rows = getDb()
+      .prepare(
+        `SELECT q.id, q.title, q.tags, q.created_at, q.updated_at,
+          (SELECT COUNT(*) FROM zhijiji_versions v WHERE v.question_id = q.id) AS version_count
+        FROM zhijiji_questions q WHERE q.deleted_at IS NULL ORDER BY q.updated_at DESC`
+      )
+      .all() as { tags?: string | null }[]
+    return rows.map((r) => ({ ...r, tags: parseTags(r.tags) }))
+  })
+  ipcMain.handle('zhijiji:createQuestion', (_e, title: string, tags?: string[]) => {
+    const t = title.trim()
+    if (!t) throw new Error('TITLE_REQUIRED')
+    const d = getDb()
+    const now = nowIso()
+    const r = d
+      .prepare('INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run(t, JSON.stringify(sanitizeTags(tags)), now, now)
+    const qid = Number(r.lastInsertRowid)
+    // 创建即建空白 v1（specs §2：打开弹窗自动进入编辑态）
+    const mdPath = `md/zhijiji/${qid}-v1.md`
+    mdCreate(mdPath, '')
+    const vr = d
+      .prepare(
+        'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)'
+      )
+      .run(qid, yyMMdd(), mdPath, now, now)
+    return { questionId: qid, versionId: Number(vr.lastInsertRowid), mdPath }
+  })
+  ipcMain.handle('zhijiji:versions', (_e, questionId: number) =>
+    getDb()
+      .prepare('SELECT * FROM zhijiji_versions WHERE question_id = ? ORDER BY seq DESC')
+      .all(questionId)
+  )
+  ipcMain.handle('zhijiji:saveNewVersion', (_e, questionId: number, content: string) => {
+    const d = getDb()
+    const now = nowIso()
+    const date = yyMMdd()
+    const max = d
+      .prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM zhijiji_versions WHERE question_id = ?')
+      .get(questionId) as { m: number }
+    const seq = max.m + 1
+    const mdPath = `md/zhijiji/${questionId}-v${seq}.md`
+    mdCreate(mdPath, content)
+    const r = d
+      .prepare(
+        'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(questionId, seq, date, mdPath, now, now)
+    d.prepare('UPDATE zhijiji_questions SET updated_at = ? WHERE id = ?').run(now, questionId)
+    return { versionId: Number(r.lastInsertRowid), seq, date }
+  })
+  ipcMain.handle('zhijiji:overwriteVersion', (_e, versionId: number, content: string) => {
+    const d = getDb()
+    const row = d
+      .prepare('SELECT question_id, md_path FROM zhijiji_versions WHERE id = ?')
+      .get(versionId) as { question_id: number; md_path: string } | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    const now = nowIso()
+    mdWrite(row.md_path, content)
+    // 覆盖：序号不变、日期更新为覆盖当日（specs §2）
+    d.prepare('UPDATE zhijiji_versions SET date = ?, updated_at = ? WHERE id = ?').run(
+      yyMMdd(),
+      now,
+      versionId
+    )
+    d.prepare('UPDATE zhijiji_questions SET updated_at = ? WHERE id = ?').run(now, row.question_id)
+    return true
+  })
+  ipcMain.handle('zhijiji:renameQuestion', (_e, id: number, title: string) => {
+    const t = title.trim()
+    if (!t) return false
+    getDb()
+      .prepare('UPDATE zhijiji_questions SET title = ?, updated_at = ? WHERE id = ?')
+      .run(t, nowIso(), id)
+    return true
+  })
+  ipcMain.handle('zhijiji:discard', (_e, id: number) => {
+    discardToRecycle('zhijiji', id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+
+  // ---------- 个人中心：我的画像（DB v9，致知己 specs §3） ----------
+  ipcMain.handle('profile:list', () =>
+    getDb().prepare('SELECT * FROM profile_facts ORDER BY id').all()
+  )
+  ipcMain.handle('profile:add', (_e, category: string, content: string, source?: string) => {
+    if (!category.trim() || !content.trim()) throw new Error('FIELDS_REQUIRED')
+    const now = nowIso()
+    const r = getDb()
+      .prepare(
+        'INSERT INTO profile_facts (category, content, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(category.trim(), content.trim(), source === 'ai' ? 'ai' : 'manual', now, now)
+    return Number(r.lastInsertRowid)
+  })
+  ipcMain.handle('profile:update', (_e, id: number, category: string, content: string) => {
+    if (!category.trim() || !content.trim()) throw new Error('FIELDS_REQUIRED')
+    getDb()
+      .prepare('UPDATE profile_facts SET category = ?, content = ?, updated_at = ? WHERE id = ?')
+      .run(category.trim(), content.trim(), nowIso(), id)
+    return true
+  })
+  ipcMain.handle('profile:delete', (_e, id: number) => {
+    getDb().prepare('DELETE FROM profile_facts WHERE id = ?').run(id)
+    return true
   })
 
   // ---------- 个人中心：LLM/MCP ----------
