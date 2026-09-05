@@ -118,7 +118,7 @@ function Shell() {
                 <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
               {m.id === 'zhijiji' && (
-                <ZhijijiModule onOpenAi={openAiWith} onNavigateToProfile={() => activateModule('profile')} />
+                <ZhijijiModule onNavigateToProfile={() => activateModule('profile')} />
               )}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}

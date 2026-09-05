@@ -445,7 +445,7 @@ export default function ProfileModule() {
           {facts.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">self_improvement</span>
-              暂无画像条目；手填或在与 AI 对话中由 AI 提炼建议、经确认入档。画像会注入全部 AI 功能
+              暂无画像条目；手填或在与 AI 对话中由 AI 提炼建议、经确认入档。AI 会记住画像，需要了解你时按需取用
             </div>
           )}
           {facts.map((f) => (
@@ -950,7 +950,7 @@ export default function ProfileModule() {
                 rows={3}
                 style={{ resize: 'vertical' }}
               />
-              <div className="module-sub">画像会注入全部 AI 功能的上下文，让 AI 更懂你</div>
+              <div className="module-sub">画像以「记忆」方式供 AI 使用：对话中 AI 需要时按需检索，生成类功能注入精简摘要——让 AI 更懂你而不干扰作答</div>
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => setFactForm(null)}>取消</button>

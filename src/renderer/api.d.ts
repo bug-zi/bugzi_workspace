@@ -235,13 +235,18 @@ export interface Api {
     /** 删除会话（连同消息）；删的是该频道激活会话时主进程在同频道内自动切换/清除激活 */
     delete(id: number, channel?: AiChannel): Promise<boolean>
     active(channel?: AiChannel): Promise<number | null>
+    /** /compact：把该会话历史压成前情摘要另存新会话（原会话保留），返回新会话 */
+    compact(sessionId: number): Promise<AiSessionRow>
+    /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
+    clear(sessionId: number): Promise<boolean>
   }
   zhijiji: {
     list(): Promise<ZhijijiQuestion[]>
-    /** 新问题：创建即建空白 v1，返回后直接打开弹窗自动进入编辑态 */
+    /** 新问题：默认建空白 v1（直开编辑态）；aiInit=true 时 LLM 先生成初始参考答案（v0），失败抛错不创建 */
     createQuestion(
       title: string,
-      tags?: string[]
+      tags?: string[],
+      aiInit?: boolean
     ): Promise<{ questionId: number; versionId: number; mdPath: string }>
     versions(questionId: number): Promise<ZhijijiVersion[]>
     /** 保存为新版本：seq=max+1、date=当日 */

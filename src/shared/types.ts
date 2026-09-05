@@ -34,7 +34,10 @@ export const SettingsKeys = {
   AiActiveSessionWiki: 'ai_active_session_wiki',
   AiActiveSessionZhijiji: 'ai_active_session_zhijiji',
   AiActiveSessionVerify: 'ai_active_session_verify',
-  AiWidth: 'ai_width'
+  AiWidth: 'ai_width',
+  // 致知己弹窗内嵌追问栏（优化建议区第14轮）：宽度与收起态
+  ZjPanelWidth: 'zj_panel_width',
+  ZjPanelCollapsed: 'zj_panel_collapsed'
 } as const
 
 export type Theme = 'light' | 'dark'

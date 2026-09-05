@@ -90,7 +90,17 @@ const api = {
     /** 删除会话（连同消息）；删的是该频道激活会话时主进程在同频道内自动切换/清除激活 */
     delete: (id: number, channel?: string): Promise<boolean> =>
       ipcRenderer.invoke('aiSession:delete', id, channel),
-    active: (channel?: string): Promise<number | null> => ipcRenderer.invoke('aiSession:active', channel)
+    active: (channel?: string): Promise<number | null> => ipcRenderer.invoke('aiSession:active', channel),
+    /** /compact：把该会话历史压成前情摘要另存新会话（原会话保留），返回新会话 */
+    compact: (sessionId: number): Promise<{
+      id: number
+      title: string
+      channel: string
+      created_at: string
+      updated_at: string
+    }> => ipcRenderer.invoke('aiSession:compact', sessionId),
+    /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
+    clear: (sessionId: number): Promise<boolean> => ipcRenderer.invoke('aiSession:clear', sessionId)
   },
   mottos: {
     list: (status?: string): Promise<unknown[]> => ipcRenderer.invoke('mottos:list', status),
@@ -181,9 +191,13 @@ const api = {
   },
   zhijiji: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:list'),
-    /** 新问题：创建即建空白 v1，返回后由渲染层直接打开弹窗自动进入编辑态 */
-    createQuestion: (title: string, tags?: string[]): Promise<{ questionId: number; versionId: number; mdPath: string }> =>
-      ipcRenderer.invoke('zhijiji:createQuestion', title, tags),
+    /** 新问题：默认建空白 v1；aiInit=true 时 LLM 先生成初始参考答案（v0），失败抛错不创建 */
+    createQuestion: (
+      title: string,
+      tags?: string[],
+      aiInit?: boolean
+    ): Promise<{ questionId: number; versionId: number; mdPath: string }> =>
+      ipcRenderer.invoke('zhijiji:createQuestion', title, tags, aiInit),
     versions: (questionId: number): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:versions', questionId),
     /** 保存为新版本：seq=max+1、date=当日，返回新版本标识 */
     saveNewVersion: (questionId: number, content: string): Promise<{ versionId: number; seq: number; date: string }> =>

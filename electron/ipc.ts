@@ -23,7 +23,10 @@ import {
   generateInspirations,
   refineInspiration,
   runVerification,
-  isLlmConfigured
+  isLlmConfigured,
+  profileDigest,
+  compactAiSession,
+  clearAiSession
 } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { getEnabledMcps } from './ai/mcp'
@@ -185,6 +188,13 @@ export function registerIpc(): void {
   ipcMain.handle('aiSession:active', (_e, channel?: string) =>
     getActiveSessionId((channel ?? 'assistant') as AiChannel)
   )
+  // /compact：会话历史压缩为前情摘要另存新会话（优化建议区第14轮）
+  ipcMain.handle('aiSession:compact', (_e, sessionId: number) => compactAiSession(sessionId))
+  // /clear：清空当前会话全部消息（优化建议区第14轮修订：会话保留，存储清零）
+  ipcMain.handle('aiSession:clear', (_e, sessionId: number) => {
+    clearAiSession(sessionId)
+    return true
+  })
 
   // ---------- 格言库 ----------
   /** mottos.tags 列（JSON 字符串）→ string[]，容错解析 */
@@ -481,25 +491,46 @@ export function registerIpc(): void {
       .all() as { tags?: string | null }[]
     return rows.map((r) => ({ ...r, tags: parseTags(r.tags) }))
   })
-  ipcMain.handle('zhijiji:createQuestion', (_e, title: string, tags?: string[]) => {
-    const t = title.trim()
-    if (!t) throw new Error('TITLE_REQUIRED')
-    const d = getDb()
-    const now = nowIso()
-    const r = d
-      .prepare('INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)')
-      .run(t, JSON.stringify(sanitizeTags(tags)), now, now)
-    const qid = Number(r.lastInsertRowid)
-    // 创建即建空白 v1（specs §2：打开弹窗自动进入编辑态）
-    const mdPath = `md/zhijiji/${qid}-v1.md`
-    mdCreate(mdPath, '')
-    const vr = d
-      .prepare(
-        'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)'
-      )
-      .run(qid, yyMMdd(), mdPath, now, now)
-    return { questionId: qid, versionId: Number(vr.lastInsertRowid), mdPath }
-  })
+  ipcMain.handle(
+    'zhijiji:createQuestion',
+    async (_e, title: string, tags?: string[], aiInit?: boolean) => {
+      const t = title.trim()
+      if (!t) throw new Error('TITLE_REQUIRED')
+      // AI 初始化答案（优化建议区第13轮）：LLM 先就问题给出初始参考答案（v0），
+      // 失败则抛错不建问题（渲染层提示，用户的输入不落半截数据）
+      let initContent = ''
+      if (aiInit) {
+        const digest = profileDigest()
+        const prompt = `${digest}${digest ? '\n\n' : ''}请回答这个问题：「${t}」。用简体中文 Markdown 输出一份结构清晰、有见解的初始参考答案（600 字以内），不要输出与答案无关的内容。`
+        const res = await chatCompletion({
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.7
+        })
+        const body = res.content
+          .replace(/^```(?:markdown|md)?\s*\n?/, '')
+          .replace(/\n?```\s*$/, '')
+          .trim()
+        if (!body) throw new Error('LLM 未返回内容')
+        initContent = `> 以下是 AI 初始化的参考答案（v0）。请在此基础上写出属于你自己的 v1，完成后可删除本段。\n\n${body}\n`
+      }
+      const d = getDb()
+      const now = nowIso()
+      const r = d
+        .prepare('INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run(t, JSON.stringify(sanitizeTags(tags)), now, now)
+      const qid = Number(r.lastInsertRowid)
+      // v0（AI 初始化）或空白 v1：seq = aiInit ? 0 : 1，用户在其上编辑保存为 v1/v2…
+      const seq = aiInit ? 0 : 1
+      const mdPath = `md/zhijiji/${qid}-v${seq}.md`
+      mdCreate(mdPath, initContent)
+      const vr = d
+        .prepare(
+          'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(qid, seq, yyMMdd(), mdPath, now, now)
+      return { questionId: qid, versionId: Number(vr.lastInsertRowid), mdPath }
+    }
+  )
   ipcMain.handle('zhijiji:versions', (_e, questionId: number) =>
     getDb()
       .prepare('SELECT * FROM zhijiji_versions WHERE question_id = ? ORDER BY seq DESC')

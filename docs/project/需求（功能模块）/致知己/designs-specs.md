@@ -59,24 +59,31 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 
 **新问题：**
 
-- 弹窗输入：问题标题（必填）+ 领域标签（可选，逗号/顿号分隔多个，复用格言库 parseTagInput 交互）。
-- 创建即建空白 v1（seq=1、date=当日）→ 直接打开 MdDialog 并**自动进入编辑态**（MdDialog 新增 `autoEdit` prop）。
+- 弹窗输入：问题标题（必填）+ 领域标签（可选，逗号/顿号分隔多个，复用格言库 parseTagInput 交互）+「AI 初始化答案」勾选（优化建议区第13轮）。
+- 不勾选 → 创建即建空白 v1（seq=1）→ 直接打开 MdDialog 并**自动进入编辑态**（MdDialog `autoEdit` prop）。
+- 勾选 → LLM 先就问题生成初始参考答案（含画像摘要），以 **v0**（seq=0）入库，正文顶部注明「AI 初始化的参考答案（v0），请在此基础上写出属于你自己的 v1」；弹窗打开默认**渲染态**供阅读。生成约十几秒，按钮显示「AI 思考中…」；LLM 未配置弹引导；失败则**不创建问题**并提示（不落半截数据）。用户在 v0 上双击编辑、保存即 v1（`MAX(seq)+1` 自然从 1 起）。
 
-**详情弹窗（MdDialog 扩展 `versioned` prop）：**
+**详情弹窗（MdDialog 扩展 `versioned` + `sidePanel` prop）：**
 
-- 版本切换条：弹窗头部下方常驻一行 chips，全部版本按 seq 倒序（`v3-260905` 式 label），当前高亮，点击切换（切换 = 换 filePath 重载，渲染态呈现；编辑态下切换视为放弃当前编辑，由 filePath 变化触发的重载兜底）。
+- 版本切换条：弹窗头部下方常驻一行 chips，全部版本按 seq 倒序（`v0-260905`/`v3-260905` 式 label），当前高亮，点击切换（切换 = 换 filePath 重载，渲染态呈现；编辑态下非当前 chip 禁用防误触丢草稿）。
 - 保存即版本：编辑退出时走 `versioned.onSave(content, overwrite)` 而非默认 `md.write`：
-  - 默认（不勾选）→ 存新版本：`seq = MAX(seq)+1`、`date = 当日`、写新 md 文件、问题 `updated_at` 刷新；同日多次保存靠 seq 区分（v3-260905 与 v4-260905 并存）。
+  - 默认（不勾选）→ 存新版本：`seq = MAX(seq)+1`、`date = 当日`、写新 md 文件、问题 `updated_at` 刷新；同日多次保存靠 seq 区分。
   - 勾选「覆盖当前版本」→ 序号不变、`date` 更新为覆盖当日、mdWrite 原文件。
   - 勾选框仅编辑态显示（「完成」按钮旁），每次进入编辑态重置为不勾选。
-- 「让 AI 追问」按钮：非编辑态显示于头部；点击携带当前版本正文回调模块。
+- 「让 AI 追问」按钮：非编辑态显示于版本条尾部；点击直发**右侧内嵌追问栏**。
+- **右侧内嵌追问栏**（`sidePanel`，优化建议区第13轮）：致知己·追问频道的会话视图 + 输入发送，与全局 AI 边栏同频道同数据——交互不出弹窗，左侧看答案/编辑、右侧直接对话。弹窗加宽为 `min(1080px, 95vw)` 双栏；其他模块不传 sidePanel 布局不变。
+- **追问栏布局与会话（优化建议区第14轮）**：
+  - 收起/展开：头部「›」收起为右侧 32px 细条（竖排「追问」字样），点「‹」展开；收起态与宽度持久化 settings（`zj_panel_collapsed` / `zj_panel_width`）。「让 AI 追问」在收起时会自动展开。
+  - 拖宽：栏左缘 7px 拖条，范围 240–560px，弹窗总宽不变、正文区伸缩。
+  - 多会话：头部会话切换器（当前频道会话列表，点击切换并设为频道激活——全局边栏与追问栏一致）+「+」新会话；会话项 hover 出**重命名**（铅笔，行内编辑 Enter 确认 / Esc 取消）与**删除**（垃圾桶，二次确认后连同消息彻底删除；删的是激活会话时同频道自动切换）。**会话历史即 AI 上下文**（每次对话带当前会话最近 30 条消息），关联问题共用会话、不相关问题开新会话由用户掌握。
+  - 斜杠命令（追问栏与全局边栏输入均支持）：`/clear` = **清空当前会话全部消息**（会话本身保留、标题不动——上下文与存储一并清零，防止历史无限膨胀；新会话走「+」手动开启）；`/compact` = 主进程把当前会话历史压成 ≤500 字「前情摘要」，另存新会话（标题加「· 压缩」后缀，摘要为首条消息），此后上下文 = 摘要 + 新消息，原会话原样保留。
 - 标题可编辑（复用 MdDialog `onTitleChange`，同灵感泉模式），改名刷新问题 `updated_at`。
 
-**让 AI 追问联动（频道制）：**
+**让 AI 追问联动：**
 
-- 模块内点击 → 检查 LLM 已配置（未配置弹 GoConfigDialog，按钮不置灰）→ `onOpenAi(prompt, { auto: true })` 由 App 层展开边栏、切到致知己·追问频道并**自动发送**。
-- prompt 组装（渲染层，作为一条用户消息可见可追溯）：`请对我写给自己的这个答案发起追问（较真地检验它，不要替我重写）：\n\n【问题】{title}\n【当前版本】{v{seq}-{date}}\n【我的答案】\n{content}`。
-- 追问是多轮对话：后续在频道内继续；AI 人设见 §4，绝不代笔。
+- 弹窗内点击「让 AI 追问」→ 检查 LLM 已配置（未配置弹 GoConfigDialog，按钮不置灰）→ 组装 prompt 直发内嵌追问栏（AI 人设「较真的朋友」，见 §4，只追问不代笔）。
+- prompt 组装（作为一条用户消息可见可追溯）：`请对我写给自己的这个答案发起追问（较真地检验它，不要替我重写）：\n\n【问题】{title}\n【当前版本】{v{seq}-{date}}\n【我的答案】\n{content}`。
+- 追问是多轮对话：在追问栏继续；用户回到正文区改写答案、存新版本。手动到全局边栏「致知己·追问」频道也能看到同一会话。
 
 **删除与回收站：**
 
@@ -87,7 +94,7 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 **IPC（`zhijiji:*`）：**
 
 - `list()` → `{id, title, tags, version_count, created_at, updated_at}[]`（version_count 子查询计数）
-- `createQuestion(title, tags)` → `{questionId, versionId, mdPath}`（含 v1 创建）
+- `createQuestion(title, tags?, aiInit?)` → `{questionId, versionId, mdPath}`（默认建空白 v1；aiInit 则 LLM 先出 v0，失败抛错不创建）
 - `versions(questionId)` → 版本列表（seq 倒序）
 - `saveNewVersion(questionId, content)` → `{versionId, seq, date}`
 - `overwriteVersion(versionId, content)` → boolean（date 更新为当日）
@@ -102,29 +109,30 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 - IPC：`profile:list / add(category, content, source?) / update(id, category, content) / delete(id)`。
 - 「AI 提炼」来源入档走 `add(category, content, 'ai')`，行上 AI 徽标区分（badge「AI」）。
 
-**画像注入（全部 AI 功能）：**
+**画像记忆化（优化建议区第13轮：不全量注入，AI 按需取用）：**
 
-- 主进程 `profileBlock()`：`profile_facts` 全量 → `\n## 用户画像…\n- 类别：内容`；空表返回 ''。
-- 注入点：AI 边栏对话 system prompt（各频道）、格言生成、万象卡片生成、测一测、灵感泉生成/AI 完善、辩真验证综合分析——prompt 前缀统一追加。
+- **边栏对话（各频道）**：system prompt 只带**画像索引**（每条 = 类别 + 内容前 24 字摘要）+ 检索指令——AI 判断需要了解更多用户信息时，回复中单独一行输出 `<<<PROFILE_LOOKUP:关键词>>>`，主进程按关键词匹配画像（类别/内容包含，或关键词含类别名）取完整条目注入后再答一轮（最多补一轮），最终输出剥除标记。无需了解则直接作答。
+- **生成类功能**（格言生成、万象卡片、测一测、灵感生成/AI 完善）：注入**压缩摘要**（每条截断 60 字）——生成是单趟调用，无对话轮可检索，摘要兼顾「懂我」与上下文长度。
+- **辩真验证不注入画像**：观点核查与用户画像无关，注入反而干扰注意力。
 - 预留升级：一条一记录的表结构即向量库（sqlite-vec）检索式注入的升级路径，v1 不做。
 
 ## 4. AI 边栏「频道制」
 
 **数据与会话：**
 
-- `ai_sessions.channel` 新列；会话列表/新建/激活均按频道隔离：`aiSession.list(channel) / create(channel) / active(channel) / delete(id, channel)`。
+- `ai_sessions.channel` 新列；会话列表/新建/激活均按频道隔离：`aiSession.list(channel) / create(channel) / active(channel) / delete(id, channel)`；`aiSession.compact(sessionId)`（优化建议区第14轮 /compact：历史压成前情摘要另存新会话，返回新会话行）；`aiSession.clear(sessionId)`（/clear：清空该会话全部消息，会话保留）。
 - 每频道独立「激活会话」settings key（见 §1）；删除激活会话时在同频道内自动切换到剩余最近活跃，无剩余则清除该频道激活。
 - 边栏 UI：头部下方新增频道切换条（4 个 chip 常驻：助手/万象·问答/致知己·追问/辩真·核查）；会话列表面板只显示当前频道的会话；切换频道 = 持久化 `ai_active_channel` + 载入该频道会话与激活会话消息。手动展开边栏停在上次所在频道。
 
 **system prompt 组装（每频道）：**
 
-- 结构 = 频道人设 + 我的画像（profileBlock）+ 模块上下文提示 + 回答语言约定。
+- 结构 = 频道人设 + 我的画像索引（profileIndex，优化建议区第13轮记忆化）+ 检索指令 + 模块上下文提示 + 回答语言约定。
 - 人设：助手 = 通用助手；万象·问答 = 知识讲解员（通俗准确、善用例子）；致知己·追问 = 「较真的朋友」（找逻辑漏洞、要具体例子、问适用边界；一次提 1~3 个追问；**绝不代用户写答案、绝不输出答案文本**）；辩真·核查 = 核查员（围绕观点真实性，引用来源给链接）。
 - 画像提炼指令（各频道通用附加）：识别到关于用户本人的稳定新信息（专业/方向/规划/偏好/价值观等，画像未覆盖）时，回复最末尾另起一行输出 `<<<PROFILE_SUGGEST:类别|内容>>>`，否则不输出。
 
 **触发联动（App 层）：**
 
-- 模块内动作 → 边栏自动展开 + 切对应频道：万象「问 AI」→ wiki；致知己「让 AI 追问」→ zhijiji（auto 发送）；辩真「开始验证」→ verify；其余（灵感泉等）→ assistant。频道由 App 依据当前模块映射（`wiki→wiki、verify→verify、zhijiji→zhijiji、其余→assistant`），模块组件只调 `onOpenAi(prefill?, { auto? })`，无需感知频道。
+- 模块内动作 → 边栏自动展开 + 切对应频道：万象「问 AI」→ wiki；辩真「开始验证」→ verify；其余（灵感泉等）→ assistant。致知己「让 AI 追问」直发弹窗内嵌追问栏（zhijiji 频道数据，不走 App 层联动）。频道由 App 依据当前模块映射（`wiki→wiki、verify→verify、其余→assistant`），模块组件只调 `onOpenAi(prefill?, { auto? })`，无需感知频道。
 - `pending` prop 形状：`{ text: string; channel: 频道; auto: boolean }`；auto 时切频道后自动发送，非 auto 仅预填。
 
 **系统消息路由：**
@@ -150,12 +158,12 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 
 ## 7. 验收清单
 
-- [ ] 侧边栏第七模块「致知己」，顺序正确；首启种子问题可见（含四锚点材料）
-- [ ] 新问题：标题必填、标签解析、创建即开弹窗自动编辑态
-- [ ] 弹窗：版本条倒序+当前高亮+点击切换；双击编辑/退出渲染；保存默认新版本（同日多版本 seq 区分）；勾选覆盖（序号不变日期更新）
-- [ ] 让 AI 追问：LLM 未配置弹引导；已配置自动展开边栏、切致知己频道、自动发送；AI 只追问不代笔
-- [ ] 删除→回收站第五块；恢复回主列表（版本齐全）；彻底删除含全部版本 md；3 天自动清理
-- [ ] 画像：增删改查、类别 datalist、AI 来源徽标；全部 AI 功能 prompt 含画像块（配画像后生成内容可感知）
-- [ ] 频道：四频道切换、各频道独立会话历史与激活；存量会话归助手频道；万象问AI/辩真验证/致知己追问自动切对应频道；辩真过程消息进核查频道
-- [ ] 画像建议卡片：助手消息识别标记→卡片→加入/忽略均剥除标记；加入后个人中心可见（AI 徽标）
-- [ ] typecheck 双配置通过
+- [X]  侧边栏第七模块「致知己」，顺序正确；首启种子问题可见（含四锚点材料）
+- [X]  新问题：标题必填、标签解析、创建即开弹窗自动编辑态；勾选 AI 初始化 → LLM 生成 v0（标注参考答案）、弹窗渲染态打开，失败不创建
+- [X]  弹窗：版本条倒序+当前高亮+点击切换；双击编辑/退出渲染；保存默认新版本（同日多版本 seq 区分）；勾选覆盖（序号不变日期更新）
+- [X]  让 AI 追问：LLM 未配置弹引导；已配置直发弹窗内嵌追问栏（左侧答案右侧对话不出弹窗）；AI 只追问不代笔
+- [X]  删除→回收站第五块；恢复回主列表（版本齐全）；彻底删除含全部版本 md；3 天自动清理
+- [ ]  画像：增删改查、类别 datalist、AI 来源徽标；对话走「索引+按需检索」、生成类注入 60 字摘要、辩真不注入（配画像后可感知）
+- [ ]  频道：四频道切换、各频道独立会话历史与激活；存量会话归助手频道；万象问AI/辩真验证自动切对应频道；辩真过程消息进核查频道
+- [ ]  画像建议卡片：助手消息识别标记→卡片→加入/忽略均剥除标记；加入后个人中心可见（AI 徽标）
+- [ ]  typecheck 双配置通过

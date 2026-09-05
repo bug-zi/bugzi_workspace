@@ -244,6 +244,43 @@ export default function AiSidebar(props: AiSidebarProps) {
   const sendText = async (text: string): Promise<void> => {
     const t = text.trim()
     if (!t || sendingRef.current) return
+    // 斜杠命令（优化建议区第14轮及修订）：/clear 清空当前会话；/compact 压缩当前会话上下文
+    const cmd = t.match(/^\/(clear|compact)$/i)
+    if (cmd) {
+      const name = cmd[1].toLowerCase()
+      const sid = activeIdRef.current
+      if (name === 'clear') {
+        if (sid == null) {
+          toast('当前没有会话可清空')
+          return
+        }
+        await window.api.aiSession.clear(sid)
+        setMessages([])
+        toast('已清空当前会话（上下文与记录一并清除）')
+        return
+      }
+      if (sid == null) {
+        toast('当前没有会话可压缩')
+        return
+      }
+      sendingRef.current = true
+      setSending(true)
+      try {
+        const ns = await window.api.aiSession.compact(sid)
+        await persistActive(ns.id, activeChannelRef.current)
+        activeIdRef.current = ns.id
+        setActiveId(ns.id)
+        await loadSessions(activeChannelRef.current)
+        await loadMessages(ns.id)
+        toast('已压缩为前情摘要（原会话保留在列表）')
+      } catch (e) {
+        toast(`压缩失败：${String((e as Error).message).slice(0, 80)}`)
+      } finally {
+        sendingRef.current = false
+        setSending(false)
+      }
+      return
+    }
     sendingRef.current = true
     setSending(true)
     const channel = activeChannelRef.current
@@ -535,7 +572,7 @@ export default function AiSidebar(props: AiSidebarProps) {
       <div className="ai-input-row">
         <textarea
           className="ai-input"
-          placeholder={`问 AI（${channelLabel}｜${moduleLabel(currentModule)}）`}
+          placeholder={`问 AI（${channelLabel}｜${moduleLabel(currentModule)}；/clear 清空会话，/compact 压缩上下文）`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

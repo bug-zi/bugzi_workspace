@@ -86,6 +86,41 @@ export function editAiMessage(id: number, content: string): void {
   getDb().prepare('UPDATE ai_messages SET content = ? WHERE id = ?').run(content, id)
 }
 
+/** /clear（优化建议区第14轮修订）：清空当前会话全部消息——上下文与存储一并清零，会话本身保留（标题不动） */
+export function clearAiSession(sessionId: number): void {
+  getDb().prepare('DELETE FROM ai_messages WHERE session_id = ?').run(sessionId)
+}
+
+/** /compact（优化建议区第14轮）：把会话历史压成「前情摘要」另存新会话（原会话保留），返回新会话 */
+export async function compactAiSession(sessionId: number): Promise<AiSession> {
+  const d = getDb()
+  const s = d
+    .prepare('SELECT id, title, channel FROM ai_sessions WHERE id = ?')
+    .get(sessionId) as { id: number; title: string; channel: string } | undefined
+  if (!s) throw new Error('NOT_FOUND')
+  const history = listAiMessages(sessionId).filter((m) => m.role !== 'system')
+  if (history.length === 0) throw new Error('会话为空，无需压缩')
+  const transcript = history
+    .map((m) => `${m.role === 'user' ? '我' : 'AI'}：${m.content.replace(/<<<[^>]*>>>/g, '').trim()}`)
+    .join('\n\n')
+    .slice(0, 8000)
+  const res = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `请把以下对话历史压缩成一份简明摘要（保留关键事实、结论、待办与用户个人信息，500 字以内），直接输出摘要正文，不要任何前缀：\n\n${transcript}`
+      }
+    ],
+    temperature: 0.3
+  })
+  const summary = res.content.trim()
+  if (!summary) throw new Error('LLM 未返回内容')
+  const ns = createAiSession(`${s.title} · 压缩`, (s.channel as AiChannel) ?? 'assistant')
+  // 摘要作为新会话首条消息落库：后续对话上下文 = 摘要 + 新消息（旧会话原样保留在列表）
+  appendAiMessage('user', `【前情摘要】（由 /compact 生成，此前对话已压缩）\n${summary}`, null, ns.id)
+  return ns
+}
+
 export function appendAiMessage(
   role: AiMessage['role'],
   content: string,
@@ -155,17 +190,83 @@ const CHANNEL_PERSONAS: Record<AiChannel, string> = {
 
 /** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
 const PROFILE_SUGGEST_INSTRUCTION =
-  '当你从对话中识别到关于用户本人的稳定信息（专业背景、学习方向、职业规划、偏好习惯、价值观、人生观等，且下方画像尚未覆盖）时，在回复的最末尾另起一行输出标记：<<<PROFILE_SUGGEST:类别|内容>>>（类别从 专业背景/学习方向/职业规划/偏好习惯/价值观/其他 中选择，内容一句话概括）；没有可补充的就绝不输出该标记。'
+  '当你从对话中识别到关于用户本人的稳定信息（专业背景、学习方向、职业规划、偏好习惯、价值观、人生观等，且下方画像索引尚未覆盖）时，在回复的最末尾另起一行输出标记：<<<PROFILE_SUGGEST:类别|内容>>>（类别从 专业背景/学习方向/职业规划/偏好习惯/价值观/其他 中选择，内容一句话概括）；没有可补充的就绝不输出该标记。'
 
-/** 我的画像注入块（全部 AI 功能共用，DB v9；空画像返回 ''） */
-export function profileBlock(): string {
-  const rows = getDb()
+/** 画像检索协议标记（优化建议区第13轮「记忆化」）：AI 需要时输出 <<<PROFILE_LOOKUP:关键词>>> 索取详情 */
+const PROFILE_LOOKUP_RE = /^<<<PROFILE_LOOKUP:([^>]+?)>>>\s*$/m
+
+/** 画像检索指令（边栏对话）：只带索引，详情按需索取——避免全量注入干扰注意力 */
+const PROFILE_LOOKUP_INSTRUCTION =
+  '你对用户本人有一份画像索引（见下）。当且仅当需要了解更多用户信息才能更好地完成任务时，先在回复中单独一行输出检索标记：<<<PROFILE_LOOKUP:关键词>>>（如 <<<PROFILE_LOOKUP:学习方向>>>），系统会把画像中相关条目提供给你，你再继续完成回答；不需要时直接作答，绝不输出该标记。'
+
+/** 画像条目压成单行摘要（截断 maxChars，防长条目撑爆上下文） */
+function factLine(category: string, content: string, maxChars: number): string {
+  const oneLine = content.replace(/\s+/g, ' ').trim()
+  const c = oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine
+  return `- ${category}：${c}`
+}
+
+function profileRows(): { category: string; content: string }[] {
+  return getDb()
     .prepare('SELECT category, content FROM profile_facts ORDER BY id')
     .all() as { category: string; content: string }[]
+}
+
+/** 画像压缩摘要（生成类功能注入用，优化建议区第13轮：不整篇全文，每条截断 60 字控上下文长度） */
+export function profileDigest(): string {
+  const rows = profileRows()
   if (rows.length === 0) return ''
-  return `## 我的画像（用户本人，供你了解 TA 是谁）\n${rows
-    .map((r) => `- ${r.category}：${r.content}`)
+  return `## 用户画像（了解用户是谁，生成时参考）\n${rows
+    .map((r) => factLine(r.category, r.content, 60))
     .join('\n')}`
+}
+
+/** 画像索引（边栏对话 system prompt 记忆化用：只带类别 + 24 字摘要，详情走 PROFILE_LOOKUP 按需检索） */
+export function profileIndex(): string {
+  const rows = profileRows()
+  if (rows.length === 0) return ''
+  return `## 用户画像索引（你记住的关于用户的信息概要，详情可检索）\n${rows
+    .map((r) => factLine(r.category, r.content, 24))
+    .join('\n')}`
+}
+
+/** 画像检索（PROFILE_LOOKUP 协议）：类别或内容命中关键词（或关键词包含类别名）→ 完整条目 */
+export function lookupProfileFacts(keyword: string): string[] {
+  const kw = keyword.trim()
+  if (!kw) return []
+  return profileRows()
+    .filter(
+      (r) =>
+        r.category.includes(kw) || r.content.includes(kw) || (kw.length >= 2 && kw.includes(r.category))
+    )
+    .map((r) => `- ${r.category}：${r.content.replace(/\s+/g, ' ').trim()}`)
+}
+
+/**
+ * 记忆化补全（优化建议区第13轮）：首轮回复若带 <<<PROFILE_LOOKUP:关键词>>> 检索标记，
+ * 注入画像命中条目后再答一轮（最多补一轮），最终输出剥除标记。仅用于边栏对话。
+ */
+async function chatWithProfileLookup(req: {
+  messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
+  temperature: number
+}): Promise<{ content: string }> {
+  const first = await chatCompletion(req)
+  const m = first.content.match(PROFILE_LOOKUP_RE)
+  if (!m) return first
+  const kw = m[1].trim()
+  const hits = lookupProfileFacts(kw)
+  const feedback = hits.length
+    ? `【用户画像检索结果（关键词：${kw}）】\n${hits.join('\n')}\n\n请结合以上信息继续完成你的回答。`
+    : `【用户画像检索结果（关键词：${kw}）】画像中没有相关条目，请基于已有信息直接作答，不要再输出检索标记。`
+  const second = await chatCompletion({
+    ...req,
+    messages: [
+      ...req.messages,
+      { role: 'assistant', content: first.content.replace(PROFILE_LOOKUP_RE, '').trim() },
+      { role: 'user', content: feedback }
+    ]
+  })
+  return { content: second.content.replace(PROFILE_LOOKUP_RE, '').trim() }
 }
 
 /** AI 边栏对话（频道制）：会话内历史 + 频道人设 + 我的画像 + 模块感知 system prompt */
@@ -188,11 +289,13 @@ export async function aiChat(
     CHANNEL_PERSONAS[channel] ?? CHANNEL_PERSONAS.assistant,
     '回答使用简体中文，简洁友好。',
     PROFILE_SUGGEST_INSTRUCTION,
-    profileBlock()
+    PROFILE_LOOKUP_INSTRUCTION,
+    profileIndex()
   ]
     .filter(Boolean)
     .join('\n')
-  const res = await chatCompletion({
+  // 记忆化（优化建议区第13轮）：画像只带索引，AI 需要时经 PROFILE_LOOKUP 检索详情
+  const res = await chatWithProfileLookup({
     messages: [{ role: 'system', content: system }, ...history],
     temperature: 0.8
   })
@@ -256,7 +359,7 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const avoidList = existingRows.length
     ? existingRows.map((r) => `- ${r.content}`).join('\n')
     : '（暂无）'
-  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
@@ -373,7 +476,7 @@ export async function generateInspirations(): Promise<GenerateInspirationsResult
     .prepare('SELECT title FROM inspirations ORDER BY updated_at DESC LIMIT 500')
     .all() as { title: string }[]
   const avoidList = existingRows.length ? existingRows.map((r) => `- ${r.title}`).join('\n') : '（暂无）'
-  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
@@ -425,7 +528,7 @@ export async function refineInspiration(id: number): Promise<string> {
     | undefined
   if (!row) throw new Error('NOT_FOUND')
   const body = inspirationBody(row.md_path, 4000, false) || '（正文暂空）'
-  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
   const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   if (!md) throw new Error('LLM 未返回内容')
@@ -490,7 +593,7 @@ export async function generateWikiCard(term: string | null, sectionId: number | 
     .prepare('SELECT id FROM wiki_entries WHERE term = ? AND deleted_at IS NULL')
     .get(term)
   if (dup) throw new Error('CONFLICT:' + term)
-  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
   const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   // 一句话定义提取（模板第一个 ## 段）
@@ -578,7 +681,7 @@ export async function generateWikiQuiz(): Promise<WikiQuizQuestion[]> {
     cards.push(`【词条：${r.term}】\n${md.slice(0, 1200)}`)
   }
   if (cards.length === 0) throw new Error('卡片内容读取失败')
-  const prompt = `${profileBlock()}${profileBlock() ? '\n\n' : ''}以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
@@ -644,7 +747,8 @@ export async function runVerification(
     messages: [
       {
         role: 'user',
-        content: `${profileBlock()}${profileBlock() ? '\n\n' : ''}观点：「${claim}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料验证该观点。先输出验证分析（引用资料说明依据），然后单独一行输出可信度百分比（0-100 的整数），格式严格为：可信度：N%\n\n分析正文使用 Markdown，若引用了具体来源请在分析中以 Markdown 链接列出。`
+        // 辩真验证不注入画像（优化建议区第13轮）：观点核查与用户画像无关，注入反干扰注意力
+        content: `观点：「${claim}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料验证该观点。先输出验证分析（引用资料说明依据），然后单独一行输出可信度百分比（0-100 的整数），格式严格为：可信度：N%\n\n分析正文使用 Markdown，若引用了具体来源请在分析中以 Markdown 链接列出。`
       }
     ],
     temperature: 0.3

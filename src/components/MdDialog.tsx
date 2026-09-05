@@ -1,5 +1,6 @@
 // 全局 md 弹窗组件（样式 specs §5）：默认渲染态，双击编辑，退出保存
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { renderMd } from './MdView'
 import './MdDialog.css'
 
@@ -41,10 +42,12 @@ export interface MdDialogProps {
   }
   /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
   autoEdit?: boolean
+  /** 右侧内嵌栏（致知己追问，优化建议区第13轮）：传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
+  sidePanel?: ReactNode
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, autoEdit } = props
+  const { open, title, subtitle, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, autoEdit, sidePanel } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -208,7 +211,7 @@ export default function MdDialog(props: MdDialogProps) {
         }
       }}
     >
-      <div className={`dialog md-dialog${editing ? ' editing' : ''}`}>
+      <div className={`dialog md-dialog${editing ? ' editing' : ''}${sidePanel ? ' has-side' : ''}`}>
         <div className="dialog-header">
           <div className="dialog-title-wrap">
             {onTitleChange ? (
@@ -292,23 +295,27 @@ export default function MdDialog(props: MdDialogProps) {
             </button>
           </div>
         )}
-        <div className="dialog-body" onDoubleClick={() => !editing && startEditing()}>
-          {loading ? (
-            <div>加载中…</div>
-          ) : editing ? (
-            <textarea
-              className="editor"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') void saveAndExit()
-              }}
-              autoFocus
-              spellCheck={false}
-            />
-          ) : (
-            <div className="md-view" ref={bodyRef} />
-          )}
+        {/* 正文区 + 右侧内嵌栏（优化建议区第13轮）：sidePanel 存在时双栏并排，交互不出弹窗 */}
+        <div className="dialog-split">
+          <div className="dialog-body" onDoubleClick={() => !editing && startEditing()}>
+            {loading ? (
+              <div>加载中…</div>
+            ) : editing ? (
+              <textarea
+                className="editor"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') void saveAndExit()
+                }}
+                autoFocus
+                spellCheck={false}
+              />
+            ) : (
+              <div className="md-view" ref={bodyRef} />
+            )}
+          </div>
+          {sidePanel && <aside className="dialog-side">{sidePanel}</aside>}
         </div>
         {/* 生成审核三选（优化建议区）：加入=关闭并保留，丢弃/直接删除由调用方确认后执行 */}
         {review && !editing && (
