@@ -338,7 +338,7 @@ export default function MottosModule(props: MottosModuleProps) {
       {
         key: 'copy',
         icon: 'content_copy',
-        label: '复制格言+出处',
+        label: '复制',
         onClick: () => void copyMotto(m)
       }
     )
@@ -359,7 +359,8 @@ export default function MottosModule(props: MottosModuleProps) {
     } else {
       items.push({
         key: 'note',
-        icon: 'notebook',
+        // notebook 连字在本地图标字体（material-symbols 0.47）中缺失，渲染成 note+book 两个图标 → 换 description
+        icon: 'description',
         label: '查看笔记',
         onClick: () => setViewId(m.id)
       })

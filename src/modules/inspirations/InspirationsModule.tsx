@@ -51,13 +51,13 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const load = useCallback(async () => {
     const rows = await window.api.inspirations.list()
     setItems(rows)
-    // 批量读 md 正文做预览：剥离标题行、压平空白取前 100 字（读取失败静默为空）
+    // 批量读 md 正文做预览：压平空白取前 100 字（读取失败静默为空；v11 起正文不含标题行）
     const entries = await Promise.all(
       rows.map(async (it) => {
         let body = ''
         try {
           const raw = await window.api.md.read(it.md_path)
-          body = raw.replace(/^#\s.*\n?/, '').replace(/\s+/g, ' ').trim().slice(0, 100)
+          body = raw.replace(/\s+/g, ' ').trim().slice(0, 100)
         } catch {
           /* 无正文则不显示预览 */
         }
@@ -235,7 +235,7 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
     let prefill = `请围绕我的项目灵感「${item.title}」帮我头脑风暴：`
     try {
       const raw = await window.api.md.read(item.md_path)
-      const body = raw.replace(/^#\s.*\n?/, '').replace(/\s+/g, ' ').trim().slice(0, 300)
+      const body = raw.replace(/\s+/g, ' ').trim().slice(0, 300)
       if (body) prefill += body
     } catch {
       /* 正文读取失败仅用标题 */

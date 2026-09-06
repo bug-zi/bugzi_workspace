@@ -422,7 +422,8 @@ export function registerIpc(): void {
     const id = Number(r.lastInsertRowid)
     const mdPath = `md/inspirations/${id}.md`
     d.prepare('UPDATE inspirations SET md_path = ? WHERE id = ?').run(mdPath, id)
-    mdCreate(mdPath, `# ${title}\n`)
+    // 正文不写标题行（优化建议区第19轮）：标题由弹窗标题区展示，正文从空白开始
+    mdCreate(mdPath, '')
     return id
   })
   ipcMain.handle('inspirations:updateTitle', (_e, id: number, title: string) => {

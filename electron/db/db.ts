@@ -333,6 +333,20 @@ function migrate(): void {
     )
     d.exec('PRAGMA user_version = 10')
   }
+
+  if (version < 11) {
+    // v11：灵感文档正文去重（优化建议区第19轮）。标题由弹窗标题区展示，新建/AI 生成的
+    // 正文不再写 `# 标题` 行；存量文档剥离首行旧模板标题（仅与现库标题精确匹配才剥——
+    // 改过名的文档首行是旧标题、用户自写的 # 开头正文均不匹配，不动以免误删，可手动删）。
+    // 不过滤 deleted_at：回收站软删条的文档同样剥离，恢复后不重现旧头（口径同 v8 格言笔记）。
+    const rows = d
+      .prepare(
+        "SELECT title, md_path FROM inspirations WHERE md_path IS NOT NULL AND md_path != 'PENDING'"
+      )
+      .all() as { title: string; md_path: string }[]
+    for (const r of rows) stripInspirationTitleHeader(r.md_path, r.title)
+    d.exec('PRAGMA user_version = 11')
+  }
 }
 
 // ---------- 通用工具 ----------
@@ -375,6 +389,23 @@ export function stripMottoNoteHeader(relPath: string, content: string, source: s
   }
   if (rest === null) return
   writeFileSync(join(userDataDir(), relPath), rest.replace(/^\n+/, ''), 'utf-8')
+}
+
+/**
+ * 剥离灵感文档的旧模板标题行（v11 起：标题由弹窗标题区展示，正文不再重复）。
+ * 旧模板首行：`# {标题}`。仅当首行与现库标题精确匹配时剥离（用户自写 # 开头正文、
+ * 改名后残留的旧标题行均不匹配——不动，避免误删正文），剥后清掉残留的行首空行。
+ */
+export function stripInspirationTitleHeader(relPath: string, title: string): void {
+  let c: string
+  try {
+    c = readFileSync(join(userDataDir(), relPath), 'utf-8')
+  } catch {
+    return // 文档缺失等，跳过（不阻断迁移）
+  }
+  const header = `# ${title}\n`
+  if (!c.startsWith(header)) return
+  writeFileSync(join(userDataDir(), relPath), c.slice(header.length).replace(/^\n+/, ''), 'utf-8')
 }
 
 /** 规范化文本：去首尾空白 + 中英文标点统一（格言查重等） */

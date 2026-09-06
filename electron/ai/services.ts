@@ -440,7 +440,7 @@ function parseInspirationArray(raw: string): { title: string; summary: string }[
   return out
 }
 
-/** 读灵感 md 正文（跳过首行 `# 标题`；读失败返回空串），截 maxLen 字；flatten 时压缩空白（画像单行场景） */
+/** 读灵感 md 正文（v11 起正文不含标题行；读失败返回空串），截 maxLen 字；flatten 时压缩空白（画像单行场景） */
 function inspirationBody(mdPath: string, maxLen: number, flatten: boolean): string {
   let raw: string
   try {
@@ -448,7 +448,7 @@ function inspirationBody(mdPath: string, maxLen: number, flatten: boolean): stri
   } catch {
     return ''
   }
-  const body = raw.replace(/^#\s.*\n?/, '').trim()
+  const body = raw.trim()
   return (flatten ? body.replace(/\s+/g, ' ') : body).slice(0, maxLen).trim()
 }
 
@@ -634,7 +634,8 @@ ${list.map((c, i) => `${i + 1}. ${c.title}：${c.summary}`).join('\n')}
     const id = Number(r.lastInsertRowid)
     const mdPath = `md/inspirations/${id}.md`
     d.prepare('UPDATE inspirations SET md_path = ? WHERE id = ?').run(mdPath, id)
-    mdCreate(mdPath, `# ${it.title}\n\n${it.summary}\n`)
+    // 正文不写标题行（优化建议区第19轮）：标题由弹窗标题区展示，正文直接从简介开始
+    mdCreate(mdPath, `${it.summary}\n`)
     inserted++
   }
   return { generated: items.length, inserted }
