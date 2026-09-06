@@ -41,7 +41,9 @@ export const SettingsKeys = {
   AiWidth: 'ai_width',
   // 致知己弹窗内嵌追问栏（优化建议区第14轮）：宽度与收起态
   ZjPanelWidth: 'zj_panel_width',
-  ZjPanelCollapsed: 'zj_panel_collapsed'
+  ZjPanelCollapsed: 'zj_panel_collapsed',
+  // 灵感方向指引（优化建议区第18轮）：JSON { pos, neg }，AI 生成灵感时置顶注入
+  InspirationGuide: 'inspiration_guide'
 } as const
 
 export type Theme = 'light' | 'dark'

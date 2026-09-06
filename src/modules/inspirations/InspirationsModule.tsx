@@ -2,6 +2,7 @@
 // v2.0（specs §6）：来5条灵感 / AI 完善（预览追加）/ 问 AI 预填边栏
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { InspirationRecord } from '../../renderer/api'
+import { SettingsKeys } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import MdView from '../../components/MdView'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -42,6 +43,10 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const [refining, setRefining] = useState(false)
   // 正文预览（优化建议区：卡片显示 md 正文前 100 字，看全灵感内容；手动条正文为空不显示）
   const [previews, setPreviews] = useState<Record<number, string>>({})
+  // 灵感方向指引（优化建议区第18轮）：手动「想要/不想要」，AI 生成时置顶注入
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [guidePos, setGuidePos] = useState('')
+  const [guideNeg, setGuideNeg] = useState('')
 
   const load = useCallback(async () => {
     const rows = await window.api.inspirations.list()
@@ -150,6 +155,30 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
 
   // ---------- v2.0：AI 生成/完善/问 AI（specs §6） ----------
 
+  /** 打开方向指引弹窗：读 settings 回显（解析失败回退空） */
+  const openGuide = async (): Promise<void> => {
+    const raw = await window.api.settings.get(SettingsKeys.InspirationGuide)
+    let g: { pos?: string; neg?: string } = {}
+    try {
+      g = raw ? (JSON.parse(raw) as { pos?: string; neg?: string }) : {}
+    } catch {
+      /* 坏数据按空处理 */
+    }
+    setGuidePos(g.pos ?? '')
+    setGuideNeg(g.neg ?? '')
+    setGuideOpen(true)
+  }
+
+  /** 保存方向指引（JSON 落 settings；空白也落库——等于清空指引） */
+  const saveGuide = async (): Promise<void> => {
+    await window.api.settings.set(
+      SettingsKeys.InspirationGuide,
+      JSON.stringify({ pos: guidePos.trim(), neg: guideNeg.trim() })
+    )
+    setGuideOpen(false)
+    toast('已保存，下次生成生效')
+  }
+
   /** 「来5条灵感」：画像生成 5 条入草稿区；未配置弹「去配置」，其余失败弹框可重试 */
   const doGenerate = async (): Promise<void> => {
     if (generating) return
@@ -221,9 +250,16 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
         <span className="module-title">灵感泉</span>
         <span className="module-sub">想法流转：草稿 → 立项 → 开发 → 归档（可自由跨区拖拽）</span>
         <button
+          className="icon-btn"
+          title="灵感方向指引（想要/不想要）"
+          style={{ marginLeft: 'auto' }}
+          onClick={() => void openGuide()}
+        >
+          <span className="material-symbols-outlined">tune</span>
+        </button>
+        <button
           className="btn"
           disabled={generating}
-          style={{ marginLeft: 'auto' }}
           onClick={() => void doGenerate()}
         >
           {generating ? '生成中…' : '来5条灵感'}
@@ -335,6 +371,44 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
             : undefined
         }
       />
+
+      {/* 灵感方向指引（优化建议区第18轮）：手动「想要/不想要」，生成时最高优先级注入 */}
+      {guideOpen && (
+        <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setGuideOpen(false)}>
+          <div className="dialog" style={{ width: 480 }}>
+            <div className="dialog-header">灵感方向指引</div>
+            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <div className="module-sub" style={{ marginBottom: 4 }}>我感兴趣的方向（生成时优先靠拢）</div>
+                <textarea
+                  className="field"
+                  rows={3}
+                  value={guidePos}
+                  onChange={(e) => setGuidePos(e.target.value)}
+                  placeholder="例：想做能沉淀知识的工具；对人文社科的可视化感兴趣"
+                />
+              </div>
+              <div>
+                <div className="module-sub" style={{ marginBottom: 4 }}>不想要的方向（生成时严格避开）</div>
+                <textarea
+                  className="field"
+                  rows={3}
+                  value={guideNeg}
+                  onChange={(e) => setGuideNeg(e.target.value)}
+                  placeholder="例：不要打卡/记录类工具；不要 CRUD 后台"
+                />
+              </div>
+              <div className="module-sub">
+                留空则不注入。除手动指引外，debugzi 还会自动参考：我的画像、格言库正式区、万象库词条、手写的灵感。
+              </div>
+            </div>
+            <div className="dialog-footer">
+              <button className="btn" onClick={() => setGuideOpen(false)}>取消</button>
+              <button className="btn btn-primary" onClick={() => void saveGuide()}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 新建 */}
       {addingZone && (

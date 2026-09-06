@@ -452,51 +452,167 @@ function inspirationBody(mdPath: string, maxLen: number, flatten: boolean): stri
   return (flatten ? body.replace(/\s+/g, ' ') : body).slice(0, maxLen).trim()
 }
 
+/** 灵感方向指引（优化建议区第18轮）：用户手写的「想要/不想要」，生成时置顶注入（最高优先级） */
+function inspirationGuide(): { pos: string; neg: string } {
+  const g = getJsonSetting<{ pos?: string; neg?: string }>(SettingsKeys.InspirationGuide, {})
+  return { pos: (g.pos ?? '').trim(), neg: (g.neg ?? '').trim() }
+}
+
+/**
+ * 口味画像（优化建议区第18轮）：跨模块聚合「用户是谁」——画像 + 格言正式区（价值观）+ 万象词条（求知领域）+ 手写灵感（真实意图）。
+ * AI 生成的灵感不进画像（只进避免清单），打破「AI 吃自己输出」的同质化循环。
+ */
+function inspirationTasteProfile(): string {
+  const d = getDb()
+  const parts: string[] = []
+  // ① 个人中心-我的画像（60 字/条压缩摘要，同 profileDigest）
+  const digest = profileDigest()
+  if (digest) parts.push(digest)
+  // ② 格言正式区：只取用户精选转正的（真爱信号；AI 编撰转正的同样是用户的主动选择）
+  const mottos = d
+    .prepare(
+      "SELECT content, source FROM mottos WHERE deleted_at IS NULL AND status = 'formal' ORDER BY updated_at DESC LIMIT 30"
+    )
+    .all() as { content: string; source: string }[]
+  if (mottos.length) {
+    parts.push(
+      `## 我精选的格言（价值观与品味，领会气质而非照抄题材）\n${mottos
+        .map(
+          (m) =>
+            `- ${m.content.replace(/\s+/g, ' ').slice(0, 40)}${m.source ? ` —— ${m.source.slice(0, 20)}` : ''}`
+        )
+        .join('\n')}`
+    )
+  }
+  // ③ 万象库词条：按板块聚合（词条名即领域信号，不用正文）
+  const wiki = d
+    .prepare(
+      `SELECT s.name AS section, e.term FROM wiki_entries e
+       JOIN wiki_sections s ON e.section_id = s.id
+       WHERE e.deleted_at IS NULL ORDER BY e.updated_at DESC LIMIT 50`
+    )
+    .all() as { section: string; term: string }[]
+  if (wiki.length) {
+    const bySection = new Map<string, string[]>()
+    for (const w of wiki) {
+      const arr = bySection.get(w.section) ?? []
+      arr.push(w.term)
+      bySection.set(w.section, arr)
+    }
+    parts.push(
+      `## 我在学的知识词条（求知领域）\n${[...bySection.entries()]
+        .map(
+          ([s, terms]) =>
+            `- ${s}：${terms.slice(0, 10).join('、')}${terms.length > 10 ? ` 等 ${terms.length} 条` : ''}`
+        )
+        .join('\n')}`
+    )
+  }
+  // ④ 灵感泉手动条（当前可能为空，随使用增长）
+  const manual = d
+    .prepare(
+      "SELECT title FROM inspirations WHERE deleted_at IS NULL AND origin = 'manual' ORDER BY updated_at DESC LIMIT 30"
+    )
+    .all() as { title: string }[]
+  if (manual.length) {
+    parts.push(`## 我手写的灵感（真实意图）\n${manual.map((m) => `- ${m.title}`).join('\n')}`)
+  }
+  return parts.join('\n\n')
+}
+
 export interface GenerateInspirationsResult {
   generated: number
   inserted: number
 }
 
-/** 「来5条灵感」（specs §6.2）：已有灵感画像 → LLM 生成 5 条标题+简介 → 标题查重入草稿区（origin='ai'） */
+/**
+ * 「来5条灵感」（specs §6.2；优化建议区第18轮两阶段重构）：
+ * 阶段一发散——12 条粗点子（形态分散、禁模板句式）；阶段二自评——四维评审挑 5 条打磨简介。
+ * 口味注入：手动指引置顶 + 跨模块口味画像；AI 生成条只进避免清单。
+ */
 export async function generateInspirations(): Promise<GenerateInspirationsResult> {
   const d = getDb()
-  // 兴趣画像：全部未删除灵感（四区含归档），最近更新 50 条；正文截 100 字
-  const profileRows = d
-    .prepare(
-      'SELECT title, md_path FROM inspirations WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 50'
-    )
-    .all() as { title: string; md_path: string }[]
-  const profile = profileRows.length
-    ? profileRows
-        .map((r) => {
-          const body = inspirationBody(r.md_path, 100, true)
-          return body ? `- ${r.title}：${body}` : `- ${r.title}`
-        })
-        .join('\n')
-    : '（暂无已有灵感，可自由发散各类项目创意）'
   // 避免清单（specs §6.2）：全部标题（含回收站，不过滤 deleted_at），最多 500 条防 prompt 超长
   const existingRows = d
     .prepare('SELECT title FROM inspirations ORDER BY updated_at DESC LIMIT 500')
     .all() as { title: string }[]
   const avoidList = existingRows.length ? existingRows.map((r) => `- ${r.title}`).join('\n') : '（暂无）'
-  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的灵感泉里已有的项目灵感（兴趣画像）：\n${profile}\n\n以下清单里的方向请勿重复或高度雷同：\n${avoidList}\n\n请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：\n- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）\n- summary：一句话简介（≤50 字，说明这是什么、有什么价值）\n\n以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，不要输出其他任何内容。`
-  const res = await chatCompletion({
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.9,
-    jsonMode: true
-  })
-  let items: { title: string; summary: string }[]
-  try {
-    items = parseInspirationArray(res.content)
-  } catch {
-    // 解析失败自动重试一次（同 generateMottos）
-    const retry = await chatCompletion({
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.9,
+  // 口味材料：手动指引（置顶、最高优先级，留空不注入）+ 跨模块口味画像
+  const guide = inspirationGuide()
+  const guideBlock =
+    guide.pos || guide.neg
+      ? `## 我的方向指引（最高优先级，严格遵守）\n${guide.pos ? `我感兴趣的方向：${guide.pos}\n` : ''}${guide.neg ? `我明确不想要的方向：${guide.neg}` : ''}`
+      : ''
+  const tasteBlock =
+    inspirationTasteProfile() || '（暂无口味材料——可自由大胆发散，但依旧严格执行下方生成规则）'
+  const tasteWithGuide = `${guideBlock}${guideBlock ? '\n\n' : ''}${tasteBlock}`
+
+  // 阶段一：发散（temperature 高，出 12 条粗点子）
+  const divergePrompt = `你是一位挑剔的创意策展人，服务一位有独立品味的开发者。你的任务不是罗列平庸点子，而是提出让人看了想立刻动手的项目灵感。
+
+${tasteWithGuide}
+
+## 已有灵感清单（这些方向勿重复或高度雷同）
+${avoidList}
+
+## 生成规则（严格执行）
+1. 恰好生成 12 条项目灵感。
+2. 形态必须分散：至少覆盖 4 种不同的项目形态（实用工具 / 游戏与玩具 / 内容创作 / 数据可视化 / 实验探索 / 艺术表达 / 社群活动等）——严禁全部是「做一个工具/助手/平台」。
+3. 每条必须具体可执行：说得清第一步做什么（最小版本要动手做的事）。
+4. 禁止拼装式命名：「XX记录/追踪/打卡/复盘/管理 + 工具/助手/平台/工作台」这类句式模板一律不要。
+5. 禁止平庸：安全但无聊的清单/CRUD 类点子、口号式空话一律不要；宁可大胆、有趣、带点冒险。
+6. 与口味呼应：至少一半灵感能与口味材料（格言气质/求知领域/方向指引）看出真实连接，但严禁生搬硬套题材。
+7. title：10~25 字，具体、有画面感；summary：≤50 字，说清「这是什么 + 好玩/值得在哪」。
+
+以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 12 项，不要输出其他任何内容。`
+  const callDiverge = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: divergePrompt }],
+      temperature: 0.95,
       jsonMode: true
     })
-    items = parseInspirationArray(retry.content)
+  let candidates: { title: string; summary: string }[]
+  try {
+    candidates = parseInspirationArray((await callDiverge()).content)
+  } catch {
+    // 解析失败自动重试一次（同 generateMottos）；仍失败 → 抛出，整体不入库（specs §6.2）
+    candidates = parseInspirationArray((await callDiverge()).content)
   }
+
+  // 阶段二：自评筛选（temperature 低，评审收敛）
+  const reviewPrompt = (list: { title: string; summary: string }[]): string =>
+    `你是同一位创意策展人，现在进行内部审稿：从下面 ${list.length} 条候选项目灵感中选出恰好 5 条最好的。
+
+${tasteWithGuide}
+
+## 候选灵感
+${list.map((c, i) => `${i + 1}. ${c.title}：${c.summary}`).join('\n')}
+
+## 评审规则（严格执行）
+1. 心中按四维给每条打分（1~5）：新颖度、契合口味、具体度、兴奋度——分数不用输出，只用于取舍。
+2. 淘汰同质（多条同类只留最好一条）、平庸、空泛、与「不想要的方向」冲突的。
+3. 恰好选出 5 条；合格不足 5 条时从剩余中挑相对好的补足，并把 summary 打磨到位。
+4. 打磨每条 summary：≤60 字，必须包含一个具体的「第一步」抓手（例如先做出什么最小版本）。
+
+以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"..."}]}，inspirations 数组内恰好 5 项，title 沿用候选原文，不要输出其他任何内容。`
+  const callReview = (list: { title: string; summary: string }[]) =>
+    chatCompletion({
+      messages: [{ role: 'user', content: reviewPrompt(list) }],
+      temperature: 0.4,
+      jsonMode: true
+    })
+  let items: { title: string; summary: string }[]
+  try {
+    items = parseInspirationArray((await callReview(candidates)).content)
+  } catch {
+    try {
+      items = parseInspirationArray((await callReview(candidates)).content)
+    } catch {
+      // 自评两趟均失败 → 回退取发散阶段前 5 条，不空手而归（优化建议区第18轮降级路径）
+      items = candidates.slice(0, 5)
+    }
+  }
+
   // 入库：标题精确查重（含回收站 + 批内互斥）→ 插草稿区末尾（specs §6.2，与 moveTo 区末尾语义一致）
   const titles = new Set(existingRows.map((r) => r.title.trim()))
   let tailSort = (
