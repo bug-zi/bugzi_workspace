@@ -15,7 +15,7 @@ export interface MottoRecord {
   sort: number
   /** 标签（DB v5，JSON 列解析而来；可能为空数组） */
   tags: string[]
-  /** 生成类型（DB v6）：excerpt=现实摘录 | composed=AI 编撰 | null=手动录入/未知 */
+  /** 生成类型（DB v6）：excerpt=现实摘录 | composed=AI 编撰（DB v10 起出处署名 debugzi） | null=手动录入/未知 */
   gen_kind: 'excerpt' | 'composed' | null
   created_at: string
   updated_at: string

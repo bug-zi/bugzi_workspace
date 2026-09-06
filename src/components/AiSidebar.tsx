@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AiChannel, AiMessageRow, AiSessionRow } from '../renderer/api'
-import { SettingsKeys } from '../shared/types'
+import { AI_NAME, SettingsKeys } from '../shared/types'
 import ConfirmDialog from './ConfirmDialog'
 import MdView from './MdView'
 import { useToast } from './Toast'
@@ -20,7 +20,7 @@ export interface AiSidebarProps {
   onNavigateToProfile: () => void
 }
 
-const ROLE_LABEL: Record<string, string> = { user: '我', assistant: 'AI', system: '系统' }
+const ROLE_LABEL: Record<string, string> = { user: '我', assistant: AI_NAME, system: '系统' }
 
 /** 频道清单（DB v9 频道制，致知己 specs §4）：外壳不变，内部按场景分频道 */
 const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
@@ -89,6 +89,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   const [needConfig, setNeedConfig] = useState(false)
   const [aiWidth, setAiWidth] = useState(AI_WIDTH_DEFAULT)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const activeIdRef = useRef<number | null>(null)
   activeIdRef.current = activeId
   const activeChannelRef = useRef<AiChannel>('assistant')
@@ -176,6 +177,26 @@ export default function AiSidebar(props: AiSidebarProps) {
     }
     el.scrollTop = el.scrollHeight
   }, [messages, sending])
+
+  /** 输入框高度自适应（优化建议区第17轮）：先还原 auto 测出内容真实高度再显式设高；
+   *  基准仍为 rows=2，输入增多随之长高看全内容，超过 CSS max-height（30vh）后内部滚动 */
+  const fitInput = (): void => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
+  // 输入或边栏宽度变化（折行数变化）→ 重算输入框高度
+  useEffect(() => {
+    fitInput()
+  }, [input, aiWidth])
+
+  // 窗口尺寸变化 → 折行与 30vh 上限随之变化，同步重算
+  useEffect(() => {
+    window.addEventListener('resize', fitInput)
+    return () => window.removeEventListener('resize', fitInput)
+  }, [])
 
   /** 切换频道：持久化 + 载入该频道会话与消息 */
   const switchChannel = async (id: AiChannel): Promise<void> => {
@@ -401,7 +422,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   if (collapsed) {
     return (
       <aside className="ai-sidebar collapsed">
-        <button className="ai-toggle" onClick={onToggle} title="展开 AI 助手">
+        <button className="ai-toggle" onClick={onToggle} title={`展开 ${AI_NAME}`}>
           <span className="material-symbols-outlined">forum</span>
         </button>
       </aside>
@@ -415,7 +436,7 @@ export default function AiSidebar(props: AiSidebarProps) {
       <div className="ai-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
       <div className="ai-header">
         <span className="material-symbols-outlined">forum</span>
-        <span className="ai-title">AI 助手</span>
+        <span className="ai-title">{AI_NAME}</span>
         <button className="btn btn-ghost" onClick={() => setPanelOpen((v) => !v)} title="会话列表">
           <span className="material-symbols-outlined">list</span>
         </button>
@@ -535,7 +556,7 @@ export default function AiSidebar(props: AiSidebarProps) {
                     <MdView md={body} className="ai-msg-content" />
                     {suggest && (
                       <div className="ai-profile-card">
-                        <div className="ai-profile-tip">AI 想把这条加入「我的画像」</div>
+                        <div className="ai-profile-tip">{AI_NAME} 想把这条加入「我的画像」</div>
                         <div className="ai-profile-line">
                           {suggest.category}：{suggest.content}
                         </div>
@@ -559,7 +580,7 @@ export default function AiSidebar(props: AiSidebarProps) {
               </div>
             )
           })}
-          {sending && <div className="ai-msg assistant"><div className="ai-msg-role">AI</div><div className="ai-msg-content">思考中…</div></div>}
+          {sending && <div className="ai-msg assistant"><div className="ai-msg-role">{AI_NAME}</div><div className="ai-msg-content">思考中…</div></div>}
         </div>
       </div>
       {needConfig && (
@@ -573,8 +594,9 @@ export default function AiSidebar(props: AiSidebarProps) {
       )}
       <div className="ai-input-row">
         <textarea
+          ref={inputRef}
           className="ai-input"
-          placeholder={`问 AI（${channelLabel}｜${moduleLabel(currentModule)}；/clear 清空会话，/compact 压缩上下文）`}
+          placeholder={`问 ${AI_NAME}（${channelLabel}｜${moduleLabel(currentModule)}）`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

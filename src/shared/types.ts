@@ -13,6 +13,9 @@ export type ModuleId =
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 
+// AI 助手名字（优化建议区：起名 debugzi，与用户 bugzi 配对）：主进程 prompt 与渲染层文案共用
+export const AI_NAME = 'debugzi'
+
 // settings 表 key 常量
 export const SettingsKeys = {
   UserName: 'user_name',

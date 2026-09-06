@@ -1,7 +1,7 @@
 // 首次启动引导（个人中心 specs §4）：三步，第 1、2 步可跳过
 import { useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
-import { SettingsKeys } from '../../shared/types'
+import { AI_NAME, SettingsKeys } from '../../shared/types'
 
 export interface WelcomeGuideProps {
   open: boolean
@@ -91,7 +91,7 @@ export default function WelcomeGuide(props: WelcomeGuideProps) {
             <div className="welcome-step">
               <span className="material-symbols-outlined" style={{ fontSize: 44 }}>smart_toy</span>
               <div style={{ lineHeight: 1.8 }}>
-                建议先去个人中心配置 LLM，以启用 AI 功能
+                建议先去个人中心配置 LLM，让 {AI_NAME} 上线陪你开工
                 <br />
                 <span className="module-sub">（格言生成、知识卡片、AI 对话、辩真验证）</span>
               </div>

@@ -317,6 +317,9 @@
 .zj-chat-input textarea {
   flex: 1;
   resize: none;
+  /* 高度自适应上限（同全局边栏第17轮）：JS 设高随内容增长，超过视口 30% 后内部滚动 */
+  max-height: 30vh;
+  overflow-y: auto;
   padding: 6px 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);

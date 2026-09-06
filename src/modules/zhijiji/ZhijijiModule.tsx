@@ -89,6 +89,7 @@ function ZhijijiChat(props: {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const sidRef = useRef<number | null>(null)
   const sendingRef = useRef(false)
 
@@ -116,6 +117,19 @@ function ZhijijiChat(props: {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, sending])
+
+  /** 输入框高度自适应（同全局边栏第17轮）：基准两行随内容长高，超过 CSS max-height（30vh）后内部滚动 */
+  const fitInput = (): void => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
+  // 输入或追问栏宽度变化（折行数变化）→ 重算输入框高度
+  useEffect(() => {
+    fitInput()
+  }, [input, width])
 
   /** 切换会话（同频道内），并设为频道激活（全局边栏与追问栏保持一致） */
   const switchSession = async (id: number): Promise<void> => {
@@ -365,7 +379,8 @@ function ZhijijiChat(props: {
       </div>
       <div className="zj-chat-input">
         <textarea
-          placeholder={'回应追问…（/clear 清空会话，/compact 压缩上下文）'}
+          ref={inputRef}
+          placeholder={'回应追问…'}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

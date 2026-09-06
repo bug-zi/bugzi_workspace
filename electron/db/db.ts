@@ -323,6 +323,16 @@ function migrate(): void {
     }
     d.exec('PRAGMA user_version = 9')
   }
+
+  if (version < 10) {
+    // v10：AI 编撰条出处署名改名（优化建议区第16轮续——AI 起名 debugzi）：
+    // 「AI 编撰」→「debugzi」。不过滤 deleted_at（回收站软删行同步改，恢复路径覆盖）；
+    // 限定 origin='ai' 防误伤手动条；LIKE 口径同 v6 回填（覆盖无空格/大小写变体）。
+    d.exec(
+      "UPDATE mottos SET source = 'debugzi' WHERE origin = 'ai' AND source LIKE '%AI%编撰%'"
+    )
+    d.exec('PRAGMA user_version = 10')
+  }
 }
 
 // ---------- 通用工具 ----------

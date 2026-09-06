@@ -3,7 +3,7 @@ import { getDb, nowIso, normalizeText, isDupMotto } from '../db/db'
 import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
-import { SettingsKeys } from '../../src/shared/types'
+import { AI_NAME, SettingsKeys } from '../../src/shared/types'
 import type { AiChannel, AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
 
 // ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
@@ -288,7 +288,7 @@ export async function aiChat(
     .map((m) => ({ role: m.role, content: m.content }) as { role: 'user' | 'assistant'; content: string })
   const moduleLabel = MODULE_LABELS[currentModule] ?? currentModule
   const system = [
-    `你是「bug子的workspace」个人工作台的 AI 助手。用户当前所在模块：${moduleLabel}。`,
+    `你是 bugzi 的个人工作台「bug子的workspace」的 AI 助手，名叫 ${AI_NAME}。对话中提到自己时自称 ${AI_NAME}。用户当前所在模块：${moduleLabel}。`,
     CHANNEL_PERSONAS[channel] ?? CHANNEL_PERSONAS.assistant,
     '回答使用简体中文，简洁友好。',
     PROFILE_SUGGEST_INSTRUCTION,
@@ -340,10 +340,10 @@ export interface GenerateMottosResult {
   composedInserted: number
 }
 
-/** kind 缺失/非法时按出处含「AI 编撰」推断（v2.0 §7.3 解析容错） */
+/** kind 缺失/非法时按出处推断（v2.0 §7.3 解析容错）：编撰条 v10 起署名 debugzi，旧格式「AI 编撰」仍兼容 */
 function mottoKind(kind: string | undefined, source: string): 'excerpt' | 'composed' {
   if (kind === 'excerpt' || kind === 'composed') return kind
-  return /ai\s*编撰/i.test(source) ? 'composed' : 'excerpt'
+  return /(?:ai\s*编撰|debugzi)/i.test(source) ? 'composed' : 'excerpt'
 }
 
 /** 「来10条格言」（v2.0：5 摘录 + 5 编撰）：正式区风格样本 → LLM 生成 → 增强查重入库草稿区 */
@@ -362,7 +362,7 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const avoidList = existingRows.length
     ? existingRows.map((r) => `- ${r.content}`).join('\n')
     : '（暂无）'
-  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「AI 编撰」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「debugzi」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,

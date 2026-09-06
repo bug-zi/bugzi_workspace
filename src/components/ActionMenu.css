@@ -16,6 +16,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 整行可点（优化建议区第17轮）：button 默认随内容收缩，拉满菜单行宽，空白处也可点击 */
+  width: 100%;
   padding: 6px 10px;
   border: none;
   background: transparent;

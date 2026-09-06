@@ -311,7 +311,7 @@ export default function MottosModule(props: MottosModuleProps) {
     const items: ActionMenuItem[] = [
       { key: 'interpret', icon: 'psychology', label: 'AI 解读', onClick: () => interpretMotto(m) }
     ]
-    // 编辑：正式区全量；草稿/沉淀区仅 AI 编撰条（判定与 AI 徽章一致）
+    // 编辑：正式区全量；草稿/沉淀区仅 AI 编撰条（出处署名 debugzi，判定与 AI 徽章一致）
     if (m.status === 'formal' || (m.origin === 'ai' && m.gen_kind !== 'excerpt')) {
       items.push({
         key: 'edit',
@@ -712,7 +712,7 @@ export default function MottosModule(props: MottosModuleProps) {
                 className="field"
                 value={editSource}
                 onChange={(e) => setEditSource(e.target.value)}
-                placeholder="出处（书名/作者/AI 编撰）"
+                placeholder="出处（书名/作者/debugzi）"
               />
               <input
                 className="field"
