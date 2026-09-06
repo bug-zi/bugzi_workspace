@@ -4,23 +4,35 @@ import { mdDelete } from './files'
 
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 
-export type RecycleSource = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
+export type RecycleSource =
+  | 'mottos'
+  | 'wiki'
+  | 'inspirations'
+  | 'verify'
+  | 'zhijiji'
+  | 'reasoning_soup'
+  | 'reasoning_game'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
   wiki: 'wiki_entries',
   inspirations: 'inspirations',
   verify: 'verify_records',
-  zhijiji: 'zhijiji_questions'
+  zhijiji: 'zhijiji_questions',
+  reasoning_soup: 'turtle_soups',
+  reasoning_game: 'turtle_games'
 }
 
-// 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md，hardDelete 特判处理）
+// 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
+// 一局一 md + 多消息行，hardDelete 特判处理）
 const MD_FIELDS: Record<RecycleSource, string | null> = {
   mottos: 'note_path',
   wiki: 'md_path',
   inspirations: 'md_path',
   verify: 'md_path',
-  zhijiji: null
+  zhijiji: null,
+  reasoning_soup: null,
+  reasoning_game: 'md_path'
 }
 
 export interface RecycleRow {
@@ -84,6 +96,11 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
         rb.item_id
       )
       break
+    case 'reasoning_soup':
+    case 'reasoning_game':
+      // 回推理角原列表：仅清标记（汤回汤库、对局记录回记录列表；汤状态与局状态不变）
+      d.prepare(`UPDATE ${TABLES[rb.source]} SET deleted_at = NULL WHERE id = ?`).run(rb.item_id)
+      break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
   return { source: rb.source, item_id: rb.item_id }
@@ -119,6 +136,18 @@ export function hardDelete(recycleId: number): void {
     for (const v of vs) mdDelete(v.md_path)
     return
   }
+  if (rb.source === 'reasoning_game') {
+    // 一局一 md + 多条问答消息：先收 md 路径，删消息行 + 局行 + 回收记录，最后删 md 文件
+    const row = d.prepare('SELECT md_path FROM turtle_games WHERE id = ?').get(rb.item_id) as
+      | { md_path: string | null }
+      | undefined
+    d.prepare('DELETE FROM turtle_game_messages WHERE game_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM turtle_games WHERE id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
+    if (row?.md_path) mdDelete(row.md_path)
+    return
+  }
+  // reasoning_soup 走默认路径：仅删汤行（汤无 md；对局记录是快照，不随汤删除——specs §5）
   d.prepare(`DELETE FROM ${table} WHERE id = ?`).run(rb.item_id)
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
   if (mdPath) mdDelete(mdPath)

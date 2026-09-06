@@ -26,8 +26,18 @@ import {
   isLlmConfigured,
   profileDigest,
   compactAiSession,
-  clearAiSession
+  clearAiSession,
+  generateSoups,
+  judgeSoupQuestion,
+  judgeSoupGuess,
+  soupReview,
+  generateWallPuzzle,
+  judgeWallAnswer,
+  wallStreak,
+  localDateStr,
+  WALL_TYPE_LIST
 } from './ai/services'
+import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
@@ -117,14 +127,26 @@ export function registerIpc(): void {
     return true
   })
 
-  // ---------- 通用条目操作（五模块列表共用模式） ----------
-  type ItemKind = 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions'
-  const RECYCLE_MAP: Record<string, 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'> = {
+  // ---------- 通用条目操作（各模块列表共用模式） ----------
+  type ItemKind =
+    | 'mottos'
+    | 'wiki_entries'
+    | 'inspirations'
+    | 'verify_records'
+    | 'zhijiji_questions'
+    | 'turtle_soups'
+    | 'turtle_games'
+  const RECYCLE_MAP: Record<
+    string,
+    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game'
+  > = {
     mottos: 'mottos',
     wiki_entries: 'wiki',
     inspirations: 'inspirations',
     verify_records: 'verify',
-    zhijiji_questions: 'zhijiji'
+    zhijiji_questions: 'zhijiji',
+    turtle_soups: 'reasoning_soup',
+    turtle_games: 'reasoning_game'
   }
 
   ipcMain.handle('item:discard', (_e, table: string, id: number) => {
@@ -586,6 +608,452 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 推理角（DB v12，推理角 specs §2/§4） ----------
+  ipcMain.handle('turtle:generate', async (_e, preference: string) =>
+    generateSoups(
+      preference === 'easy' || preference === 'medium' || preference === 'hard' ? preference : 'random'
+    )
+  )
+  ipcMain.handle('turtle:listSoups', (_e, difficulty?: string) => {
+    const base =
+      'SELECT id, title, difficulty, theme_tag, status, created_at FROM turtle_soups WHERE deleted_at IS NULL'
+    return difficulty
+      ? getDb().prepare(`${base} AND difficulty = ? ORDER BY id DESC`).all(difficulty)
+      : getDb().prepare(`${base} ORDER BY id DESC`).all()
+  })
+  ipcMain.handle('turtle:openSoup', (_e, soupId: number) => {
+    const d = getDb()
+    const soup = d
+      .prepare('SELECT id, status FROM turtle_soups WHERE id = ? AND deleted_at IS NULL')
+      .get(soupId) as { id: number; status: string } | undefined
+    if (!soup) throw new Error('NOT_FOUND')
+    if (soup.status === 'solved' || soup.status === 'abandoned') throw new Error('SOUP_FINISHED')
+    let game = d
+      .prepare(
+        "SELECT id FROM turtle_games WHERE soup_id = ? AND status = 'playing' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"
+      )
+      .get(soupId) as { id: number } | undefined
+    if (!game) {
+      const now = nowIso()
+      const r = d
+        .prepare(
+          "INSERT INTO turtle_games (soup_id, status, started_at, created_at, updated_at) VALUES (?, 'playing', ?, ?, ?)"
+        )
+        .run(soupId, now, now, now)
+      d.prepare("UPDATE turtle_soups SET status = 'playing', updated_at = ? WHERE id = ?").run(
+        now,
+        soupId
+      )
+      game = { id: Number(r.lastInsertRowid) }
+    }
+    return turtleGamePayload(game.id)
+  })
+  ipcMain.handle('turtle:game', (_e, gameId: number) => turtleGamePayload(gameId))
+  ipcMain.handle('turtle:ask', async (_e, gameId: number, question: string) => {
+    const q = question.trim()
+    if (!q) throw new Error('EMPTY')
+    const d = getDb()
+    const game = getPlayingGame(d, gameId)
+    const judged = await judgeSoupQuestion(
+      turtleMaterial(d, game.soup_id),
+      turtleHistoryText(d, gameId),
+      q
+    )
+    const now = nowIso()
+    insertTurtleMsg(d, gameId, 'user', 'question', q, now)
+    insertTurtleMsg(
+      d,
+      gameId,
+      'assistant',
+      judged.type === 'invalid' ? 'invalid' : 'answer',
+      judged.reply,
+      now
+    )
+    let count = game.question_count
+    if (judged.type !== 'invalid') {
+      count += 1
+      d.prepare('UPDATE turtle_games SET question_count = ?, updated_at = ? WHERE id = ?').run(
+        count,
+        now,
+        gameId
+      )
+    }
+    return { type: judged.type, reply: judged.reply, questionCount: count }
+  })
+  ipcMain.handle('turtle:guess', async (_e, gameId: number, reasoning: string) => {
+    const g = reasoning.trim()
+    if (!g) throw new Error('EMPTY')
+    const d = getDb()
+    const game = getPlayingGame(d, gameId)
+    const verdict = await judgeSoupGuess(turtleMaterial(d, game.soup_id), turtleHistoryText(d, gameId), g)
+    const vText = verdict.solved
+      ? `破汤！${verdict.feedback}`
+      : `未破。${verdict.hits.length ? `已命中：${verdict.hits.join('；')}。` : ''}${
+          verdict.misses.length ? `有偏差：${verdict.misses.join('；')}。` : ''
+        }${verdict.feedback}`
+    const now = nowIso()
+    insertTurtleMsg(d, gameId, 'user', 'guess', g, now)
+    insertTurtleMsg(d, gameId, 'assistant', 'verdict', vText, now)
+    if (!verdict.solved) {
+      d.prepare('UPDATE turtle_games SET updated_at = ? WHERE id = ?').run(now, gameId)
+      return { solved: false, hits: verdict.hits, misses: verdict.misses, feedback: verdict.feedback }
+    }
+    const fin = await finishTurtleGame(gameId, 'solved')
+    return {
+      solved: true,
+      bottom: fin.bottom,
+      hits: verdict.hits,
+      misses: verdict.misses,
+      feedback: verdict.feedback,
+      mdPath: fin.mdPath
+    }
+  })
+  ipcMain.handle('turtle:abandon', async (_e, gameId: number) => {
+    const d = getDb()
+    getPlayingGame(d, gameId)
+    insertTurtleMsg(d, gameId, 'system', 'notice', '我放弃了本局，揭示汤底。', nowIso())
+    return await finishTurtleGame(gameId, 'abandoned')
+  })
+  ipcMain.handle('turtle:discardSoup', (_e, soupId: number) => {
+    const soup = getDb()
+      .prepare('SELECT status FROM turtle_soups WHERE id = ? AND deleted_at IS NULL')
+      .get(soupId) as { status: string } | undefined
+    if (!soup) throw new Error('NOT_FOUND')
+    if (soup.status === 'playing') throw new Error('PLAYING')
+    discardToRecycle('reasoning_soup', soupId)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+  ipcMain.handle('turtle:discardGame', (_e, gameId: number) => {
+    const game = getDb()
+      .prepare('SELECT status FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
+      .get(gameId) as { status: string } | undefined
+    if (!game) throw new Error('NOT_FOUND')
+    if (game.status === 'playing') throw new Error('PLAYING')
+    discardToRecycle('reasoning_game', gameId)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+  ipcMain.handle('turtle:listGames', () =>
+    getDb()
+      .prepare(
+        `SELECT g.id, g.status, g.question_count, g.started_at, g.ended_at, g.duration_ms, g.md_path, s.title, s.difficulty
+         FROM turtle_games g JOIN turtle_soups s ON g.soup_id = s.id
+         WHERE g.status != 'playing' AND g.deleted_at IS NULL ORDER BY g.ended_at DESC`
+      )
+      .all()
+  )
+
+  // ---------- 思维墙（打开现出，无定时器；specs §2/§4；v1.2 洞察题管线） ----------
+  ipcMain.handle('wall:ensureToday', async () => {
+    const d = getDb()
+    const today = localDateStr()
+    let row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+    if (!row) {
+      // 出题难度由连胜推导（v1.2：答对 1 天即升一档，答错清零回 easy）
+      const lv = Math.min(2, wallStreak())
+      const difficulty = (['easy', 'medium', 'hard'] as const)[lv]
+      // 题型轮换：近 2 日已出题型不再出（三题型池保证至少剩一种可选）
+      const recentTypes = d
+        .prepare(
+          'SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2'
+        )
+        .all()
+        .map((r) => (r as { puzzle_type: string }).puzzle_type)
+      const candidates = WALL_TYPE_LIST.filter((t) => !recentTypes.includes(t))
+      const type = candidates[Math.floor(Math.random() * candidates.length)] ?? WALL_TYPE_LIST[0]
+      // 避免重复：近 20 题题面摘要入避免清单（防同构重出）
+      const avoid = (
+        d
+          .prepare(
+            'SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20'
+          )
+          .all() as { puzzle_text: string }[]
+      ).map((r) => r.puzzle_text.replace(/\s+/g, ' ').slice(0, 60))
+      const draft = await generateWallPuzzle(difficulty, { type, avoid })
+      const now = nowIso()
+      d.prepare(
+        'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        today,
+        draft.puzzle,
+        draft.answer,
+        draft.reasoning,
+        JSON.stringify(draft.hints),
+        draft.type,
+        draft.difficulty,
+        'answering',
+        now,
+        now
+      )
+      row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+    }
+    return wallPayload(row)
+  })
+  ipcMain.handle('wall:answer', async (_e, puzzleId: number, myAnswer: string) => {
+    const a = myAnswer.trim()
+    if (!a) throw new Error('EMPTY')
+    const d = getDb()
+    const row = d.prepare('SELECT * FROM wall_puzzles WHERE id = ?').get(puzzleId) as
+      | WallPuzzleRow
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    if (row.status !== 'answering') throw new Error('ALREADY_ANSWERED')
+    const verdict = await judgeWallAnswer(
+      row.puzzle_text,
+      row.answer_standard,
+      row.standard_reasoning ?? '',
+      a
+    )
+    const hintsTotal = parseWallHints(row.hints).length
+    const mdPath = `md/wall/${row.date}.md`
+    mdWrite(
+      mdPath,
+      `# ${row.date} 每日一题（${WALL_TYPE_ZH[row.puzzle_type] ?? row.puzzle_type} · ${
+        DIFFICULTY_ZH[row.difficulty] ?? row.difficulty
+      }）\n\n> ${verdict.correct ? '答对' : '答错'} · 提示使用 ${row.hints_used}/${hintsTotal}\n\n## 题面\n\n${
+        row.puzzle_text
+      }\n\n## 我的作答\n\n${a}\n\n## 判定\n\n${
+        verdict.correct ? '答对' : '答错'
+      }（标准答案：${row.answer_standard}）\n\n## 讲解\n\n${verdict.explanation}\n\n## 标准论证\n\n${
+        row.standard_reasoning ?? '（未存档）'
+      }\n`
+    )
+    d.prepare(
+      'UPDATE wall_puzzles SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
+    ).run(verdict.correct ? 'correct' : 'wrong', a, mdPath, nowIso(), puzzleId)
+    return {
+      correct: verdict.correct,
+      standardAnswer: row.answer_standard,
+      explanation: verdict.explanation,
+      mdPath
+    }
+  })
+  ipcMain.handle('wall:hint', (_e, puzzleId: number) => {
+    const d = getDb()
+    const row = d.prepare('SELECT * FROM wall_puzzles WHERE id = ?').get(puzzleId) as
+      | WallPuzzleRow
+      | undefined
+    if (!row || row.status !== 'answering') return null
+    const hints = parseWallHints(row.hints)
+    if (row.hints_used >= hints.length) return null
+    const level = row.hints_used + 1
+    d.prepare('UPDATE wall_puzzles SET hints_used = ?, updated_at = ? WHERE id = ?').run(
+      level,
+      nowIso(),
+      puzzleId
+    )
+    return { level, text: hints[row.hints_used] }
+  })
+  ipcMain.handle('wall:month', (_e, year: number, month: number) => {
+    const prefix = `${year}-${String(month).padStart(2, '0')}-%`
+    const rows = getDb()
+      .prepare(
+        "SELECT date, status, hints_used, difficulty, md_path FROM wall_puzzles WHERE date LIKE ? AND status != 'answering'"
+      )
+      .all(prefix) as {
+      date: string
+      status: string
+      hints_used: number
+      difficulty: string
+      md_path: string | null
+    }[]
+    return {
+      streak: wallStreak(),
+      correct: rows.filter((r) => r.status === 'correct').length,
+      wrong: rows.filter((r) => r.status === 'wrong').length,
+      days: rows.map((r) => ({
+        date: r.date,
+        status: r.status,
+        hintsUsed: r.hints_used,
+        difficulty: r.difficulty,
+        mdPath: r.md_path
+      }))
+    }
+  })
+  ipcMain.handle('wall:recordPath', (_e, date: string) => {
+    const row = getDb()
+      .prepare('SELECT md_path FROM wall_puzzles WHERE date = ?')
+      .get(date) as { md_path: string | null } | undefined
+    return row?.md_path ?? null
+  })
+
+  // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
+  // 会话级暂存主进程内存（practiceBank）：不落库、不写 md，应用重启即清——练习无存档语义。
+  ipcMain.handle('wall:practiceNew', async (_e, pref: string, typePref?: string) => {
+    const difficulty =
+      pref === 'easy' || pref === 'medium' || pref === 'hard'
+        ? pref
+        : (['easy', 'medium', 'hard'] as const)[Math.floor(Math.random() * 3)] // 随机
+    // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落库，无历史可避）
+    const type: WallPuzzleType | undefined = WALL_TYPE_LIST.find((t) => t === typePref)
+    const draft = await generateWallPuzzle(difficulty, {
+      type: type ?? undefined
+    })
+    const id = ++practiceSeq
+    practiceBank.set(id, {
+      puzzle: draft.puzzle,
+      answer: draft.answer,
+      reasoning: draft.reasoning,
+      hints: draft.hints,
+      hintsUsed: 0,
+      typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+      diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty
+    })
+    // 长会话防累积：只留最近 10 条。Map 按插入序遍历，删最旧不伤当前题（当前题必是最新插入）
+    for (const old of practiceBank.keys()) {
+      if (practiceBank.size <= 10) break
+      practiceBank.delete(old)
+    }
+    return {
+      id,
+      puzzle: draft.puzzle,
+      typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+      diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty,
+      hintsTotal: draft.hints.length
+    }
+  })
+  ipcMain.handle('wall:practiceAnswer', async (_e, practiceId: number, myAnswer: string) => {
+    const a = myAnswer.trim()
+    if (!a) throw new Error('EMPTY')
+    const entry = practiceBank.get(practiceId)
+    if (!entry) throw new Error('PRACTICE_GONE')
+    const verdict = await judgeWallAnswer(entry.puzzle, entry.answer, entry.reasoning, a)
+    practiceBank.delete(practiceId) // 一题一命：判答即终局，对错都揭示答案与讲解
+    return {
+      correct: verdict.correct,
+      standardAnswer: entry.answer,
+      explanation: verdict.explanation
+    }
+  })
+  ipcMain.handle('wall:practiceHint', (_e, practiceId: number) => {
+    const entry = practiceBank.get(practiceId)
+    if (!entry || entry.hintsUsed >= entry.hints.length) return null
+    const level = entry.hintsUsed + 1
+    const text = entry.hints[entry.hintsUsed]
+    entry.hintsUsed = level
+    return { level, text }
+  })
+
+  // ---------- 思维墙·精选题库（v1.2 双层题源第二层）：人工策展存量难题，AI 只判答不出题 ----------
+  // 题面/答案/标准论证随 DB v13 种子迁移入库；作答/看解答均为终态（墙是真实历史，不可重做）。
+  ipcMain.handle('wall:bankList', () => {
+    const rows = getDb()
+      .prepare(
+        'SELECT id, title, tag, difficulty, source, status, my_answer, md_path FROM wall_bank ORDER BY id'
+      )
+      .all() as {
+      id: number
+      title: string
+      tag: string
+      difficulty: string
+      source: string
+      status: string
+      my_answer: string | null
+      md_path: string | null
+    }[]
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      tag: r.tag,
+      diffZh: DIFFICULTY_ZH[r.difficulty] ?? r.difficulty,
+      difficulty: r.difficulty,
+      source: r.source,
+      status: r.status,
+      mdPath: r.md_path
+    }))
+  })
+  ipcMain.handle('wall:bankOpen', (_e, bankId: number) => {
+    const row = getDb()
+      .prepare('SELECT id, title, tag, difficulty, puzzle_text, status, my_answer, md_path FROM wall_bank WHERE id = ?')
+      .get(bankId) as
+      | {
+          id: number
+          title: string
+          tag: string
+          difficulty: string
+          puzzle_text: string
+          status: string
+          my_answer: string | null
+          md_path: string | null
+        }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    // 不返回 answer_standard / solution——判答与看解答前不泄底
+    return {
+      id: row.id,
+      title: row.title,
+      tag: row.tag,
+      difficulty: row.difficulty,
+      diffZh: DIFFICULTY_ZH[row.difficulty] ?? row.difficulty,
+      puzzle: row.puzzle_text,
+      status: row.status,
+      myAnswer: row.my_answer,
+      mdPath: row.md_path
+    }
+  })
+  ipcMain.handle('wall:bankAnswer', async (_e, bankId: number, myAnswer: string) => {
+    const a = myAnswer.trim()
+    if (!a) throw new Error('EMPTY')
+    const d = getDb()
+    const row = d.prepare('SELECT * FROM wall_bank WHERE id = ?').get(bankId) as
+      | {
+          id: number
+          title: string
+          tag: string
+          difficulty: string
+          puzzle_text: string
+          answer_standard: string
+          solution: string
+          source: string
+          status: string
+          my_answer: string | null
+          md_path: string | null
+        }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    if (row.status !== 'todo') throw new Error('ALREADY_ANSWERED')
+    const verdict = await judgeWallAnswer(row.puzzle_text, row.answer_standard, row.solution, a)
+    const mdPath = writeBankMd(row, a, verdict.correct, verdict.explanation)
+    d.prepare(
+      'UPDATE wall_bank SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
+    ).run(verdict.correct ? 'solved' : 'failed', a, mdPath, nowIso(), bankId)
+    return {
+      correct: verdict.correct,
+      standardAnswer: row.answer_standard,
+      explanation: verdict.explanation,
+      mdPath
+    }
+  })
+  ipcMain.handle('wall:bankReveal', (_e, bankId: number) => {
+    const d = getDb()
+    const row = d.prepare('SELECT * FROM wall_bank WHERE id = ?').get(bankId) as
+      | {
+          id: number
+          title: string
+          tag: string
+          difficulty: string
+          puzzle_text: string
+          answer_standard: string
+          solution: string
+          source: string
+          status: string
+          my_answer: string | null
+          md_path: string | null
+        }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    if (row.status !== 'todo') throw new Error('ALREADY_ANSWERED')
+    const mdPath = writeBankMd(row, null, false, '（选择直接看解答，未提交作答）')
+    d.prepare('UPDATE wall_bank SET status = ?, md_path = ?, updated_at = ? WHERE id = ?').run(
+      'failed',
+      mdPath,
+      nowIso(),
+      bankId
+    )
+    return { standardAnswer: row.answer_standard, solution: row.solution, mdPath }
+  })
+
   // ---------- 个人中心：我的画像（DB v9，致知己 specs §3） ----------
   ipcMain.handle('profile:list', () =>
     getDb().prepare('SELECT * FROM profile_facts ORDER BY id').all()
@@ -655,4 +1123,290 @@ export function registerIpc(): void {
     clipboard.writeText(text)
     return true
   })
+}
+
+// ---------- 推理角辅助（turtle:* / wall:* 共用，specs §4） ----------
+
+interface TurtleGameRow {
+  id: number
+  soup_id: number
+  status: string
+  question_count: number
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
+  md_path: string | null
+}
+
+interface WallPuzzleRow {
+  id: number
+  date: string
+  puzzle_text: string
+  answer_standard: string
+  standard_reasoning: string | null
+  hints: string
+  puzzle_type: string
+  difficulty: string
+  status: string
+  hints_used: number
+  my_answer: string | null
+  md_path: string | null
+}
+
+const DIFFICULTY_ZH: Record<string, string> = { easy: '简单', medium: '中等', hard: '困难' }
+const WALL_TYPE_ZH: Record<string, string> = {
+  logic_grid: '逻辑网格',
+  truth_lie: '真假话推理',
+  sequence: '序列推理',
+  verbal_trap: '文字逻辑陷阱',
+  // v1.2 洞察题型池（旧四类仅历史行显示用，不再生成）
+  insight_invariant: '不变量与构造',
+  strategy_protocol: '策略协议设计',
+  counter_probability: '反直觉概率'
+}
+
+/** wall_puzzles.hints（JSON 列）→ string[]，容错解析 */
+function parseWallHints(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw) as unknown
+    return Array.isArray(v) ? v.filter((h): h is string => typeof h === 'string' && h.trim() !== '') : []
+  } catch {
+    return []
+  }
+}
+
+/** 取进行中的局；局不存在或已终局抛错（防终局后继续提问） */
+function getPlayingGame(d: ReturnType<typeof getDb>, gameId: number): TurtleGameRow {
+  const game = d
+    .prepare('SELECT * FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
+    .get(gameId) as TurtleGameRow | undefined
+  if (!game) throw new Error('NOT_FOUND')
+  if (game.status !== 'playing') throw new Error('GAME_FINISHED')
+  return game
+}
+
+/** 汤三件套（裁判材料） */
+function turtleMaterial(d: ReturnType<typeof getDb>, soupId: number): TurtleSoupMaterial {
+  const soup = d
+    .prepare('SELECT surface, bottom, analysis FROM turtle_soups WHERE id = ?')
+    .get(soupId) as TurtleSoupMaterial | undefined
+  if (!soup) throw new Error('NOT_FOUND')
+  return soup
+}
+
+/** 最近问答历史文本（判答 prompt 注入用，防重复问；倒取最近 N 条再正序拼装） */
+function turtleHistoryText(d: ReturnType<typeof getDb>, gameId: number, limit = 30): string {
+  const msgs = d
+    .prepare('SELECT type, content FROM turtle_game_messages WHERE game_id = ? ORDER BY id DESC LIMIT ?')
+    .all(gameId, limit)
+    .reverse() as { type: string; content: string }[]
+  return msgs
+    .map((m) => {
+      if (m.type === 'question') return `我问：${m.content}`
+      if (m.type === 'guess') return `我猜汤底：${m.content}`
+      if (m.type === 'verdict') return `判定：${m.content}`
+      if (m.type === 'notice') return ''
+      return `裁判：${m.content}` // answer / invalid
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function insertTurtleMsg(
+  d: ReturnType<typeof getDb>,
+  gameId: number,
+  role: 'user' | 'assistant' | 'system',
+  type: string,
+  content: string,
+  createdAt: string
+): void {
+  d.prepare(
+    'INSERT INTO turtle_game_messages (game_id, role, type, content, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(gameId, role, type, content, createdAt)
+}
+
+/** 对局视图载荷（openSoup / game 共用）：进行中不暴露汤底（列表与后端均不含 bottom） */
+function turtleGamePayload(gameId: number) {
+  const d = getDb()
+  const game = d
+    .prepare('SELECT * FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
+    .get(gameId) as TurtleGameRow | undefined
+  if (!game) throw new Error('NOT_FOUND')
+  const soup = d
+    .prepare('SELECT title, surface, difficulty, theme_tag FROM turtle_soups WHERE id = ?')
+    .get(game.soup_id) as
+    | { title: string; surface: string; difficulty: string; theme_tag: string }
+    | undefined
+  if (!soup) throw new Error('NOT_FOUND')
+  const messages = d
+    .prepare(
+      'SELECT id, role, type, content, created_at FROM turtle_game_messages WHERE game_id = ? ORDER BY id ASC'
+    )
+    .all(gameId)
+  return {
+    gameId: game.id,
+    title: soup.title,
+    surface: soup.surface,
+    difficulty: soup.difficulty,
+    theme: soup.theme_tag,
+    status: game.status,
+    questionCount: game.question_count,
+    startedAt: game.started_at,
+    messages
+  }
+}
+
+/**
+ * 终局链（specs §4，guess 破汤与 abandon 共用）：点评 → 拼对局记录 md（快照式，
+ * 含汤面汤底全文）→ 更新局行与汤状态。点评失败降级为固定文案，不阻断终局。
+ */
+async function finishTurtleGame(
+  gameId: number,
+  result: 'solved' | 'abandoned'
+): Promise<{ bottom: string; mdPath: string }> {
+  const d = getDb()
+  const game = d
+    .prepare('SELECT * FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
+    .get(gameId) as TurtleGameRow | undefined
+  if (!game) throw new Error('NOT_FOUND')
+  const soup = d
+    .prepare('SELECT title, surface, bottom, analysis, difficulty, theme_tag FROM turtle_soups WHERE id = ?')
+    .get(game.soup_id) as
+    | {
+        title: string
+        surface: string
+        bottom: string
+        analysis: string
+        difficulty: string
+        theme_tag: string
+      }
+    | undefined
+  if (!soup) throw new Error('NOT_FOUND')
+  const msgs = d
+    .prepare('SELECT type, content FROM turtle_game_messages WHERE game_id = ? ORDER BY id ASC')
+    .all(gameId) as { type: string; content: string }[]
+  const fmtMsg = (m: { type: string; content: string }): string => {
+    switch (m.type) {
+      case 'question':
+        return `**我**：${m.content}`
+      case 'guess':
+        return `> **我猜汤底**：${m.content}`
+      case 'verdict':
+        return `> **判定**：${m.content}`
+      case 'notice':
+        return `*（${m.content}）*`
+      default:
+        return `**裁判**：${m.content}` // answer / invalid
+    }
+  }
+  const transcript = msgs.map(fmtMsg).join('\n\n')
+  let review = ''
+  try {
+    review = await soupReview(
+      { surface: soup.surface, bottom: soup.bottom, analysis: soup.analysis },
+      transcript,
+      result,
+      game.question_count
+    )
+  } catch {
+    review = '（AI 点评生成失败，可重读上方问答自行复盘。）'
+  }
+  const now = new Date()
+  const duration = now.getTime() - new Date(game.started_at).getTime()
+  const mdPath = `md/turtle/${gameId}.md`
+  const lastGuess = [...msgs].reverse().find((m) => m.type === 'guess')
+  mdWrite(
+    mdPath,
+    `# ${soup.title}（${DIFFICULTY_ZH[soup.difficulty] ?? soup.difficulty} · ${soup.theme_tag}）\n\n> ${
+      result === 'solved' ? '已破汤' : '弃汤'
+    } · 提问 ${game.question_count} 次 · 用时 ${fmtDuration(duration)}\n\n## 汤面\n\n${
+      soup.surface
+    }\n\n## 汤底\n\n${soup.bottom}\n\n## 问答全程\n\n${transcript}\n${
+      lastGuess ? `\n## 最终推理\n\n${lastGuess.content}\n` : ''
+    }\n## AI 点评\n\n${review}\n`
+  )
+  d.prepare(
+    'UPDATE turtle_games SET status = ?, ended_at = ?, duration_ms = ?, md_path = ?, updated_at = ? WHERE id = ?'
+  ).run(result, now.toISOString(), duration, mdPath, now.toISOString(), gameId)
+  d.prepare('UPDATE turtle_soups SET status = ?, updated_at = ? WHERE id = ?').run(
+    result,
+    now.toISOString(),
+    game.soup_id
+  )
+  return { bottom: soup.bottom, mdPath }
+}
+
+/** 毫秒 → m:ss / h:mm:ss（对局用时展示） */
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+    : `${m}:${String(sec).padStart(2, '0')}`
+}
+
+/** wall_puzzles 行 → 渲染层今日题载荷（hints 只暴露条数，不暴露内容） */
+function wallPayload(row: unknown) {
+  const r = row as WallPuzzleRow
+  return {
+    phase: r.status === 'answering' ? ('answering' as const) : ('done' as const),
+    puzzleId: r.id,
+    date: r.date,
+    puzzle: r.puzzle_text,
+    puzzleType: r.puzzle_type,
+    typeZh: WALL_TYPE_ZH[r.puzzle_type] ?? r.puzzle_type,
+    difficulty: r.difficulty,
+    diffZh: DIFFICULTY_ZH[r.difficulty] ?? r.difficulty,
+    status: r.status,
+    hintsUsed: r.hints_used,
+    hintsTotal: parseWallHints(r.hints).length,
+    myAnswer: r.my_answer,
+    mdPath: r.md_path
+  }
+}
+
+// ---------- 思维墙·练习场（会话级暂存；不计入墙/连胜/月历，重启即清） ----------
+
+interface PracticeEntry {
+  puzzle: string
+  answer: string
+  /** 标准论证（判答讲解注入用，会话级） */
+  reasoning: string
+  hints: string[]
+  hintsUsed: number
+  typeZh: string
+  diffZh: string
+}
+
+const practiceBank = new Map<number, PracticeEntry>()
+let practiceSeq = 0
+
+/** 精选题库详情 md（作答终局 / 看解答共用，局终一次写入 md/wall/bank/{id}.md） */
+function writeBankMd(
+  row: {
+    id: number
+    title: string
+    tag: string
+    difficulty: string
+    puzzle_text: string
+    answer_standard: string
+    solution: string
+    source: string
+  },
+  myAnswer: string | null,
+  correct: boolean,
+  explanation: string
+): string {
+  const mdPath = `md/wall/bank/${row.id}.md`
+  mdWrite(
+    mdPath,
+    `# ${row.title}（${row.tag} · ${DIFFICULTY_ZH[row.difficulty] ?? row.difficulty}）\n\n> 来源：${row.source}\n\n## 题面\n\n${row.puzzle_text}\n\n## 我的作答\n\n${
+      myAnswer ?? '（未作答，选择直接看解答）'
+    }\n\n## 判定\n\n${
+      correct ? '已破' : '未破'
+    }（标准答案：${row.answer_standard}）\n\n## 讲解\n\n${explanation}\n\n## 标准论证\n\n${row.solution}\n`
+  )
+  return mdPath
 }

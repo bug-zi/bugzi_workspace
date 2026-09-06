@@ -8,6 +8,7 @@ import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
 import VerifyModule from './modules/verify/VerifyModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
+import ReasoningModule from './modules/reasoning/ReasoningModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
@@ -20,6 +21,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
   { id: 'verify', label: '辩真阁', icon: 'fact_check' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
+  { id: 'reasoning', label: '推理角', icon: 'psychology' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
   { id: 'profile', label: '个人中心', icon: 'person' }
 ]
@@ -121,6 +123,7 @@ function Shell() {
               {m.id === 'zhijiji' && (
                 <ZhijijiModule onNavigateToProfile={() => activateModule('profile')} />
               )}
+              {m.id === 'reasoning' && <ReasoningModule />}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}
             </div>

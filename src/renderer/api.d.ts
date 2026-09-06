@@ -1,5 +1,13 @@
 // 渲染层全局 window.api 类型（preload 桥）
-export type ModuleId = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'recycle' | 'profile'
+export type ModuleId =
+  | 'mottos'
+  | 'wiki'
+  | 'inspirations'
+  | 'verify'
+  | 'zhijiji'
+  | 'reasoning'
+  | 'recycle'
+  | 'profile'
 
 /** AI 边栏频道（DB v9 频道制） */
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
@@ -86,7 +94,14 @@ export interface VerifyRecord {
 
 export interface RecycleRow {
   id: number
-  source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
+  source:
+    | 'mottos'
+    | 'wiki'
+    | 'inspirations'
+    | 'verify'
+    | 'zhijiji'
+    | 'reasoning_soup'
+    | 'reasoning_game'
   item_id: number
   payload: string
   created_at: string
@@ -123,6 +138,122 @@ export interface ProfileFactRow {
   source: 'manual' | 'ai'
   created_at: string
   updated_at: string
+}
+
+// ===== 推理角（DB v12） =====
+
+/** 汤库列表行（不含汤面/汤底/裁判解析——开局后才见汤面） */
+export interface TurtleSoupRow {
+  id: number
+  title: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  theme_tag: string
+  /** fresh=未玩 | playing=进行中 | solved=已破 | abandoned=弃汤（终态不可再开局） */
+  status: 'fresh' | 'playing' | 'solved' | 'abandoned'
+  created_at: string
+}
+
+/** 对局问答消息（逐条即时落库 = 中断续玩/多局并行的根基） */
+export interface TurtleGameMessageRow {
+  id: number
+  role: 'user' | 'assistant' | 'system'
+  type: 'question' | 'answer' | 'invalid' | 'guess' | 'verdict' | 'notice'
+  content: string
+  created_at: string
+}
+
+/** 对局视图载荷（openSoup / game 返回；进行中不暴露汤底） */
+export interface TurtleGamePayload {
+  gameId: number
+  title: string
+  surface: string
+  difficulty: string
+  theme: string
+  status: 'playing' | 'solved' | 'abandoned'
+  questionCount: number
+  startedAt: string
+  messages: TurtleGameMessageRow[]
+}
+
+/** 对局记录列表行（终局局，ended_at 倒序） */
+export interface TurtleGameRecordRow {
+  id: number
+  title: string
+  status: 'solved' | 'abandoned'
+  question_count: number
+  started_at: string
+  ended_at: string
+  duration_ms: number | null
+  md_path: string
+  difficulty: string
+}
+
+/** 思维墙今日题载荷（ensureToday 返回） */
+export interface WallTodayInfo {
+  phase: 'answering' | 'done'
+  puzzleId: number
+  date: string
+  puzzle: string
+  puzzleType: string
+  typeZh: string
+  difficulty: string
+  diffZh: string
+  status: 'answering' | 'correct' | 'wrong'
+  hintsUsed: number
+  hintsTotal: number
+  myAnswer: string | null
+  mdPath: string | null
+}
+
+/** 打卡墙月历日格（有记录的天） */
+export interface WallDayCell {
+  date: string
+  status: 'correct' | 'wrong'
+  hintsUsed: number
+  difficulty: string
+  mdPath: string | null
+}
+
+/** 打卡墙月份数据（wall.month 返回） */
+export interface WallMonthInfo {
+  streak: number
+  correct: number
+  wrong: number
+  days: WallDayCell[]
+}
+
+/** 练习场当前题（wall.practiceNew 返回；会话级主进程内存暂存，不入库不写 md） */
+export interface WallPracticeInfo {
+  id: number
+  puzzle: string
+  typeZh: string
+  diffZh: string
+  hintsTotal: number
+}
+
+/** 精选题库列表行（wall.bankList 返回；不泄答案与标准论证） */
+export interface WallBankRow {
+  id: number
+  title: string
+  tag: string
+  difficulty: string
+  diffZh: string
+  source: string
+  status: 'todo' | 'solved' | 'failed'
+  mdPath: string | null
+}
+
+/** 精选题库单题（wall.bankOpen 返回；不泄答案与标准论证） */
+export interface WallBankInfo {
+  id: number
+  title: string
+  tag: string
+  difficulty: string
+  diffZh: string
+  puzzle: string
+  status: 'todo' | 'solved' | 'failed'
+  myAnswer: string | null
+  mdPath: string | null
 }
 
 export interface AiMessageRow {
@@ -202,7 +333,14 @@ export interface Api {
   }
   item: {
     discard(
-      table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions',
+      table:
+        | 'mottos'
+        | 'wiki_entries'
+        | 'inspirations'
+        | 'verify_records'
+        | 'zhijiji_questions'
+        | 'turtle_soups'
+        | 'turtle_games',
       id: number
     ): Promise<boolean>
     onRecycleChanged(cb: () => void): () => void
@@ -258,6 +396,83 @@ export interface Api {
     overwriteVersion(versionId: number, content: string): Promise<boolean>
     renameQuestion(id: number, title: string): Promise<boolean>
     discard(id: number): Promise<boolean>
+  }
+  turtle: {
+    /** 「来 3 碗汤」：难度偏好可选（默认随机），三件套（汤面/汤底/裁判解析）入库汤库 */
+    generate(
+      preference?: 'random' | 'easy' | 'medium' | 'hard'
+    ): Promise<{ generated: number; inserted: number }>
+    listSoups(difficulty?: string): Promise<TurtleSoupRow[]>
+    /** 开局/续局：fresh 建新局、playing 返回现有局；终态汤抛 SOUP_FINISHED */
+    openSoup(soupId: number): Promise<TurtleGamePayload>
+    game(gameId: number): Promise<TurtleGamePayload>
+    /** 提问 → 裁判只答「是/否/与汤无关」；invalid=非判断句引导（不计有效问答） */
+    ask(
+      gameId: number,
+      question: string
+    ): Promise<{
+      type: 'yes' | 'no' | 'irrelevant' | 'invalid'
+      reply: string
+      questionCount: number
+    }>
+    /** 猜汤底：未破给方向反馈（不泄露关键缺失）；破汤由主进程完成终局链后返回汤底+复盘路径 */
+    guess(
+      gameId: number,
+      reasoning: string
+    ): Promise<{
+      solved: boolean
+      bottom?: string
+      hits: string[]
+      misses: string[]
+      feedback: string
+      mdPath?: string
+    }>
+    /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
+    abandon(gameId: number): Promise<{ bottom: string; mdPath: string }>
+    /** 汤入回收站（进行中的汤抛 PLAYING，前端不提供入口） */
+    discardSoup(soupId: number): Promise<boolean>
+    /** 对局记录入回收站（仅终局局） */
+    discardGame(gameId: number): Promise<boolean>
+    /** 终局局列表（ended_at 倒序） */
+    listGames(): Promise<TurtleGameRecordRow[]>
+  }
+  wall: {
+    /** 打开现出：无当日题则现场生成（LLM 未配置抛 LLM_NOT_CONFIGURED → 弹去配置） */
+    ensureToday(): Promise<WallTodayInfo>
+    /** 提交作答：宽松等价判对错 + 完整推理链讲解 + 写详情 md；答错即终局 */
+    answer(
+      puzzleId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }>
+    /** 取下一级提示（库存直取不调 LLM，最多 3 级）；用尽返回 null */
+    hint(puzzleId: number): Promise<{ level: number; text: string } | null>
+    /** 月历数据：连胜 + 当月对/错计数 + 各日格态 */
+    month(year: number, month: number): Promise<WallMonthInfo>
+    /** 当日详情 md 路径（无记录 null） */
+    recordPath(date: string): Promise<string | null>
+    /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选；不计入墙与连胜） */
+    practiceNew(
+      pref: 'random' | 'easy' | 'medium' | 'hard',
+      typePref?: 'random' | 'insight_invariant' | 'strategy_protocol' | 'counter_probability'
+    ): Promise<WallPracticeInfo>
+    /** 练习场判答：宽松等价 + 完整讲解（无 md 落盘；一题一命，判答即终局；失效抛 PRACTICE_GONE） */
+    practiceAnswer(
+      practiceId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string }>
+    /** 练习场取下一级提示（内存直取不调 LLM）；用尽或题已失效返回 null */
+    practiceHint(practiceId: number): Promise<{ level: number; text: string } | null>
+    /** 精选题库：列表（不泄答案与论证） */
+    bankList(): Promise<WallBankRow[]>
+    /** 精选题库：打开一题（不泄答案与论证） */
+    bankOpen(bankId: number): Promise<WallBankInfo>
+    /** 精选题库：提交作答（终态；判答 + 写详情 md；已答抛 ALREADY_ANSWERED） */
+    bankAnswer(
+      bankId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }>
+    /** 精选题库：看解答（终态，不判答直接揭示 + 写详情 md） */
+    bankReveal(bankId: number): Promise<{ standardAnswer: string; solution: string; mdPath: string }>
   }
   profile: {
     list(): Promise<ProfileFactRow[]>

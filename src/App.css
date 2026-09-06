@@ -797,3 +797,271 @@
   font-weight: 600;
   color: var(--color-primary-deep);
 }
+
+/* ===== 推理角（推理角 specs §2）===== */
+/* 对局视图头部（返回 + 汤名 + 难度/题材 + 统计） */
+.rs-game-header {
+  flex-wrap: wrap;
+}
+.rs-game-title {
+  font-weight: 500;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-game-meta {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.rs-game-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* 汤面卡片 */
+.rs-surface {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+}
+.rs-surface-title {
+  font-size: 0.82em;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+.rs-surface-text {
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 问答流（气泡：user 右 / 裁判 左） */
+.rs-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 44vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.rs-msg {
+  max-width: 78%;
+  padding: 7px 12px;
+  border-radius: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rs-msg.user {
+  align-self: flex-end;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-border);
+}
+.rs-msg.ai {
+  align-self: flex-start;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+}
+/* 非判断句引导（弱化）与猜汤底（斜体强调） */
+.rs-msg.rs-invalid {
+  opacity: 0.75;
+  font-size: 0.92em;
+}
+.rs-msg.rs-guess {
+  font-style: italic;
+}
+.rs-msg.rs-thinking {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--color-text-secondary);
+  border-style: dashed;
+}
+/* 猜汤底判定（整块强调，主题色系） */
+.rs-verdict {
+  align-self: stretch;
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-surface);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rs-notice {
+  align-self: center;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  font-style: italic;
+}
+/* 终局汤底揭示卡 */
+.rs-reveal {
+  padding: 12px 14px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rs-reveal-title {
+  font-weight: 500;
+  color: var(--color-primary-deep);
+}
+/* 底部输入行（提问 / 猜汤底 / 放弃） */
+.rs-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+.rs-input .field {
+  flex: 1;
+  min-width: 200px;
+}
+.rs-guess-input {
+  flex: 1 100% !important;
+  resize: vertical;
+}
+.rs-input-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.rs-finished {
+  text-align: center;
+  padding: 6px 0;
+}
+/* 思维墙：判定结果文案（主题色系，不引入大红大绿） */
+.rs-result {
+  font-size: 1.1em;
+  font-weight: 500;
+  color: var(--color-primary-deep);
+}
+.rs-result.wrong {
+  color: var(--color-danger);
+}
+/* 思维墙：提示累积展示 */
+.rs-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--color-primary-soft);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.92em;
+}
+/* 练习场：讲解内联渲染区（练习不写 md，MdView 直接进卡片；排版主体走全局 .md-view） */
+.rs-explain {
+  padding: 10px 12px;
+  border-left: 2px solid var(--color-primary-soft);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  font-size: 0.95em;
+}
+/* 精选题库：题目列表行（状态图标 + 标题 + 标签/难度徽标 + 状态文案） */
+.bank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  cursor: pointer;
+  min-width: 0;
+}
+.bank-row:hover {
+  border-color: var(--color-primary);
+}
+.bank-row.current {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.bank-row.solved .bank-status,
+.bank-row.solved .bank-title {
+  color: var(--color-text-secondary);
+}
+.bank-row.failed .bank-status {
+  color: var(--color-danger);
+}
+.bank-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bank-status {
+  font-size: 18px;
+  color: var(--color-text-secondary);
+}
+/* 打卡墙月历：7 列网格，格子三态（空 / 亮=答对 / ✗=答错） */
+.wall-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.wall-week {
+  text-align: center;
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  padding: 2px 0;
+}
+.wall-cell {
+  position: relative;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  font-size: 0.9em;
+}
+.wall-cell.blank {
+  border-style: dashed;
+  opacity: 0.35;
+  background: transparent;
+}
+.wall-cell.correct {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.wall-cell.wrong {
+  color: var(--color-danger);
+}
+.wall-cell.today {
+  outline: 1px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.wall-cell.has-doc {
+  cursor: pointer;
+}
+.wall-cell.has-doc:hover {
+  border-color: var(--color-primary);
+}
+.wall-mark {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font-size: 15px;
+  color: var(--color-danger);
+}
+.wall-hintlv {
+  position: absolute;
+  right: 5px;
+  top: 3px;
+  font-size: 0.7em;
+  color: var(--color-text-secondary);
+}

@@ -905,3 +905,488 @@ export function isLlmConfigured(): boolean {
   const configs = getJsonSetting<LlmConfig[]>(SettingsKeys.LlmConfigs, [])
   return configs.length > 0
 }
+
+// ---------- 推理角（推理角 specs §3：海龟汤 + 思维墙） ----------
+
+/** 汤三件套（裁判材料：judge* / soupReview 的注入物） */
+export interface TurtleSoupMaterial {
+  surface: string
+  bottom: string
+  analysis: string
+}
+
+/** 解析 LLM 返回的 JSON 对象（兼容 ```json 包裹；json_object 模式顶层必为对象） */
+function parseJsonObject(raw: string): Record<string, unknown> {
+  const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
+  const parsed: unknown = JSON.parse(text)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('LLM 未返回 JSON 对象')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/** 剥除 LLM 回复外层 md 代码围栏 */
+function stripMdFence(raw: string): string {
+  return raw.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
+}
+
+const DIFF_ZH: Record<string, string> = { easy: '简单', medium: '中等', hard: '困难' }
+
+/** 难度值容错归一（easy/medium/hard 之外一律 medium） */
+function normDifficulty(v: unknown): 'easy' | 'medium' | 'hard' {
+  return v === 'easy' || v === 'hard' ? v : v === 'medium' ? 'medium' : 'medium'
+}
+
+export interface TurtleSoupDraft {
+  title: string
+  surface: string
+  bottom: string
+  analysis: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  theme: string
+}
+
+/**
+ * 「来 3 碗汤」：原创出 3 碗海龟汤入库（specs §3）。
+ * 出题注入画像摘要 + 已有汤避免清单；质量标准与逐碗自检写进 prompt
+ * （汤面铺足事实抓手 / 汤底逐一回收 / 本格自洽 / 可判定）——design.md 汤库节。
+ */
+export async function generateSoups(
+  preference: 'random' | 'easy' | 'medium' | 'hard'
+): Promise<{ generated: number; inserted: number }> {
+  const d = getDb()
+  const existing = d
+    .prepare('SELECT title, theme_tag FROM turtle_soups ORDER BY id DESC LIMIT 200')
+    .all() as { title: string; theme_tag: string }[]
+  const avoidList = existing.length
+    ? existing.map((r) => `- 《${r.title}》（${r.theme_tag}）`).join('\n')
+    : '（暂无）'
+  const prefText =
+    preference === 'random'
+      ? '难度不限，三碗难度错开为佳'
+      : `三碗均按「${DIFF_ZH[preference]}」难度出题`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是一位资深海龟汤出题人，为一位喜欢推理的玩家原创出题。
+
+## 已有汤清单（汤名与题材组合请避开，不得重复或高度雷同）
+${avoidList}
+
+## 出题要求（严格执行）
+1. 恰好原创 3 碗海龟汤。禁止搬运网传经典汤；可借鉴经典推理母题（身份诡计、时间诡计、物证矛盾、叙述视角等）但必须重组出全新情节。
+2. 每碗产出：title（汤名，2~6 字）、surface（汤面）、bottom（汤底）、analysis（裁判解析——把汤底展开讲透的完整背景：人物、时间线、动机、每个关键细节的因果，供裁判判答用）。
+3. ${prefText}；每碗自评难度（easy/medium/hard）并打一枚题材标签（theme，4~8 字，如「本格·罪案」「现代·亲情」「诡计·日常」）。
+4. surface 80~200 字；bottom 150~400 字；analysis 200~500 字。
+
+## 质量标准（输出前逐碗自检，不合格的碗重写替换后再输出）
+① 汤面铺足可供盘问的具体事实（抓手）：至少 3 个可被玩家提问验证的具体细节（日期、物件、身份、动作、位置等），像「致命日记」给出全部日记日期、「谁盖住了我」给出四次「被盖住」的场景那样；反面示例：汤面只给一句结论式悬念（如「现场被人布置过」）而不铺事实，玩家无从问起——不合格。
+② 汤底逐一回收汤面全部细节：汤面出现的每个元素在汤底都有解释，无悬空元素。
+③ 本格自洽：无超自然、无巧合堆砌，因果链在现实逻辑内成立。
+④ 可判定性：事实链封闭，玩家的判断类问题都能明确答「是 / 否 / 与汤无关」。
+
+以 JSON 对象返回，最外层是对象，格式：{"soups":[{"title":"...","surface":"...","bottom":"...","analysis":"...","difficulty":"easy|medium|hard","theme":"..."}]}，soups 数组内恰好 3 项，不要输出其他任何内容。`
+  const call = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.9,
+      jsonMode: true
+    })
+  let soups: TurtleSoupDraft[]
+  try {
+    soups = parseSoupArray((await call()).content)
+  } catch {
+    // 解析失败自动重试一次（同 generateMottos 惯例）；仍失败 → 抛错，不落半截数据
+    soups = parseSoupArray((await call()).content)
+  }
+  const now = nowIso()
+  const ins = d.prepare(
+    "INSERT INTO turtle_soups (title, surface, bottom, analysis, difficulty, theme_tag, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'fresh', ?, ?)"
+  )
+  for (const s of soups) ins.run(s.title, s.surface, s.bottom, s.analysis, s.difficulty, s.theme, now, now)
+  return { generated: soups.length, inserted: soups.length }
+}
+
+/** 解析出汤返回（恰好 3 碗、三件套齐全才算合格，否则抛错不落库） */
+function parseSoupArray(raw: string): TurtleSoupDraft[] {
+  const parsed = parseJsonObject(raw)
+  const arr = Array.isArray(parsed.soups)
+    ? (parsed.soups as unknown[])
+    : (Object.values(parsed).find((v) => Array.isArray(v)) as unknown[] | undefined)
+  if (!Array.isArray(arr)) throw new Error('LLM 未返回汤数组')
+  const out: TurtleSoupDraft[] = []
+  for (const item of arr as Record<string, unknown>[]) {
+    if (
+      item &&
+      typeof item.title === 'string' &&
+      typeof item.surface === 'string' &&
+      typeof item.bottom === 'string' &&
+      typeof item.analysis === 'string' &&
+      item.title.trim() &&
+      item.surface.trim() &&
+      item.bottom.trim() &&
+      item.analysis.trim()
+    ) {
+      out.push({
+        title: item.title.trim(),
+        surface: item.surface.trim(),
+        bottom: item.bottom.trim(),
+        analysis: item.analysis.trim(),
+        difficulty: normDifficulty(item.difficulty),
+        theme: typeof item.theme === 'string' && item.theme.trim() ? item.theme.trim() : '本格'
+      })
+    }
+  }
+  if (out.length !== 3) throw new Error(`LLM 返回 ${out.length} 碗合格汤（应为 3 碗）`)
+  return out
+}
+
+export interface SoupAskResult {
+  type: 'yes' | 'no' | 'irrelevant' | 'invalid'
+  reply: string
+}
+
+/** 裁判系统提示（judgeSoupQuestion / judgeSoupGuess 共用的材料与协议头） */
+function soupJudgeSystem(material: TurtleSoupMaterial): string {
+  return `你是海龟汤对局的裁判，掌握该汤的全部材料，严格依据材料判答。
+
+【汤面】
+${material.surface}
+
+【汤底】
+${material.bottom}
+
+【裁判解析（汤底的完整背景，判答以此为准）】
+${material.analysis}`
+}
+
+/**
+ * 对局判问（specs §3）：玩家提问 → 只答「是 / 否 / 与汤无关」；
+ * 非判断句引导改问法（type=invalid，不计有效问答）。判答不注入画像。
+ */
+export async function judgeSoupQuestion(
+  material: TurtleSoupMaterial,
+  historyText: string,
+  question: string
+): Promise<SoupAskResult> {
+  const system = `${soupJudgeSystem(material)}
+
+## 判答规则
+1. 玩家的提问是判断类问题（能用「是 / 否」回答）时，依据汤底与裁判解析判断：type 为 yes 或 no；若所问内容与汤底无关（材料无法判断），type 为 irrelevant。
+2. 玩家的提问不是判断句（如开放式的「他们怎么死的」「为什么」），type 为 invalid，reply 固定为「请提能用是/否回答的问题」。
+3. reply 用一句复述式中文作答（如「否，这两个人不是互相杀害」「是，屋子里只有他们两个人」「与汤底无关」），除复述所问内容外不添加汤面汤底之外的新信息，绝不主动剧透汤底。
+4. 只输出 JSON：{"type":"yes|no|irrelevant|invalid","reply":"..."}，不要输出其他任何内容。`
+  const history = historyText ? `## 已有问答（供衔接，勿重复解答）\n${historyText}\n\n` : ''
+  const res = await chatCompletion({
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: `${history}## 本次提问\n${question}` }
+    ],
+    temperature: 0.2,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const t = parsed.type
+  if (t !== 'yes' && t !== 'no' && t !== 'irrelevant' && t !== 'invalid') {
+    throw new Error('LLM 返回格式异常（type 非法）')
+  }
+  const reply =
+    typeof parsed.reply === 'string' && parsed.reply.trim()
+      ? parsed.reply.trim()
+      : t === 'invalid'
+        ? '请提能用是/否回答的问题'
+        : t === 'irrelevant'
+          ? '与汤底无关'
+          : t === 'yes'
+            ? '是'
+            : '否'
+  return { type: t, reply }
+}
+
+export interface SoupGuessResult {
+  solved: boolean
+  hits: string[]
+  misses: string[]
+  feedback: string
+}
+
+/**
+ * 猜汤底判定（specs §3）：判「破汤 / 未破」；未破给方向反馈（命中点 + 偏差点），
+ * 绝不泄露关键缺失信息。判答不注入画像。
+ */
+export async function judgeSoupGuess(
+  material: TurtleSoupMaterial,
+  historyText: string,
+  reasoning: string
+): Promise<SoupGuessResult> {
+  const system = `${soupJudgeSystem(material)}
+
+## 判定规则
+1. 判定推理是否「破汤」：抓住汤底的核心真相（关键人物身份、关键事件因果，依据裁判解析自行把握什么算核心）即 solved=true；只对边缘细节、未触及核心真相的，solved=false。
+2. solved=false 时给方向反馈：hits = 推理中已命中的点（每条一句话）；misses = 明显偏离的方向（每条一句话）；feedback = 一句总评。绝不把汤底中尚未被发现的关键点直接说出来（不泄露关键缺失信息）。
+3. solved=true 时 hits 列出命中的关键点，feedback 一句祝贺式总评。
+4. 只输出 JSON：{"solved":true/false,"hits":["..."],"misses":["..."],"feedback":"..."}，不要输出其他任何内容。`
+  const history = historyText ? `## 已有问答\n${historyText}\n\n` : ''
+  const res = await chatCompletion({
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: `${history}## 我的推理（猜汤底）\n${reasoning}` }
+    ],
+    temperature: 0.2,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : []
+  return {
+    solved: parsed.solved === true,
+    hits: strArr(parsed.hits),
+    misses: strArr(parsed.misses),
+    feedback: typeof parsed.feedback === 'string' ? parsed.feedback.trim() : ''
+  }
+}
+
+/**
+ * 局终点评（specs §3，破汤弃汤都点评）：提问效率——哪个问题问在关键上、哪些是浪费、
+ * 推理链评价；弃汤加指出卡点。输出 md 片段（200 字内）。点评不注入画像。
+ */
+export async function soupReview(
+  material: TurtleSoupMaterial,
+  transcript: string,
+  result: 'solved' | 'abandoned',
+  questionCount: number
+): Promise<string> {
+  const prompt = `${soupJudgeSystem(material)}
+
+## 局终点评任务
+本局已结束：${result === 'solved' ? `已破汤（第 ${questionCount} 个有效提问后破汤）` : `弃汤（共 ${questionCount} 个有效提问未破，玩家放弃并看了汤底）`}。
+
+## 问答全程
+${transcript || '（本局无提问）'}
+
+请以教练口吻写局终点评，简体中文 Markdown 直接输出正文（不要标题、不要代码块，200 字以内）：
+1. 提问效率：哪个问题问在了关键上、哪些是浪费（重复、过宽、方向错误）；
+2. 推理链评价：玩家推理路径的质量；
+3. ${result === 'abandoned' ? '指出卡点：玩家最接近真相的时刻与偏离处，以及当时本该问的问题方向（局已结束，现在可以说透）。' : '一句收尾建议。'}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.5
+  })
+  const md = stripMdFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
+export interface WallPuzzleDraft {
+  type: 'insight_invariant' | 'strategy_protocol' | 'counter_probability'
+  puzzle: string
+  answer: string
+  /** 标准论证全文（两阶段审题与判答讲解共用，随题落库） */
+  reasoning: string
+  hints: string[]
+  difficulty: 'easy' | 'medium' | 'hard'
+}
+
+export type WallPuzzleType = WallPuzzleDraft['type']
+
+/** 洞察题型池（v1.2 题型池换血：旧四类模板题全部退池，真假话推理开发者明令删除） */
+export const WALL_TYPE_LIST: readonly WallPuzzleType[] = [
+  'insight_invariant',
+  'strategy_protocol',
+  'counter_probability'
+]
+
+const WALL_TYPE_ZH_FULL: Record<WallPuzzleType, string> = {
+  insight_invariant: '不变量与构造',
+  strategy_protocol: '策略协议设计',
+  counter_probability: '反直觉概率'
+}
+
+/**
+ * 思维墙出题（specs §3，v1.2 洞察题重做）：三题型（不变量与构造 / 策略协议设计 /
+ * 反直觉概率），难度按洞察链深度标定，「已知套路 + 更大计算量」的模板题明令禁止。
+ * 两阶段管线：出题 → 审题（独立验证结论正确 / 唯一 / 可解 / 难度达标，不过打回重出
+ * 一次，仍不过抛错不落库）。避免清单注入近期题面摘要防同构重复。出题注入画像摘要。
+ */
+export async function generateWallPuzzle(
+  difficulty: 'easy' | 'medium' | 'hard',
+  opts?: { type?: WallPuzzleType; avoid?: string[] }
+): Promise<WallPuzzleDraft> {
+  const type: WallPuzzleType =
+    opts?.type ?? WALL_TYPE_LIST[Math.floor(Math.random() * WALL_TYPE_LIST.length)]
+  const avoidBlock =
+    opts?.avoid && opts.avoid.length > 0
+      ? `\n## 避免与以下近期题目同构（题材 / 结构 / 答案思路都不得雷同）\n${opts.avoid
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('\n')}\n`
+      : ''
+  const basePrompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是洞察级逻辑题命题人，为思维墙出一道「方法本身要被解题者发明出来」的推理题。核心禁令：不出「已知套路 + 更大计算量」的模板题——纯排除法、纯逻辑网格、纯逐轮剪枝、套公式即可解的题一律不合格。
+
+## 题型（本次出：${WALL_TYPE_ZH_FULL[type]}）
+- insight_invariant 不变量与构造：可行 / 不可行 / 最值问题，答案藏在守恒量里（循环结构数、奇偶、染色、势函数、递推不变量……）；常故意放一层恰好「放行」的假守恒（如奇偶性恰好不排除）当诱饵
+- strategy_protocol 策略协议设计：要求设计一个必胜 / 必达 / 可验证的协议或策略，并论证无懈可击（必胜策略、信息编码、对抗性方案）
+- counter_probability 反直觉概率：贝叶斯 / 期望 / 组合概率，正确结论违反朴素直觉，需要严格论证而非套公式
+
+## 难度标定（严格执行，难度来自洞察深度而非计算量）
+- 简单：单一洞察工具，但从题面到工具的映射不显然；找到即解，无需长计算
+- 中等：两层洞察链，或含一条「看似可行的错误路线」诱饵；可能需要自建辅助构造
+- 困难：三层以上洞察链，或需发明本题特有的不变量 / 协议；结论应当反直觉；即使解题者熟知各类工具，仍需组合创造力
+${avoidBlock}
+## 硬性质量标准（输出前逐条自检，不合格重写）
+1. answer 结论唯一可判定（明确结论 / 数值），或方案可被验证正确性
+2. 题面自包含，无需外部知识；推演规模适度——需要大量簿记才能算完的题不合格
+3. 禁止可被「标准模板」直接套解（纯排除、纯网格、纯逐项枚举）
+4. 至少埋一条「看似可行的错误路线」，走进去会得到错误结论或死胡同
+5. hints 恰好 3 条递进：一级指方向 → 二级点工具 → 三级给关键构造，任何一级都不直接给出答案
+6. reasoning 为标准论证全文（可分步，200~500 字），完整闭合、无跳步
+7. puzzle 用 Markdown 纯文本（可分行、可列表），不要用表格；本次目标难度：${DIFF_ZH[difficulty]}
+
+只输出 JSON：{"puzzle":"题面全文","answer":"标准结论（简短明确）","reasoning":"标准论证全文","hints":["提示1","提示2","提示3"]}，不要输出其他任何内容。`
+
+  let draft = await composeWallPuzzle(type, difficulty, basePrompt)
+  // 阶段二：审题人独立验证，不过打回重出一次（问题清单回注 prompt），仍不过抛错
+  const v1 = await verifyWallPuzzle(draft, difficulty)
+  if (!v1.ok) {
+    draft = await composeWallPuzzle(
+      type,
+      difficulty,
+      `${basePrompt}\n\n## 上一次出的题被审题人打回，问题如下（重新出题必须全部规避）\n${v1.problems
+        .map((p) => `- ${p}`)
+        .join('\n')}`
+    )
+    const v2 = await verifyWallPuzzle(draft, difficulty)
+    if (!v2.ok) throw new Error('出题未通过审题验证（两次），不落库')
+  }
+  return draft
+}
+
+/** 阶段一：单趟出题 + 解析（字段缺失抛错） */
+async function composeWallPuzzle(
+  type: WallPuzzleType,
+  difficulty: 'easy' | 'medium' | 'hard',
+  prompt: string
+): Promise<WallPuzzleDraft> {
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.9,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const puzzle = typeof parsed.puzzle === 'string' ? parsed.puzzle.trim() : ''
+  const answer = typeof parsed.answer === 'string' ? parsed.answer.trim() : ''
+  const reasoning =
+    typeof parsed.reasoning === 'string' ? stripMdFence(parsed.reasoning).trim() : ''
+  const hints = Array.isArray(parsed.hints)
+    ? parsed.hints.filter((h): h is string => typeof h === 'string' && h.trim() !== '').slice(0, 3)
+    : []
+  if (!puzzle || !answer || !reasoning || hints.length === 0) {
+    throw new Error('LLM 返回题目字段缺失')
+  }
+  return { type, puzzle, answer, reasoning, hints: hints.map((h) => h.trim()), difficulty }
+}
+
+/**
+ * 阶段二：审题（半盲验证）——审题人只看题面 + 命题人给出的标准结论（不给标准论证），
+ * 必须独立重新推演。四关全过才 pass：结论正确 / 结论唯一 / 条件自洽可解 / 实际难度达标。
+ */
+async function verifyWallPuzzle(
+  draft: WallPuzzleDraft,
+  target: 'easy' | 'medium' | 'hard'
+): Promise<{ ok: boolean; problems: string[] }> {
+  const res = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `你是苛刻的审题人。下面这道洞察推理题将发给一位很强的解题者，请独立严格审查——必须自己重新推演，不得默认命题人正确。
+
+【题面】
+${draft.puzzle}
+
+【命题人给出的标准结论】
+${draft.answer}
+
+审查四关：
+1. 结论正确：独立推演，标准结论是否真的成立
+2. 结论唯一：是否存在另一个同样成立的答案或实质不同的等价结论，使题面有歧义
+3. 条件自洽完备：仅凭题面能否推出结论，有无缺条件或内部矛盾
+4. 难度达标：按「简单=单工具不显然映射 / 中等=两层链或含诱饵 / 困难=三层链或需发明构造」评估实际难度档；能否被「标准模板」直接套解（能则不合格）；难度来自洞察还是计算量（纯计算量不合格）
+
+只输出 JSON：{"verdict":"pass|fail","ratedDifficulty":"easy|medium|hard","problems":["问题1","问题2"]}。四关全过才 pass；目标难度档：${DIFF_ZH[target]}，ratedDifficulty 低于目标档即 fail；problems 仅在 fail 时非空。`
+      }
+    ],
+    temperature: 0.2,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const problems = Array.isArray(parsed.problems)
+    ? parsed.problems.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : []
+  return { ok: parsed.verdict === 'pass' && problems.length === 0, problems }
+}
+
+export interface WallAnswerResult {
+  correct: boolean
+  explanation: string
+}
+
+/**
+ * 思维墙判答（specs §3，v1.2 验证式判答）：宽松等价——结论实质相同即算对
+ * （同一数值 / 同一结论 / 同一策略或等价构造）；只给结论不论证也算对，
+ * 附带论证时讲解中顺带点评但不因论证简陋判错。无论对错都输出完整讲解
+ * （判定理由 + 标准论证）。判答不注入画像。
+ */
+export async function judgeWallAnswer(
+  puzzleText: string,
+  standardAnswer: string,
+  standardReasoning: string,
+  myAnswer: string
+): Promise<WallAnswerResult> {
+  const prompt = `你是思维墙的判答员，宽松等价判定：玩家答案与标准答案表述不同但实质等价（同一个数值 / 同一个结论 / 同一种策略或等价构造）即算对；仅当结论实质不同才判错。
+
+【题面】
+${puzzleText}
+
+【标准答案】
+${standardAnswer}
+
+【标准论证】
+${standardReasoning}
+
+【我的作答】
+${myAnswer}
+
+explanation 用简体中文 Markdown（150~400 字，不用表格）：先给判定与理由（玩家若附带论证，顺带点评其论证的亮点或漏洞，但不因论证问题改变判定——以结论为准），再完整给出标准论证。
+只输出 JSON：{"correct":true/false,"explanation":"..."}，不要输出其他任何内容。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.1,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const explanation = typeof parsed.explanation === 'string' ? stripMdFence(parsed.explanation) : ''
+  if (!explanation) throw new Error('LLM 返回讲解缺失')
+  return { correct: parsed.correct === true, explanation }
+}
+
+/** 本地日期串 YYYY-MM-DD（思维墙「一天一题」的键） */
+export function localDateStr(t: Date = new Date()): string {
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * 思维墙连胜（specs §1）：连续「答对」天数——今日已答对则含今日，否则从昨日起算；
+ * 今日答错或中断（无 correct）即止。答错连胜清零、次日回 easy 难度。
+ */
+export function wallStreak(): number {
+  const rows = getDb()
+    .prepare('SELECT date, status FROM wall_puzzles ORDER BY date DESC LIMIT 4000')
+    .all() as { date: string; status: string }[]
+  const map = new Map(rows.map((r) => [r.date, r.status]))
+  const cursor = new Date()
+  if (map.get(localDateStr(cursor)) !== 'correct') cursor.setDate(cursor.getDate() - 1)
+  let streak = 0
+  for (;;) {
+    if (map.get(localDateStr(cursor)) !== 'correct') break
+    streak++
+    cursor.setDate(cursor.getDate() - 1)
+    if (streak > 3650) break // 保险上限
+  }
+  return streak
+}

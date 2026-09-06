@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
 import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { WALL_BANK_SEED } from './wallBankSeed'
 
 let db: DatabaseSync | null = null
 
@@ -30,8 +31,8 @@ export function userDataDir(): string {
 
 export function initDb(): void {
   const userData = userDataDir()
-  // 目录：md 五模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'bg']) {
+  // 目录：md 各模块子目录 + bg
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -346,6 +347,104 @@ function migrate(): void {
       .all() as { title: string; md_path: string }[]
     for (const r of rows) stripInspirationTitleHeader(r.md_path, r.title)
     d.exec('PRAGMA user_version = 11')
+  }
+
+  if (version < 12) {
+    // v12：推理角（推理角 specs §1）——海龟汤（汤库 / 对局 / 问答消息）+ 思维墙（每日一题）。
+    // 问答逐条即时落库（中断续玩、多局并行的根基）；turtle_games.soup_id 不设外键：删汤
+    // 不级联删局，对局记录 md 是快照（含汤面汤底全文）自包含（specs §5「删汤不影响已有记录」）。
+    // wall_puzzles.date 唯一——一天一题，「打开现出」。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS turtle_soups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        bottom TEXT NOT NULL,
+        analysis TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        theme_tag TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'fresh',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS turtle_games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        soup_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'playing',
+        question_count INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_ms INTEGER,
+        md_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_turtle_games_soup ON turtle_games(soup_id);
+
+      CREATE TABLE IF NOT EXISTS turtle_game_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id INTEGER NOT NULL REFERENCES turtle_games(id),
+        role TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_turtle_msgs_game ON turtle_game_messages(game_id);
+
+      CREATE TABLE IF NOT EXISTS wall_puzzles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        puzzle_text TEXT NOT NULL,
+        answer_standard TEXT NOT NULL,
+        hints TEXT NOT NULL DEFAULT '[]',
+        puzzle_type TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'answering',
+        hints_used INTEGER NOT NULL DEFAULT 0,
+        my_answer TEXT,
+        md_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `)
+    d.exec('PRAGMA user_version = 12')
+  }
+
+  if (version < 13) {
+    // v13：思维墙洞察题重做（specs v1.2）——① wall_puzzles 增 standard_reasoning
+    // （出题时的标准论证，判答讲解与详情 md 共用）；② 精选题库 wall_bank（双层题源
+    // 第二层：人工策展存量难题，AI 只判答不出题，status todo→solved/failed 终态），
+    // 迁移时插入首批评选 10 题（wallBankSeed.ts，均已人工验证）。
+    d.exec(`
+      ALTER TABLE wall_puzzles ADD COLUMN standard_reasoning TEXT;
+
+      CREATE TABLE IF NOT EXISTS wall_bank (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        puzzle_text TEXT NOT NULL,
+        answer_standard TEXT NOT NULL,
+        solution TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'todo',
+        my_answer TEXT,
+        md_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `)
+    const now13 = new Date().toISOString()
+    const insBank = d.prepare(
+      'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    for (const b of WALL_BANK_SEED) {
+      insBank.run(b.title, b.tag, b.difficulty, b.puzzle, b.answer, b.solution, b.source, 'todo', now13, now13)
+    }
+    d.exec('PRAGMA user_version = 13')
   }
 }
 

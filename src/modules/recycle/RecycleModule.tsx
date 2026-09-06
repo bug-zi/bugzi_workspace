@@ -5,13 +5,41 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
-const TABS: { source: RecycleRow['source']; label: string; backTo: string }[] = [
-  { source: 'mottos', label: '格言库', backTo: '格言库草稿区' },
-  { source: 'wiki', label: '万象库', backTo: '原板块' },
-  { source: 'inspirations', label: '灵感泉', backTo: '灵感泉草稿区' },
-  { source: 'verify', label: '辩真阁', backTo: '历史记录列表' },
-  { source: 'zhijiji', label: '致知己', backTo: '致知己主列表' }
+// 页签 key：单一来源用 source 值；「推理角」为组页签（reasoning_soup 汤 + reasoning_game
+// 对局记录混排一页，specs §5）
+const TABS: { key: string; label: string }[] = [
+  { key: 'mottos', label: '格言库' },
+  { key: 'wiki', label: '万象库' },
+  { key: 'inspirations', label: '灵感泉' },
+  { key: 'verify', label: '辩真阁' },
+  { key: 'zhijiji', label: '致知己' },
+  { key: 'reasoning', label: '推理角' }
 ]
+
+/** 行属于哪个页签（推理角两来源同组） */
+function tabOf(source: RecycleRow['source']): string {
+  return source === 'reasoning_soup' || source === 'reasoning_game' ? 'reasoning' : source
+}
+
+/** 恢复去向文案（specs §5：汤回汤库、对局记录回记录列表） */
+function backToOf(source: RecycleRow['source']): string {
+  switch (source) {
+    case 'mottos':
+      return '格言库草稿区'
+    case 'wiki':
+      return '原板块'
+    case 'inspirations':
+      return '灵感泉草稿区'
+    case 'verify':
+      return '历史记录列表'
+    case 'zhijiji':
+      return '致知己主列表'
+    case 'reasoning_soup':
+      return '推理角汤库'
+    default:
+      return '推理角对局记录列表'
+  }
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -28,6 +56,8 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'wiki') return `${p.term ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'inspirations') return String(p.title ?? '')
     if (row.source === 'zhijiji') return String(p.title ?? '')
+    if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
+    if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
     return String(p.claim ?? '')
   } catch {
     return `#${row.item_id}`
@@ -37,7 +67,7 @@ function summaryOf(row: RecycleRow): string {
 export default function RecycleModule() {
   const { toast } = useToast()
   const [rows, setRows] = useState<RecycleRow[]>([])
-  const [tab, setTab] = useState<RecycleRow['source']>('mottos')
+  const [tab, setTab] = useState<string>('mottos')
   const [delTarget, setDelTarget] = useState<RecycleRow | null>(null)
   // 刷新信号（其他模块丢弃时 recycle:changed 推送）
   const [version, setVersion] = useState(0)
@@ -63,14 +93,17 @@ export default function RecycleModule() {
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
-    for (const r of rows) c[r.source] = (c[r.source] ?? 0) + 1
+    for (const r of rows) {
+      const k = tabOf(r.source)
+      c[k] = (c[k] ?? 0) + 1
+    }
     return c
   }, [rows])
 
-  const tabRows = rows.filter((r) => r.source === tab)
+  const tabRows = rows.filter((r) => tabOf(r.source) === tab)
 
   const doRestore = async (row: RecycleRow): Promise<void> => {
-    const backTo = TABS.find((t) => t.source === row.source)?.backTo ?? ''
+    const backTo = backToOf(row.source)
     await window.api.recycle.restore(row.id)
     toast(`已恢复到${backTo}`)
     await load()
@@ -95,12 +128,12 @@ export default function RecycleModule() {
       <div className="recycle-tabs">
         {TABS.map((t) => (
           <button
-            key={t.source}
-            className={`recycle-tab${tab === t.source ? ' active' : ''}`}
-            onClick={() => setTab(t.source)}
+            key={t.key}
+            className={`recycle-tab${tab === t.key ? ' active' : ''}`}
+            onClick={() => setTab(t.key)}
           >
             {t.label}
-            <span className="zone-count">{counts[t.source] ?? 0}</span>
+            <span className="zone-count">{counts[t.key] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -125,7 +158,7 @@ export default function RecycleModule() {
                 <button
                   className="btn"
                   onClick={() => void doRestore(r)}
-                  title={`恢复到${TABS.find((t) => t.source === r.source)?.backTo}`}
+                  title={`恢复到${backToOf(r.source)}`}
                 >
                   <span className="material-symbols-outlined">restore_from_trash</span>
                   恢复

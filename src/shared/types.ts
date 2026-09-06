@@ -7,6 +7,7 @@ export type ModuleId =
   | 'inspirations'
   | 'verify'
   | 'zhijiji'
+  | 'reasoning'
   | 'recycle'
   | 'profile'
 
@@ -182,7 +183,14 @@ export interface VerifyRecord {
 
 export interface RecycleItem {
   id: number
-  source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'
+  source:
+    | 'mottos'
+    | 'wiki'
+    | 'inspirations'
+    | 'verify'
+    | 'zhijiji'
+    | 'reasoning_soup'
+    | 'reasoning_game'
   item_id: number
   payload: string
   created_at: string

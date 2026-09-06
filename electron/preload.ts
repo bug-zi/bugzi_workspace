@@ -20,7 +20,14 @@ const api = {
   },
   item: {
     discard: (
-      table: 'mottos' | 'wiki_entries' | 'inspirations' | 'verify_records' | 'zhijiji_questions',
+      table:
+        | 'mottos'
+        | 'wiki_entries'
+        | 'inspirations'
+        | 'verify_records'
+        | 'zhijiji_questions'
+        | 'turtle_soups'
+        | 'turtle_games',
       id: number
     ): Promise<boolean> => ipcRenderer.invoke('item:discard', table, id),
     onRecycleChanged: (cb: () => void): (() => void) => {
@@ -33,7 +40,20 @@ const api = {
   },
   recycle: {
     list: (): Promise<
-      { id: number; source: 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji'; item_id: number; payload: string; created_at: string }[]
+      {
+        id: number
+        source:
+          | 'mottos'
+          | 'wiki'
+          | 'inspirations'
+          | 'verify'
+          | 'zhijiji'
+          | 'reasoning_soup'
+          | 'reasoning_game'
+        item_id: number
+        payload: string
+        created_at: string
+      }[]
     > => ipcRenderer.invoke('recycle:list'),
     restore: (id: number): Promise<{ source: string; item_id: number }> =>
       ipcRenderer.invoke('recycle:restore', id),
@@ -208,6 +228,94 @@ const api = {
     renameQuestion: (id: number, title: string): Promise<boolean> =>
       ipcRenderer.invoke('zhijiji:renameQuestion', id, title),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id)
+  },
+  turtle: {
+    /** 「来 3 碗汤」：难度偏好可选（random 默认），3 碗三件套入库汤库 */
+    generate: (
+      preference?: 'random' | 'easy' | 'medium' | 'hard'
+    ): Promise<{ generated: number; inserted: number }> =>
+      ipcRenderer.invoke('turtle:generate', preference ?? 'random'),
+    listSoups: (difficulty?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('turtle:listSoups', difficulty),
+    /** 开局/续局：fresh 建新局、playing 返回现有局；终态汤抛 SOUP_FINISHED */
+    openSoup: (soupId: number): Promise<unknown> => ipcRenderer.invoke('turtle:openSoup', soupId),
+    game: (gameId: number): Promise<unknown> => ipcRenderer.invoke('turtle:game', gameId),
+    /** 提问 → 裁判只答是/否/与汤无关（invalid=非判断句引导，不计有效问答） */
+    ask: (
+      gameId: number,
+      question: string
+    ): Promise<{ type: 'yes' | 'no' | 'irrelevant' | 'invalid'; reply: string; questionCount: number }> =>
+      ipcRenderer.invoke('turtle:ask', gameId, question),
+    /** 猜汤底：未破给方向反馈；破汤由主进程完成终局链（点评+存档）后返回 */
+    guess: (
+      gameId: number,
+      reasoning: string
+    ): Promise<{
+      solved: boolean
+      bottom?: string
+      hits: string[]
+      misses: string[]
+      feedback: string
+      mdPath?: string
+    }> => ipcRenderer.invoke('turtle:guess', gameId, reasoning),
+    /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
+    abandon: (gameId: number): Promise<{ bottom: string; mdPath: string }> =>
+      ipcRenderer.invoke('turtle:abandon', gameId),
+    /** 汤入回收站（进行中的汤抛 PLAYING） */
+    discardSoup: (soupId: number): Promise<boolean> =>
+      ipcRenderer.invoke('turtle:discardSoup', soupId),
+    /** 对局记录入回收站（仅终局局） */
+    discardGame: (gameId: number): Promise<boolean> =>
+      ipcRenderer.invoke('turtle:discardGame', gameId),
+    /** 终局局列表（ended_at 倒序，含汤名/难度） */
+    listGames: (): Promise<unknown[]> => ipcRenderer.invoke('turtle:listGames')
+  },
+  wall: {
+    /** 打开现出：无当日题则现场生成（LLM 未配置抛 LLM_NOT_CONFIGURED） */
+    ensureToday: (): Promise<unknown> => ipcRenderer.invoke('wall:ensureToday'),
+    /** 提交作答：判对错（宽松等价）+ 讲解 + 写详情 md；答错即终局 */
+    answer: (
+      puzzleId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }> =>
+      ipcRenderer.invoke('wall:answer', puzzleId, myAnswer),
+    /** 取下一级提示（库存直取不调 LLM）；用尽返回 null */
+    hint: (puzzleId: number): Promise<{ level: number; text: string } | null> =>
+      ipcRenderer.invoke('wall:hint', puzzleId),
+    /** 月历数据：连胜 + 当月对/错计数 + 各日格态 */
+    month: (
+      year: number,
+      month: number
+    ): Promise<{ streak: number; correct: number; wrong: number; days: unknown[] }> =>
+      ipcRenderer.invoke('wall:month', year, month),
+    recordPath: (date: string): Promise<string | null> => ipcRenderer.invoke('wall:recordPath', date),
+    /** 练习场：随时出一道（pref: random|easy|medium|hard；typePref: 题型可选；不计入墙与连胜） */
+    practiceNew: (pref: string, typePref?: string): Promise<unknown> =>
+      ipcRenderer.invoke('wall:practiceNew', pref, typePref),
+    /** 练习场判答（一题一命，判答即终局；无 md 落盘） */
+    practiceAnswer: (
+      practiceId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string }> =>
+      ipcRenderer.invoke('wall:practiceAnswer', practiceId, myAnswer),
+    /** 练习场取下一级提示（内存直取不调 LLM）；用尽返回 null */
+    practiceHint: (practiceId: number): Promise<{ level: number; text: string } | null> =>
+      ipcRenderer.invoke('wall:practiceHint', practiceId),
+    /** 精选题库：列表（不泄答案与论证） */
+    bankList: (): Promise<unknown[]> => ipcRenderer.invoke('wall:bankList'),
+    /** 精选题库：打开一题（不泄答案与论证） */
+    bankOpen: (bankId: number): Promise<unknown> => ipcRenderer.invoke('wall:bankOpen', bankId),
+    /** 精选题库：提交作答（终态；判答 + 写详情 md） */
+    bankAnswer: (
+      bankId: number,
+      myAnswer: string
+    ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }> =>
+      ipcRenderer.invoke('wall:bankAnswer', bankId, myAnswer),
+    /** 精选题库：看解答（终态，不判答直接揭示；写详情 md） */
+    bankReveal: (
+      bankId: number
+    ): Promise<{ standardAnswer: string; solution: string; mdPath: string }> =>
+      ipcRenderer.invoke('wall:bankReveal', bankId)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
