@@ -2,7 +2,7 @@
 export type ModuleId = 'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'recycle' | 'profile'
 
 /** AI 边栏频道（DB v9 频道制） */
-export type AiChannel = 'assistant' | 'wiki' | 'zhijiji' | 'verify'
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 
 export interface MottoRecord {
   id: number

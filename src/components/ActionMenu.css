@@ -1,0 +1,43 @@
+/* 通用锚定气泡菜单（优化建议区第15轮）：主题色系，禁彩亮色 */
+.action-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 176px;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.action-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 0.9em;
+  text-align: left;
+  cursor: pointer;
+}
+.action-menu-item .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-text-secondary);
+}
+.action-menu-item:hover {
+  background: var(--color-primary-soft);
+}
+.action-menu-item.danger,
+.action-menu-item.danger .material-symbols-outlined {
+  color: var(--color-danger);
+}
+.action-menu-sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 6px;
+}

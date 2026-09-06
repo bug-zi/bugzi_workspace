@@ -227,12 +227,14 @@
   color: #fff;
 }
 
-/* 格言行双行布局（问题疑惑区 260905 方案一）：主行格言全文自动换行完整呈现（3 行保险上限防极端长文），
-   副行出处 + 标签灰色小字（复用 row-sub 模式）；行可拖拽排序 */
+/* 格言行单行布局（优化建议区第15轮）：正文占左自动换行（3 行保险上限防极端长文），
+   出处/标签/菜单按钮尾部收纳；行可拖拽排序，单击开功能气泡菜单、双击开笔记 */
 .motto-row {
   cursor: grab;
 }
-.motto-content {
+.motto-row .motto-content {
+  flex: 1;
+  min-width: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -240,16 +242,16 @@
   overflow-wrap: anywhere;
   line-height: 1.5;
 }
-.motto-sub {
+.motto-tail {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  margin-top: 2px;
+  gap: 10px;
+  flex-shrink: 0;
   font-size: 0.8em;
   color: var(--color-text-secondary);
 }
-.motto-source {
+.motto-tail .motto-source {
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -641,12 +643,25 @@
   font-size: 0.85em;
   color: var(--color-text-secondary);
 }
-/* 行上标签胶囊（最多 3 个 + 溢出计数） */
+/* 行尾标签小字（优化建议区第15轮单行布局 + 反馈修订：AI 徽标并入标签组，标签在出处左侧） */
 .motto-tags {
   display: inline-flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 200px;
+}
+.motto-tags .material-symbols-outlined {
+  font-size: 14px;
   flex-shrink: 0;
+}
+.motto-tags-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.motto-more {
+  padding: 2px;
 }
 .tag-chip.mini {
   padding: 0 8px;

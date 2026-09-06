@@ -25,6 +25,7 @@ const ROLE_LABEL: Record<string, string> = { user: '我', assistant: 'AI', syste
 /** 频道清单（DB v9 频道制，致知己 specs §4）：外壳不变，内部按场景分频道 */
 const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
   { id: 'assistant', label: '助手', icon: 'forum' },
+  { id: 'motto', label: '格言·解读', icon: 'psychology' },
   { id: 'wiki', label: '万象·问答', icon: 'public' },
   { id: 'zhijiji', label: '致知己·追问', icon: 'self_improvement' },
   { id: 'verify', label: '辩真·核查', icon: 'fact_check' }
@@ -33,6 +34,7 @@ const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
 /** 各频道激活会话的 settings key（与主进程 services.ACTIVE_SESSION_KEYS 同步） */
 const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   assistant: SettingsKeys.AiActiveSessionId,
+  motto: SettingsKeys.AiActiveSessionMotto,
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify

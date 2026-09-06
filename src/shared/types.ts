@@ -11,7 +11,7 @@ export type ModuleId =
   | 'profile'
 
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
-export type AiChannel = 'assistant' | 'wiki' | 'zhijiji' | 'verify'
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 
 // settings 表 key 常量
 export const SettingsKeys = {
@@ -31,6 +31,7 @@ export const SettingsKeys = {
   AiActiveSessionId: 'ai_active_session_id',
   // 频道制（DB v9）：当前所在频道 + 各频道独立激活会话（assistant 沿用 AiActiveSessionId）
   AiActiveChannel: 'ai_active_channel',
+  AiActiveSessionMotto: 'ai_active_session_motto',
   AiActiveSessionWiki: 'ai_active_session_wiki',
   AiActiveSessionZhijiji: 'ai_active_session_zhijiji',
   AiActiveSessionVerify: 'ai_active_session_verify',

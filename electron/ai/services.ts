@@ -17,6 +17,7 @@ const AUTO_TITLE_LEN = 20
 /** 各频道激活会话的 settings key（assistant 沿用既有 key，其余频道各自独立；DB v9 频道制） */
 const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   assistant: SettingsKeys.AiActiveSessionId,
+  motto: SettingsKeys.AiActiveSessionMotto,
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify
@@ -180,6 +181,8 @@ const MODULE_LABELS: Record<string, string> = {
 /** 频道人设（DB v9 频道制，致知己 specs §4） */
 const CHANNEL_PERSONAS: Record<AiChannel, string> = {
   assistant: '当前频道是「助手」，你是通用助手，可自由回答各类话题。',
+  motto:
+    '当前频道是「格言·解读」，你是格言解读员：用户发来一条格言，请依次给出——①字面义：用平实的话讲清这句话在说什么；②背景与出处：它从哪里来、原来的语境是什么（不确定的内容要明说，绝不编造）；③引申与适用：今天什么场景下用得上、怎么用。全文 150~300 字，语言平实，不掉书袋、不灌鸡汤。',
   wiki:
     '当前频道是「万象·问答」，你是知识讲解员：用通俗、准确的方式讲解非计算机领域的知识，多用具体例子，必要时指出常见误解。',
   zhijiji:

@@ -26,6 +26,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
 
 /** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
+  mottos: 'motto',
   wiki: 'wiki',
   verify: 'verify',
   zhijiji: 'zhijiji'

@@ -14,6 +14,8 @@
 - **Git 纪律：AI 禁止执行任何 git 操作**（项目 CLAUDE.md）。本计划不含 commit 步骤；每任务完成后由开发者自行 commit。
 - **无单测框架**（package.json 仅 typecheck/smoke）。验证方式 = `npm run typecheck` + `npm run build` + 开发者人工冒烟（清单见 Task 5），不写 test-first 步骤。
 
+**执行偏差记录（260906 实施时）：** ①归档轮次第14轮 → **第15轮**（第14轮已被同日追问栏优化占用，轮次只增不减）；②日志追加 260905.md → 新建 `docs/log/260906.md`（实施日为 260906）；③`MottosModuleProps.onOpenAi` 签名补第二参 `opts?: { auto?: boolean }`（否则 Step 4.3 的双参调用过不了 typecheck，App.openAiWith 本就支持）。
+
 ## File Structure
 
 | 文件 | 动作 | 职责 |
@@ -39,7 +41,7 @@
 - Modify: `src/renderer/api.d.ts:5`（AiChannel）
 - Modify: `electron/ai/services.ts:18-24`（ACTIVE_SESSION_KEYS）、`electron/ai/services.ts:146-154`（CHANNEL_PERSONAS）
 
-- [ ] **Step 1.1: 扩展 `src/shared/types.ts` 的 AiChannel 与 SettingsKeys**
+- [x] **Step 1.1: 扩展 `src/shared/types.ts` 的 AiChannel 与 SettingsKeys**
 
 第 14 行替换：
 
@@ -56,14 +58,14 @@ SettingsKeys 块（34 行 `AiActiveSessionWiki` 之前）插入一行，使频�
   AiActiveSessionWiki: 'ai_active_session_wiki',
 ```
 
-- [ ] **Step 1.2: 同步 `src/renderer/api.d.ts` 第 5 行**
+- [x] **Step 1.2: 同步 `src/renderer/api.d.ts` 第 5 行**
 
 ```ts
 /** AI 边栏频道（DB v9 频道制） */
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 ```
 
-- [ ] **Step 1.3: `electron/ai/services.ts` 的 ACTIVE_SESSION_KEYS 加 motto（18-24 行）**
+- [x] **Step 1.3: `electron/ai/services.ts` 的 ACTIVE_SESSION_KEYS 加 motto（18-24 行）**
 
 ```ts
 const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
@@ -75,7 +77,7 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
 }
 ```
 
-- [ ] **Step 1.4: 同文件 CHANNEL_PERSONAS 加格言解读员人格（146-154 行）**
+- [x] **Step 1.4: 同文件 CHANNEL_PERSONAS 加格言解读员人格（146-154 行）**
 
 在 `assistant:` 条目后插入（保持频道顺序一致）：
 
@@ -84,7 +86,7 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
     '当前频道是「格言·解读」，你是格言解读员：用户发来一条格言，请依次给出——①字面义：用平实的话讲清这句话在说什么；②背景与出处：它从哪里来、原来的语境是什么（不确定的内容要明说，绝不编造）；③引申与适用：今天什么场景下用得上、怎么用。全文 150~300 字，语言平实，不掉书袋、不灌鸡汤。',
 ```
 
-- [ ] **Step 1.5: 类型检查**
+- [x] **Step 1.5: 类型检查**
 
 Run: `npm run typecheck`
 Expected: 通过（TS 可能报 `Record<AiChannel,string>` 缺 key 的位置已被上述步骤补齐；若 AiSidebar.tsx / src App.tsx 报 `ACTIVE_SESSION_KEYS`/`CHANNELS` 类型不匹配——那是 Task 2 的内容，本任务结束时若仅这两处报错，先完成 Task 2 再统一验证亦可。顺序执行 Task 2 后必须全绿）。
@@ -97,7 +99,7 @@ Expected: 通过（TS 可能报 `Record<AiChannel,string>` 缺 key 的位置已�
 - Modify: `src/components/AiSidebar.tsx:26-39`
 - Modify: `src/App.tsx:28-32`
 
-- [ ] **Step 2.1: AiSidebar.tsx 的 CHANNELS 加 motto（放助手之后，对应左侧栏模块顺序格言库居首）**
+- [x] **Step 2.1: AiSidebar.tsx 的 CHANNELS 加 motto（放助手之后，对应左侧栏模块顺序格言库居首）**
 
 ```ts
 const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
@@ -109,7 +111,7 @@ const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
 ]
 ```
 
-- [ ] **Step 2.2: 同文件 ACTIVE_SESSION_KEYS 加 motto（34-39 行）**
+- [x] **Step 2.2: 同文件 ACTIVE_SESSION_KEYS 加 motto（34-39 行）**
 
 ```ts
 const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
@@ -121,7 +123,7 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
 }
 ```
 
-- [ ] **Step 2.3: App.tsx CHANNEL_BY_MODULE 加 mottos 映射（28-32 行）**
+- [x] **Step 2.3: App.tsx CHANNEL_BY_MODULE 加 mottos 映射（28-32 行）**
 
 ```ts
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
@@ -132,12 +134,12 @@ const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
 }
 ```
 
-- [ ] **Step 2.4: 类型检查**
+- [x] **Step 2.4: 类型检查**
 
 Run: `npm run typecheck`
 Expected: 全绿（Task 1+2 合起来补齐了 `Record<AiChannel,…>` 的所有 key）。
 
-- [ ] **Step 2.5: 人工冒烟点（开发者 `npm run dev`）**
+- [x] **Step 2.5: 人工冒烟点（开发者 `npm run dev`）**
 
 边栏频道条出现「格言·解读」；点击切换正常；新会话/历史会话互不串频道；重启后停留在格言频道。AiSidebar 内部（persistActive / loadForChannel / sendText）全部经 `ACTIVE_SESSION_KEYS[channel]` 间接取 key，无其他改动点。
 
@@ -149,7 +151,7 @@ Expected: 全绿（Task 1+2 合起来补齐了 `Record<AiChannel,…>` 的所有
 - Create: `src/components/ActionMenu.tsx`
 - Create: `src/components/ActionMenu.css`
 
-- [ ] **Step 3.1: 新建 `src/components/ActionMenu.tsx`**
+- [x] **Step 3.1: 新建 `src/components/ActionMenu.tsx`**
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -243,7 +245,7 @@ export default function ActionMenu(props: ActionMenuProps) {
 }
 ```
 
-- [ ] **Step 3.2: 新建 `src/components/ActionMenu.css`**
+- [x] **Step 3.2: 新建 `src/components/ActionMenu.css`**
 
 ```css
 /* 通用锚定气泡菜单（优化建议区第14轮）：主题色系，禁彩亮色 */
@@ -291,7 +293,7 @@ export default function ActionMenu(props: ActionMenuProps) {
 }
 ```
 
-- [ ] **Step 3.3: 类型检查**
+- [x] **Step 3.3: 类型检查**
 
 Run: `npm run typecheck`
 Expected: 通过（新文件独立编译，无依赖方）。
@@ -304,13 +306,13 @@ Expected: 通过（新文件独立编译，无依赖方）。
 - Modify: `src/modules/mottos/MottosModule.tsx`（import 区、state 区 71 行后、函数区 274 行后、行 JSX 467-560、菜单渲染 605 行 MdDialog 前）
 - Modify: `src/App.css`（.motto-row 区块 230-256、旧 .motto-tags 区块 644-658）
 
-- [ ] **Step 4.1: MottosModule.tsx 顶部加 import（与其他组件 import 并列）**
+- [x] **Step 4.1: MottosModule.tsx 顶部加 import（与其他组件 import 并列）**
 
 ```tsx
 import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
 ```
 
-- [ ] **Step 4.2: state 区加菜单状态（71 行 `foreverTarget` 声明之后）**
+- [x] **Step 4.2: state 区加菜单状态（71 行 `foreverTarget` 声明之后）**
 
 ```tsx
   // 功能气泡菜单（优化建议区第14轮）：单击行 260ms 防抖召唤，双击行打开笔记（正式区）
@@ -321,7 +323,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
   }, [])
 ```
 
-- [ ] **Step 4.3: 函数区加交互与动作函数（274 行 `copyMotto` 之后、拖拽函数之前）**
+- [x] **Step 4.3: 函数区加交互与动作函数（274 行 `copyMotto` 之后、拖拽函数之前）**
 
 ```tsx
   /** 单击行：260ms 防抖给双击让路，到点开/关功能气泡菜单（锚定行本身） */
@@ -420,7 +422,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
   }
 ```
 
-- [ ] **Step 4.4: 替换行 JSX（467-560 行，从 `{items.map((m, idx) => (` 到 `</div>` 行尾，即旧 `row-actions` 结束止）**
+- [x] **Step 4.4: 替换行 JSX（467-560 行，从 `{items.map((m, idx) => (` 到 `</div>` 行尾，即旧 `row-actions` 结束止）**
 
 旧结构（`row-main` 双行 + `row-actions` 图标排）整体替换为：
 
@@ -477,7 +479,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
 
 紧随其后的 `tag-edit-row` 区块（562-596 行）**原样保留**，`</Fragment>` 结构不变。
 
-- [ ] **Step 4.5: 渲染菜单（605 行 `{/* 正式区笔记弹窗 */}` 注释之前插入）**
+- [x] **Step 4.5: 渲染菜单（605 行 `{/* 正式区笔记弹窗 */}` 注释之前插入）**
 
 ```tsx
       {/* 功能气泡菜单（优化建议区第14轮）：锚定行 / ⋯ 按钮，互斥单开 */}
@@ -495,7 +497,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
         })()}
 ```
 
-- [ ] **Step 4.6: App.css 改造格言行样式**
+- [x] **Step 4.6: App.css 改造格言行样式**
 
 230-256 行区块（注释 + `.motto-row`/`.motto-content`/`.motto-sub`/`.motto-source`）替换为：
 
@@ -549,7 +551,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
 }
 ```
 
-- [ ] **Step 4.7: 类型检查 + 构建**
+- [x] **Step 4.7: 类型检查 + 构建**
 
 Run: `npm run typecheck && npm run build`
 Expected: 均通过。
@@ -573,9 +575,9 @@ Expected: 均通过。
 7. LLM 未配置时点解读 → 边栏「去配置」提示（与万象问 AI 同款）
 8. 新频道内自由对话、会话切换/新建/删除/改名正常；重启后恢复激活会话与频道
 
-- [ ] **Step 5.2: 追加 `docs/log/260905.md` 开发记录**（当日已有文件则追加小节；记录本次改动文件清单与要点，格式参照该文件既有条目）
+- [x] **Step 5.2: 追加 `docs/log/260905.md` 开发记录**（当日已有文件则追加小节；记录本次改动文件清单与要点，格式参照该文件既有条目）
 
-- [ ] **Step 5.3: 归档 `docs/project/优化建议区.md`**
+- [x] **Step 5.3: 归档 `docs/project/优化建议区.md`**
 
 「待完成」区该条目移除；归档区顶部按既有格式新增：
 
@@ -585,7 +587,7 @@ Expected: 均通过。
 - [X]  格言库新增一个解读的功能——点击以后自动把当前句子输入到AI助手——格言·解读的频道（需要新创建这个频道）。把每条格言后面的功能图标改成气泡浮窗：单击行召唤功能菜单（AI 解读/编辑/标签/复制/区流转/查看笔记/丢弃，按区显示），双击行打开笔记弹窗（正式区），空出的右侧空间放出处——单行呈现，小字体+浅色与格言区分。（260905 完成：新建通用 ActionMenu 组件 fixed 锚定+防溢出+portal；行布局单行化——正文左、出处右、标签计数行尾；新增 motto 频道零 DB 迁移，AiChannel/CHANNELS/ACTIVE_SESSION_KEYS/CHANNEL_PERSONAS 同步扩展，格言库模块映射新频道，解读经 openAiWith(text,{auto:true}) 复用 pending 机制自动发送，AiSidebar 发送链路零改动；单击 260ms 防抖让路双击，⋯按钮免防抖直达）
 ```
 
-- [ ] **Step 5.4: 最终验证**
+- [x] **Step 5.4: 最终验证**
 
 Run: `npm run typecheck && npm run build`
 Expected: 通过。完成后由开发者自行 git 提交（AI 不执行 git 操作）。

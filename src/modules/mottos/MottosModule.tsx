@@ -1,6 +1,7 @@
 // 格言库模块（格言库 specs 全量 + v2.0 §7：标签/搜索/生成/去重）
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MottoRecord } from '../../renderer/api'
+import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -9,7 +10,8 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { SettingsKeys } from '../../shared/types'
 
 export interface MottosModuleProps {
-  onOpenAi: (prefill?: string) => void
+  /** opts.auto：模块动作直发（切频道后自动发送），同 App.openAiWith */
+  onOpenAi: (prefill?: string, opts?: { auto?: boolean }) => void
   bumpAi: () => void
 }
 
@@ -69,6 +71,12 @@ export default function MottosModule(props: MottosModuleProps) {
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
   // 直接删除二次确认（优化建议区：越过回收站彻底删除）
   const [foreverTarget, setForeverTarget] = useState<MottoRecord | null>(null)
+  // 功能气泡菜单（优化建议区第15轮）：单击行 260ms 防抖召唤，双击行打开笔记（正式区）
+  const [menuFor, setMenuFor] = useState<{ id: number; anchor: HTMLElement } | null>(null)
+  const clickTimer = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (clickTimer.current != null) window.clearTimeout(clickTimer.current)
+  }, [])
   // 拖拽排序（区内）
   const dragIdRef = useRef<number | null>(null)
   // 快速导航（优化建议区）：跳转到目标区——折叠则先展开，再平滑滚动到该区
@@ -272,6 +280,112 @@ export default function MottosModule(props: MottosModuleProps) {
     toast('已复制')
   }
 
+  /** 单击行：260ms 防抖给双击让路，到点开/关功能气泡菜单（锚定行本身） */
+  const onRowClick = (m: MottoRecord, e: React.MouseEvent): void => {
+    if (clickTimer.current != null) window.clearTimeout(clickTimer.current)
+    const anchor = e.currentTarget as HTMLElement
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null
+      setMenuFor((cur) => (cur?.id === m.id ? null : { id: m.id, anchor }))
+    }, 260)
+  }
+
+  /** 双击行：取消单击定时器；正式区且有笔记 → 打开笔记弹窗；草稿/沉淀区无事 */
+  const onRowDoubleClick = (m: MottoRecord): void => {
+    if (clickTimer.current != null) {
+      window.clearTimeout(clickTimer.current)
+      clickTimer.current = null
+    }
+    if (m.status === 'formal' && m.note_path) setViewId(m.id)
+  }
+
+  /** AI 解读（优化建议区第15轮）：发到「格言·解读」频道并自动发送（channel 经 App 模块映射） */
+  const interpretMotto = (m: MottoRecord): void => {
+    const body = m.content.trim()
+    const text = m.source.trim() ? `请解读这条格言：「${body}」 —— ${m.source.trim()}` : `请解读这条格言：「${body}」`
+    props.onOpenAi(text, { auto: true })
+  }
+
+  /** 功能气泡菜单项（按区拼装；顺序：AI 解读 / 编辑 / 标签 / 复制 / 区特有 ∥ 丢弃） */
+  const mottoMenuItems = (m: MottoRecord): ActionMenuItem[] => {
+    const items: ActionMenuItem[] = [
+      { key: 'interpret', icon: 'psychology', label: 'AI 解读', onClick: () => interpretMotto(m) }
+    ]
+    // 编辑：正式区全量；草稿/沉淀区仅 AI 编撰条（判定与 AI 徽章一致）
+    if (m.status === 'formal' || (m.origin === 'ai' && m.gen_kind !== 'excerpt')) {
+      items.push({
+        key: 'edit',
+        icon: 'edit',
+        label: '编辑',
+        onClick: () => {
+          setEditing(m)
+          setEditContent(m.content)
+          setEditSource(m.source)
+          setEditTags((m.tags ?? []).join('、'))
+        }
+      })
+    }
+    items.push(
+      {
+        key: 'tags',
+        icon: 'sell',
+        label: '标签',
+        onClick: () => {
+          setTagEditId((cur) => (cur === m.id ? null : m.id))
+          setTagInput('')
+        }
+      },
+      {
+        key: 'copy',
+        icon: 'content_copy',
+        label: '复制格言+出处',
+        onClick: () => void copyMotto(m)
+      }
+    )
+    if (m.status === 'draft') {
+      items.push({
+        key: 'toSettled',
+        icon: 'moving',
+        label: '加入沉淀区',
+        onClick: () => void window.api.mottos.setStatus(m.id, 'settled').then(load)
+      })
+    } else if (m.status === 'settled') {
+      items.push({
+        key: 'toFormal',
+        icon: 'workspace_premium',
+        label: '加入正式区',
+        onClick: () => void window.api.mottos.setStatus(m.id, 'formal').then(load)
+      })
+    } else {
+      items.push({
+        key: 'note',
+        icon: 'notebook',
+        label: '查看笔记',
+        onClick: () => setViewId(m.id)
+      })
+    }
+    items.push({
+      key: 'discard',
+      icon: 'delete',
+      label: '丢弃',
+      danger: true,
+      separatorAbove: true,
+      onClick: () => setDiscardTarget(m)
+    })
+    return items
+  }
+
+  /** 行尾标签显示（优化建议区第15轮反馈）：AI 徽标（编撰条）视作首个伪标签与用户标签同款样式同位置——
+   *  显示 AI + 首个用户标签（无 AI 时仅首个用户标签），其余 +N 计数；title 悬停看全部 */
+  const mottoTagLabel = (m: MottoRecord): { text: string; title: string } | null => {
+    const aiFirst = m.origin === 'ai' && m.gen_kind !== 'excerpt'
+    const list = aiFirst ? ['AI', ...(m.tags ?? [])] : [...(m.tags ?? [])]
+    if (list.length === 0) return null
+    const shown = list.slice(0, aiFirst ? 2 : 1)
+    const extra = list.length - shown.length
+    return { text: extra > 0 ? `${shown.join('、')} +${extra}` : shown.join('、'), title: list.join('、') }
+  }
+
   // 区内拖拽排序（HTML5 DnD，模式同灵感泉）
   const onDragStart = (e: React.DragEvent, m: MottoRecord): void => {
     dragIdRef.current = m.id
@@ -473,88 +587,43 @@ export default function MottosModule(props: MottosModuleProps) {
                     onDragEnd={onDragEnd}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => void onDropToRow(e, m)}
-                    onClick={() => m.status === 'formal' && m.note_path && setViewId(m.id)}
+                    onClick={(e) => onRowClick(m, e)}
+                    onDoubleClick={() => onRowDoubleClick(m)}
                   >
                     <span className="row-index">{idx + 1}</span>
-                    <div className="row-main">
-                      <div className="motto-content" title={m.content}>
-                        {m.content}
-                      </div>
-                      <div className="motto-sub">
-                        <span className="motto-source" title={m.source || undefined}>
-                          —— {m.source || '（出处待补）'}
-                        </span>
-                        {(m.tags ?? []).length > 0 && (
-                          <span className="motto-tags" title={m.tags.join('、')}>
-                            {m.tags.slice(0, 3).map((t) => (
-                              <span key={t} className="tag-chip mini">
-                                {t}
-                              </span>
-                            ))}
-                            {m.tags.length > 3 && (
-                              <span className="tag-chip mini more">+{m.tags.length - 3}</span>
-                            )}
-                          </span>
-                        )}
-                      </div>
+                    <div className="motto-content" title={m.content}>
+                      {m.content}
                     </div>
-                    <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-                      {/* AI 徽章仅编撰条显示（v2.0：现实摘录条不打） */}
-                      {m.origin === 'ai' && m.gen_kind !== 'excerpt' && <span className="badge">AI</span>}
-                      {z.status === 'draft' && (
-                        <button
-                          className="icon-btn"
-                          title="加入沉淀区"
-                          onClick={() => void window.api.mottos.setStatus(m.id, 'settled').then(load)}
-                        >
-                          <span className="material-symbols-outlined">moving</span>
-                        </button>
-                      )}
-                      {z.status === 'settled' && (
-                        <>
-                          <button
-                            className="icon-btn"
-                            title="加入正式区"
-                            onClick={() => void window.api.mottos.setStatus(m.id, 'formal').then(load)}
-                          >
-                            <span className="material-symbols-outlined">workspace_premium</span>
-                          </button>
-                        </>
-                      )}
-                      {/* 正式区全部可编辑；草稿/沉淀区仅 AI 编撰条放开（优化建议区：AI 句子允许用户改，摘录条不动），判定与 AI 徽章一致 */}
-                      {(z.status === 'formal' || (m.origin === 'ai' && m.gen_kind !== 'excerpt')) && (
-                        <button
-                          className="icon-btn"
-                          title="编辑"
-                          onClick={() => {
-                            setEditing(m)
-                            setEditContent(m.content)
-                            setEditSource(m.source)
-                            setEditTags((m.tags ?? []).join('、'))
-                          }}
-                        >
-                          <span className="material-symbols-outlined">edit</span>
-                        </button>
-                      )}
+                    {/* 尾部收纳：标签（AI 徽标并入标签组同款呈现）在出处左侧 + 出处（小字浅色）+ 菜单按钮
+                        （优化建议区第15轮单行布局 + 当日反馈修订） */}
+                    <div className="motto-tail">
+                      {(() => {
+                        const tag = mottoTagLabel(m)
+                        return tag ? (
+                          <span className="motto-tags" title={tag.title}>
+                            <span className="material-symbols-outlined">sell</span>
+                            <span className="motto-tags-text">{tag.text}</span>
+                          </span>
+                        ) : null
+                      })()}
+                      <span className="motto-source" title={m.source || '（出处待补）'}>
+                        —— {m.source || '（出处待补）'}
+                      </span>
                       <button
-                        className="icon-btn"
-                        title="标签"
-                        onClick={() => {
-                          setTagEditId((cur) => (cur === m.id ? null : m.id))
-                          setTagInput('')
+                        className="icon-btn motto-more"
+                        title="功能菜单"
+                        onClick={(e) => {
+                          // ⋯ 不参与单击防抖（无双击语义），立即开菜单并掐掉行的单击定时器
+                          e.stopPropagation()
+                          if (clickTimer.current != null) {
+                            window.clearTimeout(clickTimer.current)
+                            clickTimer.current = null
+                          }
+                          const anchor = e.currentTarget as HTMLElement
+                          setMenuFor((cur) => (cur?.id === m.id ? null : { id: m.id, anchor }))
                         }}
                       >
-                        <span className="material-symbols-outlined">sell</span>
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title="复制格言+出处"
-                        onClick={() => void copyMotto(m)}
-                      >
-                        <span className="material-symbols-outlined">content_copy</span>
-                      </button>
-                      <button className="icon-btn danger" title="丢弃" onClick={() => setDiscardTarget(m)}>
-                        <span className="material-symbols-outlined">delete</span>
+                        <span className="material-symbols-outlined">more_horiz</span>
                       </button>
                     </div>
                   </div>
@@ -601,6 +670,20 @@ export default function MottosModule(props: MottosModuleProps) {
           </section>
         )
       })}
+
+      {/* 功能气泡菜单（优化建议区第15轮）：锚定行 / ⋯ 按钮，互斥单开 */}
+      {menuFor &&
+        (() => {
+          const m = mottos.find((x) => x.id === menuFor.id)
+          if (!m) return null
+          return (
+            <ActionMenu
+              anchorEl={menuFor.anchor}
+              items={mottoMenuItems(m)}
+              onClose={() => setMenuFor(null)}
+            />
+          )
+        })()}
 
       {/* 正式区笔记弹窗：标题区带出处（优化建议区），正文不再重复句子+出处 */}
       <MdDialog
