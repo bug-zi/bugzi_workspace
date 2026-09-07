@@ -14,8 +14,15 @@ export type ModuleId =
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 
+// 草稿本频道（优化建议区第21轮，DB v14：drafts.channel）：固定两频道起步，加频道零迁移
+export type DraftChannel = 'general' | 'turtle'
+
 // AI 助手名字（优化建议区：起名 debugzi，与用户 bugzi 配对）：主进程 prompt 与渲染层文案共用
 export const AI_NAME = 'debugzi'
+
+// 海龟汤对局视图进出事件（优化建议区第21轮，草稿本联动）：TurtlePanel 派发、App 接住传 DraftSidebar；
+// detail 为 { title, surface }（进入对局）或 null（退出）
+export const TURTLE_GAME_EVENT = 'bugzi:turtle-game'
 
 // settings 表 key 常量
 export const SettingsKeys = {
@@ -44,7 +51,13 @@ export const SettingsKeys = {
   ZjPanelWidth: 'zj_panel_width',
   ZjPanelCollapsed: 'zj_panel_collapsed',
   // 灵感方向指引（优化建议区第18轮）：JSON { pos, neg }，AI 生成灵感时置顶注入
-  InspirationGuide: 'inspiration_guide'
+  InspirationGuide: 'inspiration_guide',
+  // 草稿本（优化建议区第21轮）：右缘面板互斥展开态 + 宽度 + 当前频道与各频道激活草稿
+  RightPanelExpanded: 'right_panel_expanded',
+  DraftWidth: 'draft_width',
+  DraftActiveChannel: 'draft_active_channel',
+  DraftActiveGeneral: 'draft_active_general',
+  DraftActiveTurtle: 'draft_active_turtle'
 } as const
 
 export type Theme = 'light' | 'dark'
@@ -120,6 +133,16 @@ export interface AiMessage {
   created_at: string
 }
 
+// 草稿本条目（drafts 表，DB v14；正文在 md_path 指向的真实 .md 文件）
+export interface Draft {
+  id: number
+  title: string
+  channel: DraftChannel
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
 export interface MottoRecord {
   id: number
   content: string
@@ -191,6 +214,7 @@ export interface RecycleItem {
     | 'zhijiji'
     | 'reasoning_soup'
     | 'reasoning_game'
+    | 'drafts'
   item_id: number
   payload: string
   created_at: string

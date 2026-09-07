@@ -41,7 +41,7 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const [refineFor, setRefineFor] = useState<InspirationRecord | null>(null)
   const [refineResult, setRefineResult] = useState<string | null>(null)
   const [refining, setRefining] = useState(false)
-  // 正文预览（优化建议区：卡片显示 md 正文前 100 字，看全灵感内容；手动条正文为空不显示）
+  // 正文预览（优化建议区：卡片显示 md 正文预览，看全灵感内容；手动条正文为空不显示）
   const [previews, setPreviews] = useState<Record<number, string>>({})
   // 灵感方向指引（优化建议区第18轮）：手动「想要/不想要」，AI 生成时置顶注入
   const [guideOpen, setGuideOpen] = useState(false)
@@ -51,13 +51,13 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const load = useCallback(async () => {
     const rows = await window.api.inspirations.list()
     setItems(rows)
-    // 批量读 md 正文做预览：压平空白取前 100 字（读取失败静默为空；v11 起正文不含标题行）
+    // 批量读 md 正文做预览：压平空白取前 120 字（summary 放宽 ≤100 字后「第一步」更可能露出，3 行截断仍可能夹断、全文靠 md 弹窗；读取失败静默为空；v11 起正文不含标题行）
     const entries = await Promise.all(
       rows.map(async (it) => {
         let body = ''
         try {
           const raw = await window.api.md.read(it.md_path)
-          body = raw.replace(/\s+/g, ' ').trim().slice(0, 100)
+          body = raw.replace(/\s+/g, ' ').trim().slice(0, 120)
         } catch {
           /* 无正文则不显示预览 */
         }
@@ -185,7 +185,11 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
     setGenerating(true)
     try {
       const r = await window.api.inspirations.generate()
-      toast(`已生成 ${r.inserted} 条灵感，已入草稿区`)
+      toast(
+        r.winds?.length
+          ? `已生成 ${r.inserted} 条灵感，已入草稿区；本期风向：${r.winds.join(' · ')}`
+          : `已生成 ${r.inserted} 条灵感，已入草稿区`
+      )
       await load()
     } catch (e) {
       const msg = (e as Error).message

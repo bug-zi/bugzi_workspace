@@ -9,8 +9,16 @@ import { useToast } from './Toast'
 import './AiSidebar.css'
 
 export interface AiSidebarProps {
+  /** 收起（右缘面板互斥制：debugzi / 草稿本 / 都收起，优化建议区第21轮） */
   collapsed: boolean
-  onToggle: () => void
+  /** 都收起时由本组件渲染右缘细条双图标入口（草稿本展开时不渲染，右缘让位） */
+  showRail: boolean
+  /** 展开 debugzi（细条图标） */
+  onExpand: () => void
+  /** 收起（头部按钮） */
+  onCollapse: () => void
+  /** 细条上切到草稿本 */
+  onOpenDraft: () => void
   currentModule: string
   /** 模块动作带来的频道请求（万象问AI/辩真验证/致知己追问）：auto 时切频道后自动发送 */
   pending: { text: string; channel: AiChannel; auto: boolean } | null
@@ -74,7 +82,18 @@ async function persistActive(id: number | null, channel: AiChannel): Promise<voi
 }
 
 export default function AiSidebar(props: AiSidebarProps) {
-  const { collapsed, onToggle, currentModule, pending, onPendingConsumed, messagesVersion, onNavigateToProfile } = props
+  const {
+    collapsed,
+    showRail,
+    onExpand,
+    onCollapse,
+    onOpenDraft,
+    currentModule,
+    pending,
+    onPendingConsumed,
+    messagesVersion,
+    onNavigateToProfile
+  } = props
   const { toast } = useToast()
   const [activeChannel, setActiveChannel] = useState<AiChannel>('assistant')
   const [sessions, setSessions] = useState<AiSessionRow[]>([])
@@ -420,10 +439,16 @@ export default function AiSidebar(props: AiSidebarProps) {
   }
 
   if (collapsed) {
+    // 草稿本面板正展开：隐藏但保持挂载（进行中的生成任务 await 仍能回填状态，重展开即恢复）
+    if (!showRail) return <aside className="ai-sidebar" style={{ display: 'none' }} aria-hidden />
+    // 都收起：右缘细条双图标入口（debugzi / 草稿本，互斥展开）
     return (
       <aside className="ai-sidebar collapsed">
-        <button className="ai-toggle" onClick={onToggle} title={`展开 ${AI_NAME}`}>
+        <button className="ai-toggle" onClick={onExpand} title={`展开 ${AI_NAME}`}>
           <span className="material-symbols-outlined">forum</span>
+        </button>
+        <button className="ai-toggle" onClick={onOpenDraft} title="展开草稿本">
+          <span className="material-symbols-outlined">edit_note</span>
         </button>
       </aside>
     )
@@ -440,7 +465,7 @@ export default function AiSidebar(props: AiSidebarProps) {
         <button className="btn btn-ghost" onClick={() => setPanelOpen((v) => !v)} title="会话列表">
           <span className="material-symbols-outlined">list</span>
         </button>
-        <button className="btn btn-ghost" onClick={onToggle} title="收起">
+        <button className="btn btn-ghost" onClick={onCollapse} title="收起">
           <span className="material-symbols-outlined">chevron_right</span>
         </button>
       </div>
@@ -634,6 +659,7 @@ function moduleLabel(m: string): string {
     inspirations: '灵感泉',
     verify: '辩真阁',
     zhijiji: '致知己',
+    reasoning: '推理角',
     recycle: '回收站',
     profile: '个人中心'
   }

@@ -1,6 +1,6 @@
 # 推理角 designs-specs.md
 
-> 本文档由 AI 基于 `docs/project/idea/推理角/design.md`（260906 开发者审核通过，含出题质量标准与两碗参考汤）与《总需求文档.md》生成，是开发的直接依据。依赖：样式/designs-specs.md（MdDialog / GoConfigDialog / ConfirmDialog / Toast 与主题色系约束）、回收站/designs-specs.md（接入约定）、致知己/designs-specs.md（画像注入 profileDigest 惯例）。
+> 本文档由 AI 基于 `docs/project/需求（功能模块）/推理角/design.md`（260906 开发者审核通过，含出题质量标准与两碗参考汤）与《总需求文档.md》生成，是开发的直接依据。260907 自 `docs/project/idea/推理角/` 迁入正式需求目录。依赖：样式/designs-specs.md（MdDialog / GoConfigDialog / ConfirmDialog / Toast 与主题色系约束）、回收站/designs-specs.md（接入约定）、致知己/designs-specs.md（画像注入 profileDigest 惯例）。
 >
 > **v1.3（260907）题库预生成**：三处取题（汤库 / 每日一题 / 练习场）改为题库预存取用，AI 后台补充——消除「现场等 AI 出题」。设计文档：`docs/superpowers/specs/2026-09-07-reasoning-question-bank-design.md`（开发者会话内逐节批准）。增量见 §0 常量、§1 DB v14、§2 UI、§4 IPC 与补充泵、§6 接线、§8 验收。
 
@@ -12,7 +12,7 @@
 - 难度枚举：`easy | medium | hard`（简单 / 中等 / 困难）。
 - 每日题/练习场题型（**v1.2 洞察题型池**）：`insight_invariant | strategy_protocol | counter_probability`（不变量与构造 / 策略协议设计 / 反直觉概率）。旧枚举 `logic_grid | truth_lie | sequence | verbal_trap` 全部退池不再生成（真假话推理为开发者明令删除），历史行的显示名映射保留。
 - 精选题库标签（v1.2，自由文本）：认知推理 / 策略协议 / 构造编码 / 不变量构造 / 组合计数 / 递推构造 / 反直觉概率。
-- 汤状态：`fresh | playing | solved | abandoned`（未玩 / 进行中 / 已破 / 弃汤），终态后不可再开局（已知汤底，重玩无意义）。
+- 汤状态：`fresh | playing | solved | abandoned`（未玩 / 进行中 / 已破 / 弃汤），终态后不可再开局（已知汤底，重玩无意义），但可**只读回看**——终态汤点击 → 打开该汤最近一局终局对局查看（问题疑惑区第8轮）。
 - 回收站来源值：`reasoning_soup` / `reasoning_game`（两值同属回收站「推理角」页签）。
 - 不新增 AI 频道（v1）：`CHANNEL_BY_MODULE` 不加 reasoning 映射（默认助手频道）；不新增 settings key；不新增定时任务（v1.3 起每日题为「打开现取」——从预生成池转正，池空才现场出题；补充泵为事件触发的一次性后台任务，非定时器）。
 - 题库常量（v1.3，`electron/services/reasoningStock.ts`）：`SOUP_TARGET=10 / SOUP_LOW=5`（汤库 fresh 存量目标/低水位）、`PUZZLE_TARGET=10 / PUZZLE_LOW=5`（wall_pool 题池）。新事件 `reasoning:stockChanged`（补充泵每补完一批推送，照 `recycle:changed` 模式，渲染层刷新汤库列表）。
@@ -135,16 +135,17 @@ CREATE TABLE wall_pool (
 - 生成中按钮 loading「AI 出汤中…」；LLM 未配置点按钮弹 GoConfigDialog（全局规则 8，下同）。
 - **v1.3 定位变化**：「来 3 碗汤」从唯一获取途径退居**手动补充**（fresh 存货由补充泵自动维持）；行为与样式原样保留，与泵并发各自独立插库。
 - **v1.3 事件刷新**：监听 `reasoning:stockChanged` 刷新汤库列表——后台补的汤渐进出现，无 toast。汤库为空时空态文案改「AI 正在后台备汤，稍候即有新汤；或点『来 3 碗汤』立即补」。
-- 列表行：汤名 + 难度 badge + 题材 chip + 状态标记（未玩/进行中/已破/弃汤）。**列表不展示汤面**（开局后才见，保留神秘感）；`playing` 行点击=续局，`fresh` 行点击=开局，终态行不可点。
+- 列表行：汤名 + 难度 badge + 题材 chip + 状态标记（未玩/进行中/已破/弃汤）。**列表不展示汤面**（开局后才见，保留神秘感）；`playing` 行点击=续局，`fresh` 行点击=开局，终态行点击=只读回看（第8轮，title 提示「已终局，点击回看本局问答与汤底」）。
 - 汤行删除：二次确认（ConfirmDialog）→ 回收站；`playing` 状态的汤不可删（提示先结束对局——放弃或破汤）。
 
-**TurtlePanel · 对局视图（主栏内嵌，点汤/续局进入）：**
+**TurtlePanel · 对局视图（主栏内嵌，点汤/续局/终局回看进入）：**
 
 - 顶部：返回列表 + 汤名/难度/题材 + 状态徽标 + 统计（问 N · 用时 mm:ss 实时跳动）；下方汤面卡片（全文）。
 - 问答流：气泡式（user 右 / assistant 左，照 AI 边栏消息样式惯例）；`verdict`（猜汤底判定，含破/未破+方向反馈）整块强调样式；`invalid` 引导消息弱化样式。
 - 底部输入行：提问输入框 + 发送；「我猜汤底」→ 行内展开多行推理输入 + 提交/收起；「放弃」→ ConfirmDialog 二次确认。
 - LLM 调用中输入区 loading 防连发。
 - 终局（ask/guess/abandon 的 IPC 返回终态后）：问答流尾部展示汤底卡片 + 「查看复盘」按钮 → MdDialog 打开 `md_path`（渲染态，双击编辑能力沿用全局弹窗默认，不特殊禁用）。
+- 终局回看（第8轮）：点终态汤进入即呈终局形态——payload 自带 bottom/mdPath/durationMs，汤底卡片直接展示、无输入行、用时取落库值不再跳动。
 - 中断续玩 = 每条消息即时落库的自然结果，无显式保存。
 
 **TurtlePanel · 对局记录 tab：**
@@ -219,10 +220,12 @@ CREATE TABLE wall_pool (
 
 ```
 turtle:listSoups(difficulty?)            → 汤列表（不含 surface/bottom/analysis）
-turtle:openSoup(soupId)                  → { gameId, title, surface, difficulty, theme }
-                                           fresh → 开新局（建 game 行）；playing → 返回现有局（续玩）
+turtle:openSoup(soupId)                  → 对局载荷（同 turtle:game）
+                                           fresh → 开新局（建 game 行）；playing → 返回现有局（续玩）；
+                                           终态 → 返回最近一局终局对局（只读回看，不开新局，第8轮）
 turtle:game(gameId)                      → { title, surface, difficulty, theme, status,
-                                             questionCount, startedAt, messages[] }（进行中不含 bottom）
+                                             questionCount, startedAt, messages[] }
+                                           （进行中不含 bottom；终局局另含 bottom/mdPath/durationMs）
 turtle:ask(gameId, question)             → { type, reply }（落 question + answer 两条消息；
                                            type≠invalid 时 question_count+1）
 turtle:guess(gameId, reasoning)          → { solved, bottom?, hits?, misses?, feedback, mdPath? }
@@ -310,7 +313,7 @@ reasoning:stockCheck()                   → void（v1.3：触发题库补充泵
 - `App.tsx`：MODULES 在 recycle 前插 `{ id: 'reasoning', label: '推理角', icon: 'psychology' }`；keep-alive 渲染 `<ReasoningModule />`；`CHANNEL_BY_MODULE` 不加映射；本模块无需 onOpenAi（赛后讨论由用户手动到助手频道）。
 - 样式入 App.css（照现有模式），遵循双主题 CSS 变量与「框/按键/弹窗用主题相近色系」约束，图标一律 Material Symbols。
 
-## 7. 总需求文档同步（开发者审核后生效）
+## 7. 总需求文档同步（260907 已同步，含 v1.3 待实现项）
 
 - 条目 3：结构化数据清单 + 汤库 / 对局 / 问答消息 / 每日题；md 清单 + 对局记录、每日题详情。
 - 条目 5：回收站五板块 → 六板块（+ 推理角：汤恢复回汤库、对局记录恢复回记录列表；每日题不进回收站）。

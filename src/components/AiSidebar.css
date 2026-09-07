@@ -25,6 +25,7 @@
   width: var(--ai-width-collapsed);
   align-items: center;
   padding-top: 8px;
+  gap: 2px;
 }
 .ai-toggle {
   border: none;

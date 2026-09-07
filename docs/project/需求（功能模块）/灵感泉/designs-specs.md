@@ -75,36 +75,25 @@ CREATE TABLE inspirations (
 
 | 通道                        | 签名                                     | 行为                                                                           |
 | ----------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------- |
-| `inspirations:generate`     | `() => Promise<{ inserted: number }>`    | 画像 → LLM → 查重 → 批量入库草稿区；LLM 未配置抛`LLM_NOT_CONFIGURED`        |
+| `inspirations:generate`     | `() => Promise<{ generated: number; inserted: number; winds: string[] }>` | 两阶段生成（发散12→配额自评5）→ 查重 → 批量入库草稿区，返回含本批风向 winds；LLM 未配置抛`LLM_NOT_CONFIGURED` |
 | `inspirations:refine`       | `(id: number) => Promise<string>`        | 读该条 title + md → LLM 生成扩展 md（**不写库**），返回内容                   |
 | `inspirations:appendRefine` | `(id, content: string) => Promise<void>` | 主进程把`## AI 补充 · {yyyy/M/d HH:mm}` 段追加到该条 md 末尾，bump updated_at |
 
 - AI 逻辑（generate/refine 的 prompt 构造与解析）放 `electron/ai/services.ts`，导出 `generateInspirations()` / `refineInspiration(id)`，与 `generateMottos` 同区同构。
 - `inspirations:*` CRUD handler 内联 ipc.ts（现状不变）；`appendRefine` 在主进程用 mdRead/mdWrite 完成追加（拼接收敛主进程，避免前端 read-modify-write 与打开中的 MdDialog 竞态）。
 
-### 6.2 从零生成 generateInspirations（「来5条灵感」）
+### 6.2 从零生成 generateInspirations（「来5条灵感」；优化建议区第18轮两阶段 + 任务2规范 v2）
 
-- **画像**：`SELECT title, md_path FROM inspirations WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 50`；每条读 md 正文（跳过首行 `# 标题`），非空截 100 字，格式 `- {title}：{正文截断}`（正文空则仅标题）。
+- **口味注入**：手动「方向指引」（settings.inspiration_guide，置顶最高优先级，留空不注入）+ `inspirationTasteProfile()` 跨模块画像（个人画像摘要 / 格言正式区≤30条 / 万象词条按板块 / 手写灵感标题；AI 生成条不进画像只进避免清单）。
 - **避免清单**：`SELECT title FROM inspirations ORDER BY updated_at DESC LIMIT 500`（**不过滤 deleted_at**，含回收站，防 prompt 超长）。
-- **prompt**（jsonMode；对象包裹返回，规避格言库踩过的 json_object 顶层数组问题）：
-
-```
-以下是我的灵感泉里已有的项目灵感（兴趣画像）：
-{画像清单；空则：（暂无已有灵感，可自由发散各类项目创意）}
-
-以下清单里的方向请勿重复或高度雷同：
-{avoid 清单；空则：（暂无）}
-
-请参考我的兴趣画像，生成恰好 5 条新的项目灵感。每条包含：
-- title：灵感标题（10~25 字，具体、可执行，不要空泛口号）
-- summary：一句话简介（≤50 字，说明这是什么、有什么价值）
-
-返回 JSON：{"inspirations": [{"title": "...", "summary": "..."}]}
-```
-
-- **解析**：复用格言库 `parseJsonArray` 思路（兼容 ```json 包裹与对象包裹，取首个数组字段）；title/summary 任一缺失或空白则跳过该条；0 条有效抛「LLM 未返回有效灵感」。
-- **入库**（解析成功后统一执行，任一环节失败整体不入库）：逐条 `SELECT 1 FROM inspirations WHERE title = ?`（不过滤 deleted_at）精确查重，命中跳过；插入 `status='draft'`、`origin='ai'`、`sort` 取草稿区 `MAX(sort)+1` 起递增（区末尾，与 moveTo 语义一致）；md 内容 `# {title}\n\n{summary}\n`（mdCreate）。
-- **返回** `{ inserted }`；渲染层 toast「已生成 N 条灵感，已入草稿区」+ 列表刷新。
+- **风向标（任务2）**：代码内置 14 个基调词池（实用主义/纸上原型/数据控/声音实验/时间胶囊/荒诞幽默/城市观察/怀旧电子/桌面游戏/手作实感/极简主义/社群之夜/慢生活/解谜推理），每批随机抽 1~2 个注入发散 prompt；12 条中 3~5 条靠拢即可；与方向指引冲突时指引优先。
+- **两阶段管线**（jsonMode，对象包裹返回）：
+  - 阶段一发散（temperature 0.95）：「挑剔的创意策展人」人设，恰好 12 条，每条 `{"title","summary","form"}`；form 从 7 种形态枚举选（实用工具/游戏与玩具/内容创作/数据可视化/实验探索/艺术表达/社群活动），至少覆盖 4 种；title 10~25 字「画面+实体锚点」结构（prompt 内置正反例，禁纯隐喻）；summary ≤100 字两句结构（第一句大白话「是什么+值得在哪」，第二句「第一步：」最小动作；禁「先…」开头、禁文艺化压缩）。
+  - 阶段二自评（temperature 0.4）：五维打分（新颖度/契合口味/具体度/兴奋度/**标题可读性**），批内硬配额「5 条 ≥3 种 form、同 form ≤2 条」，恰好选 5 并按两句模板打磨 summary；title 与 form 沿用候选原文。
+- **解析**：`parseInspirationArray`（兼容 ```json 与对象包裹）；title/summary 任一缺失或空白跳过；**form 非必填，非法/缺失落「未分类」**；0 条有效抛「LLM 未返回有效灵感」。两阶段解析失败各自动重试一次。
+- **降级**：自评两趟均失败 → `pickDiverseFive()` 代码侧按 form 配额贪心取 5 条（同 form ≤2、优先补出现最少形态；配额不可满足按原顺序前 5 兜底），不空手而归。
+- **入库**（解析成功后统一执行，任一环节失败整体不入库）：逐条精确查重（不过滤 deleted_at）命中跳过；`status='draft'`、`origin='ai'`、sort 取草稿区 `MAX(sort)+1` 递增；md 正文只存 summary（两句间单换行，第19轮起不写标题行）。
+- **返回** `{ generated, inserted, winds }`；渲染层 toast「已生成 N 条灵感，已入草稿区；本期风向：X · Y」+ 列表刷新；卡片正文预览取前 120 字。
 
 ### 6.3 AI 完善（refine → 预览 → 追加）
 

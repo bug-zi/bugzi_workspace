@@ -17,12 +17,12 @@ bugzi_workspace/
 │   ├── preload.ts       # contextBridge 暴露 IPC API
 │   ├── db/              # SQLite 初始化与访问层
 │   ├── ai/              # LLM/MCP 调用（唯一发起点）
-│   └── services/        # 回收站清理、定时任务
+│   └── services/        # 回收站、定时任务、bzres 协议、文件与存储服务
 ├── src/                 # 渲染进程（React）
 │   ├── App.tsx          # 三栏布局 + 模块路由
 │   ├── theme/           # 主题系统
 │   ├── components/      # 全局组件（MdDialog 等）
-│   └── modules/         # 六个模块页面
+│   └── modules/         # 八个模块页面
 └── docs/                # 项目文档（本目录，不参与构建）
 ```
 
@@ -35,9 +35,9 @@ bugzi_workspace/
 
 ### 0.3 数据存储（总需求文档第 3 条）
 
-- SQLite（better-sqlite3）存结构化数据，md 存真实文件，均位于 `app.getPath('userData')` 下：
+- SQLite（node:sqlite）存结构化数据，md 存真实文件，均位于 `app.getPath('userData')` 下：
   - `<userData>/bugzi.db`
-  - `<userData>/md/` 下按模块分目录：`mottos/`（格言笔记）、`inspirations/`（灵感文档）、`wiki/`（知识卡片正文）、`verify/`（辩真记录详情）
+  - `<userData>/md/` 下按模块分目录：`mottos/`（格言笔记）、`inspirations/`（灵感文档）、`wiki/`（知识卡片正文）、`verify/`（辩真记录详情）、`zhijiji/`（致知己答案版本）、`turtle/`（海龟汤对局记录）、`wall/`（每日题详情与精选题档案）
   - `<userData>/bg/`：bg-light、bg-dark 背景图
 - 各模块数据表结构在各自模块的 designs-specs.md 中定义；回收站表见 回收站/designs-specs.md。
 
@@ -67,7 +67,7 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 ## 2. 图标（样式 design.md 第 3 条）
 
 - 全 App 统一 Material Symbols Outlined（Google Fonts 引入），禁 emoji。
-- 六模块图标建议：格言库 format_quote、万象库 public、灵感泉 lightbulb、辩真阁 fact_check、回收站 delete、个人中心 person；AI 边栏 forum；主题切换 light_mode/dark_mode。实现时可调整，保持 Outlined 风格统一。
+- 八模块图标：格言库 format_quote、万象库 public、灵感泉 lightbulb、辩真阁 fact_check、致知己 self_improvement、推理角 psychology、回收站 delete、个人中心 person；AI 边栏 forum；主题切换 light_mode/dark_mode。保持 Outlined 风格统一。
 
 ## 3. 三栏布局（样式 design.md 第 5 条 + 总需求文档第 12 条）
 
@@ -77,12 +77,12 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 ┌──────┬──────────────────────────┬─────────────┐
 │ 左边栏 │        中间主栏           │  AI 助手边栏  │
 │ 图标+ │   当前模块的内容           │  可收起/展开  │
-│ 名称  │   （路由切换六个模块）      │  默认宽度 ~   │
+│ 名称  │   （路由切换八个模块）      │  默认宽度 ~   │
 │      │                          │  320px      │
 └──────┴──────────────────────────┴─────────────┘
 ```
 
-- 左侧边栏：垂直排列，宽约 72px 展开态（图标+模块名竖排或横排悬浮提示均可，实现时定）。模块顺序固定：格言库 → 万象库 → 灵感泉 → 辩真阁 → 回收站 → 个人中心。当前模块高亮（`--color-primary-soft` 底）。侧边栏底部：主题切换图标。
+- 左侧边栏：垂直排列，宽约 72px 展开态（图标+模块名竖排或横排悬浮提示均可，实现时定）。模块顺序固定：格言库 → 万象库 → 灵感泉 → 辩真阁 → 致知己 → 推理角 → 回收站 → 个人中心。当前模块高亮（`--color-primary-soft` 底）。侧边栏底部：主题切换图标。
 - 中间主栏：模块路由（格言库为默认页），内容区滚动，背景透出主题背景图。
 - 右侧 AI 助手边栏：可收起/展开（边缘把手或按钮），收起时仅留窄条。宽度可拖拽调整（v1 可选）。
 
@@ -96,7 +96,7 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 
 - 自由对话：多轮聊天，输入框 + 消息气泡列表，支持流式输出渲染。
 - 模块感知：每轮请求附带当前所在模块名与简短上下文标签（如 `当前模块：格言库`），system prompt 中指示 AI 优先围绕该模块话题。
-- 单会话（v1）：全部历史持久保存（SQLite ai_messages 表：id, role, content, created_at），打开 App 即加载全部历史；多会话管理列 v2。
+- 频道制（260905 致知己配套改造，详见 致知己/designs-specs.md）：边栏内按场景分频道——助手 / 万象·问答 / 致知己·追问 / 辩真·核查，每频道独立会话历史（ai_messages 表加 channel 字段，存量会话归助手频道）与独立 system prompt 人设；手动展开停在上次所在频道。各频道及全部 AI 功能的上下文注入「我的画像」。
 - 万象库「问 AI」与辩真阁验证过程会向此边栏推送消息（见各模块 specs）。
 
 ### 4.2 降级（总需求文档第 8 条）
@@ -105,7 +105,7 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 
 ## 5. 全局 md 弹窗组件 MdDialog（总需求文档第 6 条）
 
-格言笔记 / 万象卡片 / 灵感文档 / 辩真记录详情共用，props 化：
+格言笔记 / 万象卡片 / 灵感文档 / 辩真记录详情 / 致知己答案版本 / 推理角对局记录与每日题详情共用，props 化：
 
 ```ts
 interface MdDialogProps {
@@ -128,7 +128,7 @@ interface MdDialogProps {
 - [ ] 主题双套 CSS 变量生效，双入口切换即时换肤且持久化
 - [ ] 背景图铺满全窗口，卡片半透明叠加，符合双主题色系
 - [ ] 全 App 无 emoji 图标，Material Symbols Outlined 统一
-- [ ] 六模块路由可达，侧边栏顺序与高亮正确，默认页格言库
+- [ ] 八模块路由可达，侧边栏顺序与高亮正确，默认页格言库
 - [ ] AI 边栏可收起/展开，能自由对话（已配置 LLM 时），历史持久
 - [ ] LLM 未配置时发送 → 提示弹窗 + 直达个人中心
-- [ ] MdDialog 组件：渲染态 → 双击编辑 → 失焦保存恢复渲染，四个模块场景可复用
+- [ ] MdDialog 组件：渲染态 → 双击编辑 → 失焦保存恢复渲染，各模块场景可复用

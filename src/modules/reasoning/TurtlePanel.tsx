@@ -6,6 +6,7 @@ import type {
   TurtleGameRecordRow,
   TurtleSoupRow
 } from '../../renderer/api'
+import { TURTLE_GAME_EVENT } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -115,6 +116,16 @@ export default function TurtlePanel() {
     void loadRecords()
   }, [loadRecords])
 
+  // 草稿本联动（优化建议区第21轮）：进出对局视图广播对局上下文（App 接住传 DraftSidebar，
+  // 面板据此自动切海龟汤频道 + 新建草稿以汤名命名；不预填正文，开发者 260907 定）
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent(TURTLE_GAME_EVENT, {
+        detail: gameData ? { title: gameData.title } : null
+      })
+    )
+  }, [gameData])
+
   // keep-alive：切回推理角时刷新（后台可能已终局）
   useModuleActivated('reasoning', () => {
     if (!gameData) {
@@ -123,9 +134,13 @@ export default function TurtlePanel() {
     }
   })
 
-  // 对局用时实时跳动（局终即停）
+  // 对局用时实时跳动（局终即停）；终局回看直接取落库用时
   useEffect(() => {
-    if (!gameData || gameData.status !== 'playing') return
+    if (!gameData) return
+    if (gameData.status !== 'playing') {
+      setElapsed(gameData.durationMs ?? 0)
+      return
+    }
     const tick = (): number => Date.now() - new Date(gameData.startedAt).getTime()
     setElapsed(tick())
     const t = setInterval(() => setElapsed(tick()), 1000)
@@ -159,13 +174,13 @@ export default function TurtlePanel() {
     }
   }
 
-  /** 开局 / 续局（playing 汤点击 = 续玩） */
+  /** 开局 / 续局 / 终局回看（playing 汤点击 = 续玩；终局汤点击 = 只读回看，payload 自带汤底） */
   const openSoup = async (soup: TurtleSoupRow): Promise<void> => {
     if (busy) return
     try {
       const g = await window.api.turtle.openSoup(soup.id)
       setGameData(g)
-      setRevealed(null)
+      setRevealed(g.bottom && g.mdPath ? { bottom: g.bottom, mdPath: g.mdPath } : null)
       setInput('')
       setGuessOpen(false)
       setGuessText('')
@@ -609,39 +624,41 @@ export default function TurtlePanel() {
                 汤库是空的，点「来 3 碗汤」让 AI 出题
               </div>
             )}
-            {soups.map((s) => {
-              const startable = s.status === 'fresh' || s.status === 'playing'
-              return (
-                <div
-                  className="row-item"
-                  key={s.id}
-                  onClick={() => startable && void openSoup(s)}
-                  style={{ cursor: startable ? 'pointer' : 'default' }}
-                  title={startable ? (s.status === 'playing' ? '继续这碗汤' : '开局') : '已终局，不可再玩'}
-                >
-                  <div className="row-main">
-                    <div className="row-title">《{s.title}》</div>
-                    <div className="row-sub">
-                      {DIFF_ZH[s.difficulty] ?? s.difficulty} · {s.theme_tag} · {fmtDate(s.created_at)}
-                    </div>
+            {soups.map((s) => (
+              <div
+                className="row-item"
+                key={s.id}
+                onClick={() => void openSoup(s)}
+                title={
+                  s.status === 'playing'
+                    ? '继续这碗汤'
+                    : s.status === 'fresh'
+                      ? '开局'
+                      : '已终局，点击回看本局问答与汤底'
+                }
+              >
+                <div className="row-main">
+                  <div className="row-title">《{s.title}》</div>
+                  <div className="row-sub">
+                    {DIFF_ZH[s.difficulty] ?? s.difficulty} · {s.theme_tag} · {fmtDate(s.created_at)}
                   </div>
-                  <span className={`badge${s.status === 'solved' ? ' primary' : ''}`}>
-                    {SOUP_STATUS_ZH[s.status] ?? s.status}
-                  </span>
-                  {s.status !== 'playing' && (
-                    <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="icon-btn danger"
-                        title={s.status === 'fresh' ? '放入回收站' : '放入回收站（不影响已有对局记录）'}
-                        onClick={() => setDiscardSoupTarget(s)}
-                      >
-                        <span className="material-symbols-outlined">delete</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
-              )
-            })}
+                <span className={`badge${s.status === 'solved' ? ' primary' : ''}`}>
+                  {SOUP_STATUS_ZH[s.status] ?? s.status}
+                </span>
+                {s.status !== 'playing' && (
+                  <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="icon-btn danger"
+                      title={s.status === 'fresh' ? '放入回收站' : '放入回收站（不影响已有对局记录）'}
+                      onClick={() => setDiscardSoupTarget(s)}
+                    >
+                      <span className="material-symbols-outlined">delete</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}

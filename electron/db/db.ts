@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -445,6 +445,25 @@ function migrate(): void {
       insBank.run(b.title, b.tag, b.difficulty, b.puzzle, b.answer, b.solution, b.source, 'todo', now13, now13)
     }
     d.exec('PRAGMA user_version = 13')
+  }
+
+  if (version < 14) {
+    // v14：草稿本（优化建议区第21轮）——右缘常驻面板的 md 草稿。channel 固定两频道起步
+    // （general 通用 / turtle 海龟汤），为普通字符串字段，将来加频道零迁移；
+    // 正文存 md/drafts/{id}.md（真实 .md 文件），删除走回收站软删（deleted_at）。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS drafts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'general',
+        md_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_drafts_channel ON drafts(channel);
+    `)
+    d.exec('PRAGMA user_version = 14')
   }
 }
 

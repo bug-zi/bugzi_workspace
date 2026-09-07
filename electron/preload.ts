@@ -27,7 +27,8 @@ const api = {
         | 'verify_records'
         | 'zhijiji_questions'
         | 'turtle_soups'
-        | 'turtle_games',
+        | 'turtle_games'
+        | 'drafts',
       id: number
     ): Promise<boolean> => ipcRenderer.invoke('item:discard', table, id),
     onRecycleChanged: (cb: () => void): (() => void) => {
@@ -50,6 +51,7 @@ const api = {
           | 'zhijiji'
           | 'reasoning_soup'
           | 'reasoning_game'
+          | 'drafts'
         item_id: number
         payload: string
         created_at: string
@@ -191,8 +193,8 @@ const api = {
     reorder: (moves: { id: number; status: string; sort: number }[]): Promise<boolean> =>
       ipcRenderer.invoke('inspirations:reorder', moves),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'inspirations', id),
-    /** 「来5条灵感」：已有灵感画像 → LLM 生成 5 条入草稿区（specs §6.2） */
-    generate: (): Promise<{ generated: number; inserted: number }> =>
+    /** 「来5条灵感」：两阶段生成（发散 12 → 配额自评 5）入草稿区；winds 为本批风向（specs §6.2 + 优化建议区任务2） */
+    generate: (): Promise<{ generated: number; inserted: number; winds: string[] }> =>
       ipcRenderer.invoke('inspirations:generate'),
     /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
     refine: (id: number): Promise<string> => ipcRenderer.invoke('inspirations:refine', id),
@@ -316,6 +318,25 @@ const api = {
       bankId: number
     ): Promise<{ standardAnswer: string; solution: string; mdPath: string }> =>
       ipcRenderer.invoke('wall:bankReveal', bankId)
+  },
+  draft: {
+    /** 某频道草稿列表（updated_at 倒序） */
+    list: (channel?: string): Promise<
+      { id: number; title: string; channel: string; md_path: string; created_at: string; updated_at: string }[]
+    > => ipcRenderer.invoke('draft:list', channel ?? 'general'),
+    /** 新建草稿（归属频道；海龟汤联动预填标题与正文模板），返回新草稿 id */
+    create: (channel: string, title?: string | null, content?: string | null): Promise<number> =>
+      ipcRenderer.invoke('draft:create', channel, title ?? null, content ?? null),
+    /** 改标题（不动 updated_at，列表顺序稳定） */
+    rename: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('draft:rename', id, title),
+    /** 保存正文（md.write + 触碰 updated_at 浮回列表顶部） */
+    save: (id: number, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('draft:save', id, content),
+    /** 大窗编辑（MdDialog 自行保存）后的触碰：只 bump updated_at */
+    touch: (id: number): Promise<boolean> => ipcRenderer.invoke('draft:touch', id),
+    /** 草稿入回收站（前端二次确认后调用） */
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'drafts', id)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),

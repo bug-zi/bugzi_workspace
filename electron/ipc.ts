@@ -136,9 +136,10 @@ export function registerIpc(): void {
     | 'zhijiji_questions'
     | 'turtle_soups'
     | 'turtle_games'
+    | 'drafts'
   const RECYCLE_MAP: Record<
     string,
-    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game'
+    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game' | 'drafts'
   > = {
     mottos: 'mottos',
     wiki_entries: 'wiki',
@@ -146,7 +147,8 @@ export function registerIpc(): void {
     verify_records: 'verify',
     zhijiji_questions: 'zhijiji',
     turtle_soups: 'reasoning_soup',
-    turtle_games: 'reasoning_game'
+    turtle_games: 'reasoning_game',
+    drafts: 'drafts'
   }
 
   ipcMain.handle('item:discard', (_e, table: string, id: number) => {
@@ -486,6 +488,48 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 草稿本（DB v14，优化建议区第21轮）：右缘常驻面板的 md 草稿 ----------
+  ipcMain.handle('draft:list', (_e, channel: string) =>
+    getDb()
+      .prepare(
+        'SELECT id, title, channel, md_path, created_at, updated_at FROM drafts WHERE channel = ? AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC'
+      )
+      .all(channel === 'turtle' ? 'turtle' : 'general')
+  )
+  ipcMain.handle('draft:create', (_e, channel: string, title: string | null, content: string | null) => {
+    const d = getDb()
+    const now = nowIso()
+    const r = d
+      .prepare('INSERT INTO drafts (title, channel, md_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(title && title.trim() ? title.trim().slice(0, 50) : '新建草稿', channel === 'turtle' ? 'turtle' : 'general', 'PENDING', now, now)
+    const id = Number(r.lastInsertRowid)
+    const mdPath = `md/drafts/${id}.md`
+    d.prepare('UPDATE drafts SET md_path = ? WHERE id = ?').run(mdPath, id)
+    // 正文不写标题行（口径同灵感第19轮）：标题由面板切换条展示；海龟汤联动的汤面/线索模板作为 content 传入
+    mdCreate(mdPath, content ?? '')
+    return id
+  })
+  ipcMain.handle('draft:rename', (_e, id: number, title: string) => {
+    // 改名不触碰 updated_at（与会话改名一致，列表顺序保持稳定）
+    getDb().prepare('UPDATE drafts SET title = ? WHERE id = ?').run(title.trim().slice(0, 50) || '新建草稿', id)
+    return true
+  })
+  ipcMain.handle('draft:save', (_e, id: number, content: string) => {
+    const d = getDb()
+    const row = d.prepare('SELECT md_path FROM drafts WHERE id = ?').get(id) as
+      | { md_path: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    mdWrite(row.md_path, content)
+    d.prepare('UPDATE drafts SET updated_at = ? WHERE id = ?').run(nowIso(), id)
+    return true
+  })
+  /** 大窗编辑（MdDialog 自行 md.write 保存）后的触碰：只 bump updated_at 让草稿浮回列表顶部 */
+  ipcMain.handle('draft:touch', (_e, id: number) => {
+    getDb().prepare('UPDATE drafts SET updated_at = ? WHERE id = ?').run(nowIso(), id)
+    return true
+  })
+
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
     getDb().prepare('SELECT * FROM verify_records WHERE deleted_at IS NULL ORDER BY id DESC').all()
@@ -627,7 +671,16 @@ export function registerIpc(): void {
       .prepare('SELECT id, status FROM turtle_soups WHERE id = ? AND deleted_at IS NULL')
       .get(soupId) as { id: number; status: string } | undefined
     if (!soup) throw new Error('NOT_FOUND')
-    if (soup.status === 'solved' || soup.status === 'abandoned') throw new Error('SOUP_FINISHED')
+    // 终局汤：回看模式（问题疑惑区第8轮）——取该汤最近一局终局对局只读打开，不开新局
+    if (soup.status === 'solved' || soup.status === 'abandoned') {
+      const fin = d
+        .prepare(
+          "SELECT id FROM turtle_games WHERE soup_id = ? AND status != 'playing' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"
+        )
+        .get(soupId) as { id: number } | undefined
+      if (!fin) throw new Error('NOT_FOUND')
+      return turtleGamePayload(fin.id)
+    }
     let game = d
       .prepare(
         "SELECT id FROM turtle_games WHERE soup_id = ? AND status = 'playing' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"
@@ -1225,7 +1278,7 @@ function insertTurtleMsg(
   ).run(gameId, role, type, content, createdAt)
 }
 
-/** 对局视图载荷（openSoup / game 共用）：进行中不暴露汤底（列表与后端均不含 bottom） */
+/** 对局视图载荷（openSoup / game 共用）：进行中不暴露汤底（列表与后端均不含 bottom）；终局局带汤底/复盘供回看 */
 function turtleGamePayload(gameId: number) {
   const d = getDb()
   const game = d
@@ -1233,9 +1286,9 @@ function turtleGamePayload(gameId: number) {
     .get(gameId) as TurtleGameRow | undefined
   if (!game) throw new Error('NOT_FOUND')
   const soup = d
-    .prepare('SELECT title, surface, difficulty, theme_tag FROM turtle_soups WHERE id = ?')
+    .prepare('SELECT title, surface, difficulty, theme_tag, bottom FROM turtle_soups WHERE id = ?')
     .get(game.soup_id) as
-    | { title: string; surface: string; difficulty: string; theme_tag: string }
+    | { title: string; surface: string; difficulty: string; theme_tag: string; bottom: string }
     | undefined
   if (!soup) throw new Error('NOT_FOUND')
   const messages = d
@@ -1252,7 +1305,11 @@ function turtleGamePayload(gameId: number) {
     status: game.status,
     questionCount: game.question_count,
     startedAt: game.started_at,
-    messages
+    messages,
+    // 终局回看（问题疑惑区第8轮）：额外暴露汤底与复盘路径；进行中不暴露
+    ...(game.status === 'playing'
+      ? {}
+      : { bottom: soup.bottom, mdPath: game.md_path, durationMs: game.duration_ms })
   }
 }
 

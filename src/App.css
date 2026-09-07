@@ -170,7 +170,7 @@
   font-size: 0.7em;
   padding: 0 6px;
 }
-/* 灵感泉卡片正文预览（优化建议区：md 正文前 100 字灰色小字，最多 3 行） */
+/* 灵感泉卡片正文预览（优化建议区：md 正文预览灰色小字，最多 3 行；字数上限见 InspirationsModule load） */
 .row-preview {
   margin-top: 2px;
   font-size: 0.82em;

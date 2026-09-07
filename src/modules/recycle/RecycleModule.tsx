@@ -13,7 +13,8 @@ const TABS: { key: string; label: string }[] = [
   { key: 'inspirations', label: '灵感泉' },
   { key: 'verify', label: '辩真阁' },
   { key: 'zhijiji', label: '致知己' },
-  { key: 'reasoning', label: '推理角' }
+  { key: 'reasoning', label: '推理角' },
+  { key: 'drafts', label: '草稿本' }
 ]
 
 /** 行属于哪个页签（推理角两来源同组） */
@@ -36,6 +37,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '致知己主列表'
     case 'reasoning_soup':
       return '推理角汤库'
+    case 'drafts':
+      return '草稿本原频道'
     default:
       return '推理角对局记录列表'
   }
@@ -58,6 +61,7 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'zhijiji') return String(p.title ?? '')
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
+    if (row.source === 'drafts') return String(p.title ?? '')
     return String(p.claim ?? '')
   } catch {
     return `#${row.item_id}`

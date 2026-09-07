@@ -12,6 +12,7 @@ export type RecycleSource =
   | 'zhijiji'
   | 'reasoning_soup'
   | 'reasoning_game'
+  | 'drafts'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -20,7 +21,8 @@ const TABLES: Record<RecycleSource, string> = {
   verify: 'verify_records',
   zhijiji: 'zhijiji_questions',
   reasoning_soup: 'turtle_soups',
-  reasoning_game: 'turtle_games'
+  reasoning_game: 'turtle_games',
+  drafts: 'drafts'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -32,7 +34,8 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   verify: 'md_path',
   zhijiji: null,
   reasoning_soup: null,
-  reasoning_game: 'md_path'
+  reasoning_game: 'md_path',
+  drafts: 'md_path'
 }
 
 export interface RecycleRow {
@@ -100,6 +103,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'reasoning_game':
       // 回推理角原列表：仅清标记（汤回汤库、对局记录回记录列表；汤状态与局状态不变）
       d.prepare(`UPDATE ${TABLES[rb.source]} SET deleted_at = NULL WHERE id = ?`).run(rb.item_id)
+      break
+    case 'drafts':
+      // 回草稿本原频道：仅清标记（channel 保留，恢复后仍在原频道列表）
+      d.prepare('UPDATE drafts SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)

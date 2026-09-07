@@ -8,7 +8,9 @@
 
 **Tech Stack:** Electron 44 + React 19 + TypeScript（electron-vite），无 CSS 框架（App.css 主题变量）。
 
-**Spec:** `docs/superpowers/specs/2026-09-05-motto-action-menu-interpret-channel-design.md`
+**Spec:** `docs/superpowers/specs/archive/2026-09-05-motto-action-menu-interpret-channel-design.md`（260907 一并归档）
+
+**已归档：** 260907 落地归档——260906 按本计划 5 任务执行完毕（见 `docs/log/260906.md`）。
 
 **项目适配（优先于技能默认）：**
 - **Git 纪律：AI 禁止执行任何 git 操作**（项目 CLAUDE.md）。本计划不含 commit 步骤；每任务完成后由开发者自行 commit。

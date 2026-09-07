@@ -12,6 +12,19 @@ export type ModuleId =
 /** AI 边栏频道（DB v9 频道制） */
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
 
+/** 草稿本频道（DB v14）：固定两频道起步 */
+export type DraftChannel = 'general' | 'turtle'
+
+/** 草稿本条目（drafts 表；正文在 md_path 指向的真实 .md 文件） */
+export interface DraftRow {
+  id: number
+  title: string
+  channel: DraftChannel
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
 export interface MottoRecord {
   id: number
   content: string
@@ -102,6 +115,7 @@ export interface RecycleRow {
     | 'zhijiji'
     | 'reasoning_soup'
     | 'reasoning_game'
+    | 'drafts'
   item_id: number
   payload: string
   created_at: string
@@ -173,6 +187,10 @@ export interface TurtleGamePayload {
   questionCount: number
   startedAt: string
   messages: TurtleGameMessageRow[]
+  /** 仅终局回看时有值：汤底 / 复盘 md 相对路径 / 对局用时（问题疑惑区第8轮） */
+  bottom?: string
+  mdPath?: string
+  durationMs?: number | null
 }
 
 /** 对局记录列表行（终局局，ended_at 倒序） */
@@ -481,6 +499,20 @@ export interface Api {
     update(id: number, category: string, content: string): Promise<boolean>
     delete(id: number): Promise<boolean>
   }
+  draft: {
+    /** 某频道草稿列表（updated_at 倒序） */
+    list(channel?: DraftChannel): Promise<DraftRow[]>
+    /** 新建草稿（海龟汤联动预填标题与正文模板），返回新草稿 id */
+    create(channel: DraftChannel, title?: string | null, content?: string | null): Promise<number>
+    /** 改标题（不动 updated_at，列表顺序稳定） */
+    rename(id: number, title: string): Promise<boolean>
+    /** 保存正文（md.write + 触碰 updated_at 浮回列表顶部） */
+    save(id: number, content: string): Promise<boolean>
+    /** 大窗编辑（MdDialog 自行保存）后的触碰：只 bump updated_at */
+    touch(id: number): Promise<boolean>
+    /** 草稿入回收站（前端二次确认后调用） */
+    discard(id: number): Promise<boolean>
+  }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
     create(content: string, source: string, status: string, tags?: string[]): Promise<number>
@@ -535,8 +567,8 @@ export interface Api {
     move(id: number, status: string, sort: number): Promise<boolean>
     reorder(moves: { id: number; status: string; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
-    /** 「来5条灵感」：已有灵感画像 → LLM 生成 5 条入草稿区（specs §6.2） */
-    generate(): Promise<{ generated: number; inserted: number }>
+    /** 「来5条灵感」：两阶段生成（发散 12 → 配额自评 5）入草稿区；winds 为本批风向（specs §6.2 + 优化建议区任务2） */
+    generate(): Promise<{ generated: number; inserted: number; winds: string[] }>
     /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
     refine(id: number): Promise<string>
     /** 确认追加：以「## AI 补充 · 时间」段追加到该条 md 末尾 */

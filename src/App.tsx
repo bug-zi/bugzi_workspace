@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ThemeProvider, useAppSettings } from './theme/ThemeProvider'
 import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
+import DraftSidebar from './components/DraftSidebar'
 import MottosModule from './modules/mottos/MottosModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
@@ -12,6 +13,7 @@ import ReasoningModule from './modules/reasoning/ReasoningModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
+import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
@@ -50,10 +52,36 @@ export const MODULE_ACTIVATED_EVENT = 'bugzi:module-activated'
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
   const [module, setModule] = useState<ModuleId>('mottos')
-  const [aiCollapsed, setAiCollapsed] = useState(false)
+  // 右缘双面板互斥展开（优化建议区第21轮）：'ai'=debugzi | 'draft'=草稿本 | null=都收起（右缘细条双图标入口）
+  const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | null>('ai')
   const [aiPending, setAiPending] = useState<{ text: string; channel: AiChannel; auto: boolean } | null>(null)
   const [aiVersion, setAiVersion] = useState(0)
   const [aiForceOpen, setAiForceOpen] = useState(false)
+  // 海龟汤对局上下文（TurtlePanel 进出对局派发；草稿本据此切频道 + 新建以汤名命名，App 持有保证面板收起时不丢）
+  const [turtleGame, setTurtleGame] = useState<{ title: string } | null>(null)
+
+  useEffect(() => {
+    const onTurtleGame = (e: Event): void => {
+      const detail = (e as CustomEvent<{ title: string } | null>).detail
+      setTurtleGame(detail && typeof detail === 'object' ? detail : null)
+    }
+    window.addEventListener(TURTLE_GAME_EVENT, onTurtleGame)
+    return () => window.removeEventListener(TURTLE_GAME_EVENT, onTurtleGame)
+  }, [])
+
+  // 启动恢复上次展开的面板（默认 debugzi，与既有行为一致）
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.RightPanelExpanded).then((v) => {
+      if (v === 'draft') setRightPanel('draft')
+      else if (v === '') setRightPanel(null)
+      else setRightPanel('ai')
+    })
+  }, [])
+
+  const switchRightPanel = useCallback((p: 'ai' | 'draft' | null): void => {
+    setRightPanel(p)
+    void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')
+  }, [])
 
   // 切换模块 = 激活目标模块（常驻组件监听此事件自行刷新）
   const activateModule = useCallback((id: ModuleId) => {
@@ -64,7 +92,7 @@ function Shell() {
   // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.auto 时切频道后自动发送）
   const openAiWith = useCallback(
     (prefill?: string, opts?: { auto?: boolean }) => {
-      setAiCollapsed(false)
+      switchRightPanel('ai')
       setAiForceOpen((v) => !v)
       setAiPending({
         text: prefill ?? '',
@@ -72,7 +100,7 @@ function Shell() {
         auto: opts?.auto ?? false
       })
     },
-    [module]
+    [module, switchRightPanel]
   )
 
   // 问 AI / 验证过程推送 → messagesVersion 递增通知 AiSidebar 重载
@@ -130,16 +158,22 @@ function Shell() {
           ))}
         </main>
 
-        {/* 右侧 AI 边栏（频道制） */}
+        {/* 右侧边栏（右缘双面板互斥：debugzi 常驻挂载保持生成态，草稿本按需挂载） */}
         <AiSidebar
-          collapsed={aiCollapsed}
-          onToggle={() => setAiCollapsed((c) => !c)}
+          collapsed={rightPanel !== 'ai'}
+          showRail={rightPanel === null}
+          onExpand={() => switchRightPanel('ai')}
+          onCollapse={() => switchRightPanel(null)}
+          onOpenDraft={() => switchRightPanel('draft')}
           currentModule={module}
           pending={aiPending}
           onPendingConsumed={() => setAiPending(null)}
           messagesVersion={aiVersion}
           onNavigateToProfile={() => activateModule('profile')}
         />
+        {rightPanel === 'draft' && (
+          <DraftSidebar onCollapse={() => switchRightPanel(null)} turtleGame={turtleGame} />
+        )}
       </div>
 
       {/* 首次启动引导（个人中心 specs §4） */}
