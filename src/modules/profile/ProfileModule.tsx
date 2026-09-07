@@ -1,5 +1,5 @@
 // 个人中心模块（个人中心 specs 全量 + 我的画像：致知己 specs §3）
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { LlmConfig, McpConfig, McpResearch, ProfileFactRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
@@ -8,7 +8,10 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { SettingsKeys } from '../../shared/types'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
-const PROFILE_CATEGORIES = ['专业背景', '学习方向', '职业规划', '偏好习惯', '价值观', '其他']
+const PROFILE_CATEGORIES = [
+  '基本档案', '性格特质', '擅长能力', '兴趣爱好', '生活方式', '社交出行',
+  '学习与技能', '职业规划', '价值观', '其他'
+]
 
 // 内置字体（优化建议区「字体更换」：删除宋体/黑体/等线，随应用打包 5 款手写/楷体字体，
 // 对应 global.css @font-face；楷体为系统字体保留）
@@ -69,6 +72,10 @@ export default function ProfileModule() {
   const [facts, setFacts] = useState<ProfileFactRow[]>([])
   const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
   const [delFact, setDelFact] = useState<ProfileFactRow | null>(null)
+  // 分组折叠：类别 → 是否收起；默认全展开，内存态不持久化（同格言库区折叠范式）
+  const [catCollapsed, setCatCollapsed] = useState<Record<string, boolean>>({})
+  // 画像 zone 整体折叠：同一范式，默认展开；收起时组头/条目不渲染，计数徽标常驻
+  const [zoneCollapsed, setZoneCollapsed] = useState(false)
 
   /** 画像条目加载 */
   const loadFacts = useCallback(async () => {
@@ -78,6 +85,21 @@ export default function ProfileModule() {
   useEffect(() => {
     void loadFacts()
   }, [loadFacts])
+
+  /** 画像按类别分组：预设清单序在前，自定义类别按首次出现追加其后 */
+  const groupedFacts = useMemo(() => {
+    const byCat = new Map<string, ProfileFactRow[]>()
+    for (const f of facts) {
+      const arr = byCat.get(f.category)
+      if (arr) arr.push(f)
+      else byCat.set(f.category, [f])
+    }
+    const order = [
+      ...PROFILE_CATEGORIES.filter((c) => byCat.has(c)),
+      ...[...byCat.keys()].filter((c) => !PROFILE_CATEGORIES.includes(c))
+    ]
+    return order.map((category) => ({ category, items: byCat.get(category)! }))
+  }, [facts])
 
   // keep-alive：切回个人中心时刷新（AI 边栏建议入档后回来看最新）
   useModuleActivated('profile', () => void loadFacts())
@@ -431,16 +453,18 @@ export default function ProfileModule() {
 
       {/* 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文 */}
       <section className="zone">
-        <div className="zone-header">
+        <div className="zone-header" onClick={() => setZoneCollapsed((v) => !v)}>
+          <span className="material-symbols-outlined">{zoneCollapsed ? 'expand_more' : 'expand_less'}</span>
           <span>我的画像</span>
           <span className="zone-count">{facts.length}</span>
-          <div className="zone-actions">
+          <div className="zone-actions" onClick={(e) => e.stopPropagation()}>
             <button className="btn" onClick={() => setFactForm({ id: null, category: '', content: '' })}>
               <span className="material-symbols-outlined">add</span>
               新增
             </button>
           </div>
         </div>
+        {!zoneCollapsed && (
         <div className="zone-body">
           {facts.length === 0 && (
             <div className="empty-state">
@@ -448,30 +472,46 @@ export default function ProfileModule() {
               暂无画像条目；手填或在与 AI 对话中由 AI 提炼建议、经确认入档。AI 会记住画像，需要了解你时按需取用
             </div>
           )}
-          {facts.map((f) => (
-            <div className="row-item" key={f.id} style={{ cursor: 'default' }}>
-              <div className="row-main">
-                <div className="row-title">
-                  {f.category}
-                  {f.source === 'ai' && <span className="badge">AI</span>}
-                </div>
-                <div className="row-sub">{f.content}</div>
-              </div>
-              <div className="row-actions">
-                <button
-                  className="icon-btn"
-                  title="编辑"
-                  onClick={() => setFactForm({ id: f.id, category: f.category, content: f.content })}
+          {groupedFacts.map((g) => {
+            const collapsed = !!catCollapsed[g.category]
+            return (
+              <div key={g.category}>
+                <div
+                  className="profile-cat-header"
+                  onClick={() => setCatCollapsed((c) => ({ ...c, [g.category]: !collapsed }))}
                 >
-                  <span className="material-symbols-outlined">edit</span>
-                </button>
-                <button className="icon-btn danger" title="删除" onClick={() => setDelFact(f)}>
-                  <span className="material-symbols-outlined">delete</span>
-                </button>
+                  <span className="material-symbols-outlined">{collapsed ? 'expand_more' : 'expand_less'}</span>
+                  <span>{g.category}</span>
+                  <span className="zone-count">{g.items.length}</span>
+                </div>
+                {!collapsed &&
+                  g.items.map((f) => (
+                    <div className="row-item" key={f.id} style={{ cursor: 'default' }}>
+                      <div className="row-main">
+                        <div className="row-title" title={f.content}>
+                          {f.content}
+                          {f.source === 'ai' && <span className="badge">AI</span>}
+                        </div>
+                      </div>
+                      <div className="row-actions">
+                        <button
+                          className="icon-btn"
+                          title="编辑"
+                          onClick={() => setFactForm({ id: f.id, category: f.category, content: f.content })}
+                        >
+                          <span className="material-symbols-outlined">edit</span>
+                        </button>
+                        <button className="icon-btn danger" title="删除" onClick={() => setDelFact(f)}>
+                          <span className="material-symbols-outlined">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
+        )}
       </section>
 
       {/* App 设置 */}
@@ -931,7 +971,7 @@ export default function ProfileModule() {
             <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input
                 className="field"
-                placeholder="类别（如：专业背景 / 学习方向 / 职业规划 / 偏好习惯 / 价值观 / 其他）"
+                placeholder="类别（如：基本档案 / 性格特质 / 擅长能力 / 兴趣爱好 / 生活方式 / 社交出行 / 学习与技能 / 职业规划 / 价值观 / 其他）"
                 list="profile-cats"
                 value={factForm.category}
                 onChange={(e) => setFactForm({ ...factForm, category: e.target.value })}

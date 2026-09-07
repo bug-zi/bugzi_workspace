@@ -62,21 +62,22 @@ CREATE TABLE inspirations (
 
 ## 5. 验收清单（v1）
 
-- [ ] 四区展示、计数正确；每区「+」新建（建表+建 md）正确
-- [ ] MdDialog 打开/双击编辑/保存正确；标题编辑同步列表
-- [ ] 拖拽：跨区移动改 status、区内排序；菜单移动与拖拽等效
-- [ ] 丢弃：二次确认 → 回收站灵感泉板块；恢复回草稿区；彻底删除连 md 删
-- [ ] 归档区条目不参与 3 天自动删除（仅回收站条目参与）
+- [ ]  四区展示、计数正确；每区「+」新建（建表+建 md）正确
+- [ ]  MdDialog 打开/双击编辑/保存正确；标题编辑同步列表
+- [ ]  拖拽：跨区移动改 status、区内排序；菜单移动与拖拽等效
+- [ ]  丢弃：二次确认 → 回收站灵感泉板块；恢复回草稿区；彻底删除连 md 删
+- [ ]  归档区条目不参与 3 天自动删除（仅回收站条目参与）
 
 ## 6. v2.0 AI 辅助生成灵感
 
 ### 6.1 IPC 通道（ipc.ts + preload.ts + api.d.ts 同步）
 
-| 通道 | 签名 | 行为 |
-|---|---|---|
-| `inspirations:generate` | `() => Promise<{ inserted: number }>` | 画像 → LLM → 查重 → 批量入库草稿区；LLM 未配置抛 `LLM_NOT_CONFIGURED` |
-| `inspirations:refine` | `(id: number) => Promise<string>` | 读该条 title + md → LLM 生成扩展 md（**不写库**），返回内容 |
-| `inspirations:appendRefine` | `(id, content: string) => Promise<void>` | 主进程把 `## AI 补充 · {yyyy/M/d HH:mm}` 段追加到该条 md 末尾，bump updated_at |
+
+| 通道                        | 签名                                     | 行为                                                                           |
+| ----------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------- |
+| `inspirations:generate`     | `() => Promise<{ inserted: number }>`    | 画像 → LLM → 查重 → 批量入库草稿区；LLM 未配置抛`LLM_NOT_CONFIGURED`        |
+| `inspirations:refine`       | `(id: number) => Promise<string>`        | 读该条 title + md → LLM 生成扩展 md（**不写库**），返回内容                   |
+| `inspirations:appendRefine` | `(id, content: string) => Promise<void>` | 主进程把`## AI 补充 · {yyyy/M/d HH:mm}` 段追加到该条 md 末尾，bump updated_at |
 
 - AI 逻辑（generate/refine 的 prompt 构造与解析）放 `electron/ai/services.ts`，导出 `generateInspirations()` / `refineInspiration(id)`，与 `generateMottos` 同区同构。
 - `inspirations:*` CRUD handler 内联 ipc.ts（现状不变）；`appendRefine` 在主进程用 mdRead/mdWrite 完成追加（拼接收敛主进程，避免前端 read-modify-write 与打开中的 MdDialog 竞态）。
@@ -141,22 +142,23 @@ CREATE TABLE inspirations (
 
 ### 6.6 边界与错误处理
 
-| 场景 | 处理 |
-|---|---|
-| 画像为空（首次使用） | prompt「（暂无已有灵感，可自由发散各类项目创意）」，照常生成 |
-| 返回条数 ≠ 5 / 部分字段缺失 | 有效几条入几条（≥1）；0 条有效报错 toast |
-| 生成失败（网络/JSON 解析/429 重试耗尽） | toast 错误信息，整体不入库（429 自动退避重试由 llm.ts 统一处理） |
-| refine 时 md 超长 | 截 4000 字进 prompt |
-| appendRefine 时记录不存在/文件缺失 | 抛 NOT_FOUND → toast |
-| AI 条目流转 | 拖拽/移动/丢弃与手动条目一致，origin 仅标记；回收站恢复回草稿区徽标保留 |
+
+| 场景                                    | 处理                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| 画像为空（首次使用）                    | prompt「（暂无已有灵感，可自由发散各类项目创意）」，照常生成            |
+| 返回条数 ≠ 5 / 部分字段缺失            | 有效几条入几条（≥1）；0 条有效报错 toast                               |
+| 生成失败（网络/JSON 解析/429 重试耗尽） | toast 错误信息，整体不入库（429 自动退避重试由 llm.ts 统一处理）        |
+| refine 时 md 超长                       | 截 4000 字进 prompt                                                     |
+| appendRefine 时记录不存在/文件缺失      | 抛 NOT_FOUND → toast                                                   |
+| AI 条目流转                             | 拖拽/移动/丢弃与手动条目一致，origin 仅标记；回收站恢复回草稿区徽标保留 |
 
 ### 6.7 验收清单（v2.0）
 
-- [ ] DB v7 迁移：存量 origin='manual'，inspirations:list 返回 origin
-- [ ] 「来5条灵感」：入草稿区区末尾 + AI 徽标 + md=标题+简介 + toast + 列表刷新
-- [ ] 查重：不与已有标题重复（含回收站）；画像为空可自由发散
-- [ ] 菜单升级：more_horiz 通用菜单，移动组原功能不回归
-- [ ] AI 完善：预览渲染最终效果 → 确认追加 `## AI 补充 · 时间` 段；可多次；放弃不写库
-- [ ] 问 AI：边栏展开 + 预填正确
-- [ ] LLM 未配置：生成/完善弹「去配置」；边栏自身降级不变
-- [ ] 失败 toast 且不入库；typecheck/build 通过
+- [ ]  DB v7 迁移：存量 origin='manual'，inspirations:list 返回 origin
+- [ ]  「来5条灵感」：入草稿区区末尾 + AI 徽标 + md=标题+简介 + toast + 列表刷新
+- [ ]  查重：不与已有标题重复（含回收站）；画像为空可自由发散
+- [ ]  菜单升级：more_horiz 通用菜单，移动组原功能不回归
+- [ ]  AI 完善：预览渲染最终效果 → 确认追加 `## AI 补充 · 时间` 段；可多次；放弃不写库
+- [ ]  问 AI：边栏展开 + 预填正确
+- [ ]  LLM 未配置：生成/完善弹「去配置」；边栏自身降级不变
+- [ ]  失败 toast 且不入库；typecheck/build 通过

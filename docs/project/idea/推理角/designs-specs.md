@@ -1,6 +1,8 @@
 # 推理角 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/idea/推理角/design.md`（260906 开发者审核通过，含出题质量标准与两碗参考汤）与《总需求文档.md》生成，是开发的直接依据。依赖：样式/designs-specs.md（MdDialog / GoConfigDialog / ConfirmDialog / Toast 与主题色系约束）、回收站/designs-specs.md（接入约定）、致知己/designs-specs.md（画像注入 profileDigest 惯例）。
+>
+> **v1.3（260907）题库预生成**：三处取题（汤库 / 每日一题 / 练习场）改为题库预存取用，AI 后台补充——消除「现场等 AI 出题」。设计文档：`docs/superpowers/specs/2026-09-07-reasoning-question-bank-design.md`（开发者会话内逐节批准）。增量见 §0 常量、§1 DB v14、§2 UI、§4 IPC 与补充泵、§6 接线、§8 验收。
 
 ## 0. 命名与常量
 
@@ -12,7 +14,8 @@
 - 精选题库标签（v1.2，自由文本）：认知推理 / 策略协议 / 构造编码 / 不变量构造 / 组合计数 / 递推构造 / 反直觉概率。
 - 汤状态：`fresh | playing | solved | abandoned`（未玩 / 进行中 / 已破 / 弃汤），终态后不可再开局（已知汤底，重玩无意义）。
 - 回收站来源值：`reasoning_soup` / `reasoning_game`（两值同属回收站「推理角」页签）。
-- 不新增 AI 频道（v1）：`CHANNEL_BY_MODULE` 不加 reasoning 映射（默认助手频道）；不新增 settings key；不新增定时任务（思维墙「打开现出」无定时器）。
+- 不新增 AI 频道（v1）：`CHANNEL_BY_MODULE` 不加 reasoning 映射（默认助手频道）；不新增 settings key；不新增定时任务（v1.3 起每日题为「打开现取」——从预生成池转正，池空才现场出题；补充泵为事件触发的一次性后台任务，非定时器）。
+- 题库常量（v1.3，`electron/services/reasoningStock.ts`）：`SOUP_TARGET=10 / SOUP_LOW=5`（汤库 fresh 存量目标/低水位）、`PUZZLE_TARGET=10 / PUZZLE_LOW=5`（wall_pool 题池）。新事件 `reasoning:stockChanged`（补充泵每补完一批推送，照 `recycle:changed` 模式，渲染层刷新汤库列表）。
 
 ## 1. 数据表（DB v12 起；v11 已被灵感文档标题迁移占用；v1.2 增量见本节末）
 
@@ -101,17 +104,37 @@ CREATE TABLE wall_bank (
 - v13 迁移同时插入首批评选 10 题（`electron/db/wallBankSeed.ts`，答案/论证均经人工验证；对话中已向开发者示过答案的原创题不收原题——2026 卡片题改用 2017 变体，18 日期认知题未收录）；目录清单追加 `md/wall/bank`。
 - 精选题库记录不可删除、不进回收站（同「墙是真实历史」口径）。
 
+**DB v14（v1.3 题库预生成）**：新表 `wall_pool`——每日一题/练习场共用的预生成题池：
+
+```sql
+CREATE TABLE wall_pool (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  puzzle_text TEXT NOT NULL,          -- 题面
+  answer_standard TEXT NOT NULL,      -- 标准结论
+  standard_reasoning TEXT NOT NULL,   -- 标准论证（判答讲解用，照 v13 口径）
+  hints TEXT NOT NULL DEFAULT '[]',   -- 三级提示 JSON（出题时一次生成）
+  puzzle_type TEXT NOT NULL,          -- 三洞察题型
+  difficulty TEXT NOT NULL,           -- easy|medium|hard
+  created_at TEXT NOT NULL
+);
+```
+
+- 池是**未消费的储备**：无 `deleted_at`、不进回收站、无删除入口；被取走即转正（每日题）或消耗（练习场）。新表空起，首填由补充泵完成。
+- 存量口径：汤库存量 = `turtle_soups` 中 `status='fresh' AND deleted_at IS NULL` 行数（回收站软删不算；恢复回收站 fresh 汤使存量回升）；题池存量 = `wall_pool` 行数。
+
 ## 2. 模块本体（src/modules/reasoning/）
 
 **ReasoningModule.tsx：**
 
 - 标题区（icon + 推理角 + 副标题「把 AI 当陪练的推理健身房」）+ 双板块 chips；子组件 TurtlePanel / WallPanel。
-- 照现有模块 keep-alive 渲染接入 App.tsx；监听 `MODULE_ACTIVATED_EVENT`；进入思维墙板块（含模块激活且当前板块为思维墙）时调 `wall:ensureToday`——「打开现出」。
+- 照现有模块 keep-alive 渲染接入 App.tsx；监听 `MODULE_ACTIVATED_EVENT`；进入思维墙板块（含模块激活且当前板块为思维墙）时调 `wall:ensureToday`——「打开现取」（v1.3：池转正秒开，池空才现场出题）。模块激活时另调 `reasoning:stockCheck` 触发补充泵（v1.3）。
 
 **TurtlePanel · 汤库 tab：**
 
 - 工具行：「来 3 碗汤」按钮 + 难度偏好选择（随机 / 简单 / 中等 / 困难，默认随机，单次有效不持久化）+ 难度筛选 chips（全部 / 简单 / 中等 / 困难）。
 - 生成中按钮 loading「AI 出汤中…」；LLM 未配置点按钮弹 GoConfigDialog（全局规则 8，下同）。
+- **v1.3 定位变化**：「来 3 碗汤」从唯一获取途径退居**手动补充**（fresh 存货由补充泵自动维持）；行为与样式原样保留，与泵并发各自独立插库。
+- **v1.3 事件刷新**：监听 `reasoning:stockChanged` 刷新汤库列表——后台补的汤渐进出现，无 toast。汤库为空时空态文案改「AI 正在后台备汤，稍候即有新汤；或点『来 3 碗汤』立即补」。
 - 列表行：汤名 + 难度 badge + 题材 chip + 状态标记（未玩/进行中/已破/弃汤）。**列表不展示汤面**（开局后才见，保留神秘感）；`playing` 行点击=续局，`fresh` 行点击=开局，终态行不可点。
 - 汤行删除：二次确认（ConfirmDialog）→ 回收站；`playing` 状态的汤不可删（提示先结束对局——放弃或破汤）。
 
@@ -130,7 +153,7 @@ CREATE TABLE wall_bank (
 
 **WallPanel · 今日题区：**
 
-- 无题：进入板块即 `ensureToday`；LLM 未配置 catch `LLM_NOT_CONFIGURED` → GoConfigDialog；生成中「出题中…」占位。
+- 无题：进入板块即 `ensureToday`（v1.3 正常路径从池转正**秒回**，零 LLM 调用）；LLM 未配置 catch `LLM_NOT_CONFIGURED` → GoConfigDialog；生成中占位仅兜底路径出现，文案「题库见底，现场出题中…」（v1.3）。
 - `answering`：题面卡片（题型 + 难度 badge）+ 多行作答输入 + 「提交作答」+「要提示（已用 N/3）」——提示直接取库存下一级（不调 LLM），用尽后按钮文案「提示已用完」禁用。
 - `done`：结果卡（对 / 错、我的作答、是否用了提示）+「查看讲解」→ MdDialog。答错即终局，当日不可再答。
 - 对/错的状态呈现遵循样式 specs 主题色系约束（不引入大红大绿彩亮色）。
@@ -145,7 +168,7 @@ CREATE TABLE wall_bank (
 
 - 打卡墙下方独立 zone（icon `fitness_center`）：随时刷题、自选难度（下拉 随机/简单/中等/困难，默认随机，单次有效不持久化——照汤库难度偏好惯例），**不计入打卡墙/连胜/月历**，不落库、不写 md。
 - 数据是**会话级**的：主进程内存 Map `practiceBank` 暂存（题面/标准答案/三级提示），容量 10 条防累积，应用重启即清（练习无存档语义）。判答入参 id 失效（重启后）抛 `PRACTICE_GONE`，渲染层 toast 后重出一道。
-- 交互照每日一题同款：出题（`wall:practiceNew`）→ 作答卡（quiz-card + 三级提示内存直取 `wall:practiceHint`）→ 判答（`wall:practiceAnswer`，宽松等价 + 完整讲解，一题一命判答即终局）→ 结果卡（对/错 + 我的作答 + 标准答案 + **讲解内联 MdView 渲染** `.rs-explain`，无复盘文档）+「再来一道」。换题直接再点「来一道」（弃当前题）。
+- 交互照每日一题同款：出题（`wall:practiceNew`，v1.3 优先从 wall_pool 按难度/题型筛选取题——DELETE 池行后入 practiceBank，秒回；池中无匹配兜底现场两阶段生成，loading「题库见底，现场出题中…」）→ 作答卡（quiz-card + 三级提示内存直取 `wall:practiceHint`）→ 判答（`wall:practiceAnswer`，宽松等价 + 完整讲解，一题一命判答即终局）→ 结果卡（对/错 + 我的作答 + 标准答案 + **讲解内联 MdView 渲染** `.rs-explain`，无复盘文档）+「再来一道」。换题直接再点「来一道」（弃当前题）。
 - **v1.2 题型自选**：难度下拉旁加题型下拉（随机题型 / 不变量与构造 / 策略协议设计 / 反直觉概率，默认随机，单次有效不持久化），`practiceNew` 第二参传入。
 - 出题/判答复用 `generateWallPuzzle` / `judgeWallAnswer`，画像注入口径不变（出题注入、判答不注入）。
 
@@ -158,7 +181,7 @@ CREATE TABLE wall_bank (
 
 ## 3. AI 服务（electron/ai/services.ts 新增六函数）
 
-统一：出题类（generateSoups / generateWallPuzzle）注入 `profileDigest()` 画像摘要；判答类（judgeSoupQuestion / judgeSoupGuess / judgeWallAnswer）与点评（soupReview）不注入（design 模块整合节口径）。除 generateWallPuzzle 为两阶段（出题 + 审题验证，v1.2）外全部单趟 `chatCompletion`，数据由 IPC 层查库传入。
+统一：出题类（generateSoups / generateWallPuzzle）注入 `profileDigest()` 画像摘要；判答类（judgeSoupQuestion / judgeSoupGuess / judgeWallAnswer）与点评（soupReview）不注入（design 模块整合节口径）。除 generateWallPuzzle 为两阶段（出题 + 审题验证，v1.2）外全部单趟 `chatCompletion`，数据由 IPC 层查库传入。**v1.3 不新增 AI 函数**——补充泵（`electron/services/reasoningStock.ts`）是编排层，复用 generateSoups / generateWallPuzzle，注入口径不变（泵调的正是出题类）。
 
 **generateSoups(preference)**（temperature 0.9，jsonMode）：
 
@@ -210,7 +233,11 @@ turtle:discardGame(gameId)               → 回收站（仅终局局）
 turtle:listGames()                       → 终局局列表（ended_at 倒序）
 
 wall:ensureToday()                       → { phase: 'answering'|'done', puzzleId?, puzzle?,
-                                             hintsUsed?, result? }（无题且 LLM 可用则现场生成）
+                                             hintsUsed?, result? }（v1.3：当日无题从 wall_pool
+                                           取题转正——按连胜难度+题型避近2日匹配，四级放宽
+                                           （难度+题型→仅难度→任意→池空兜底现场两阶段生成），
+                                           同事务 INSERT wall_puzzles + DELETE 池行，零 LLM 秒回；
+                                           取题后触发补充泵）
 wall:answer(puzzleId, myAnswer)          → { correct, standardAnswer, explanation, mdPath }
                                            （落终态 + 写 md + 更新连胜推导所需的全部字段）
 wall:hint(puzzleId)                      → { level, text } | null（用尽返回 null）
@@ -219,7 +246,10 @@ wall:recordPath(date)                    → md 路径 | null
 
 wall:practiceNew(pref)                   → { id, puzzle, typeZh, diffZh, hintsTotal }（v1.1 练习场：
                                            pref=random|easy|medium|hard，random 主进程随机；
-                                           会话级内存暂存，不落库不写 md；v1.2 加 typePref 题型可选）
+                                           会话级内存暂存，不落库不写 md；v1.2 加 typePref 题型可选；
+                                           v1.3 优先从 wall_pool 按难度/题型筛选取题——DELETE 池行
+                                           后入 practiceBank（取走视为消耗，不恢复），无匹配兜底
+                                           现场生成；取题后触发补充泵）
 wall:practiceAnswer(id, myAnswer)        → { correct, standardAnswer, explanation }（一题一命判答即终局；
                                            id 失效（重启）抛 PRACTICE_GONE；无 md）
 wall:practiceHint(id)                    → { level, text } | null（内存直取不调 LLM；用尽/失效 null）
@@ -231,7 +261,19 @@ wall:bankAnswer(id, myAnswer)            → { correct, standardAnswer, explanat
                                            （判答 + 写详情 md + 落终态 solved/failed；已答抛 ALREADY_ANSWERED）
 wall:bankReveal(id)                      → { standardAnswer, solution, mdPath }
                                            （看解答：不判答直接揭示 + 写 md + 落终态 failed）
+
+reasoning:stockCheck()                   → void（v1.3：触发题库补充泵；模块激活时调，
+                                           fire-and-forget，不返回存量——UI 不展示库存）
 ```
+
+**补充泵（v1.3，`electron/services/reasoningStock.ts`，仿 scheduler.ts 惯例）：**
+
+- 入口 `ensureReasoningStock()`，全部调用点 fire-and-forget（`void ensureReasoningStock()`），**永不抛错、永不弹窗**；单例 `pumping` 标志防并发重入（手动「来 3 碗汤」不经泵，与泵并发各自独立插库，最坏多 3 碗，可接受）。
+- **汤侧**：fresh 存量 < `SOUP_LOW`(5) → 循环调 `generateSoups('random')`（每批 3 碗、难度错开）直到 ≥ `SOUP_TARGET`(10)。`generateSoups` 零改动（其近 200 碗避免清单天然覆盖全部 fresh 存货）。
+- **题侧**：池数 < `PUZZLE_LOW`(5) → 循环调 `generateWallPuzzle(difficulty, { type, avoid })` 逐道入池直到 ≥ `PUZZLE_TARGET`(10)。难度 = 池内数量最稀缺档（并列随机，保证连胜任何档位有货）；题型 = 池内 + 近 2 日历史合计最少见（保池内题型多样）；avoid = 近 20 题 `wall_puzzles` 题面摘要 + **池内全部题面摘要**（防池内互相同构）。
+- 单批失败（含 LLM 未配置）catch 记 console.warn 跳出，下次触发再补；每补完一批 `win()?.webContents.send('reasoning:stockChanged')`（照 `recycle:changed` 模式）。
+- **三个触发点**：① `main.ts` 启动后延迟 10s 跑一次（错开启动高峰，unref）；② 每次消耗后——每日题转正后、练习场取题后（含兜底路径）、点汤**开新局**后（fresh−1；续局/终局不触发）；③ 进入推理角模块时（`reasoning:stockCheck`）。
+- 避免清单口径：池题以**生成时刻**为准（当时近 20 题 + 池内互避）；池 ≤ 10 道周转快，转正不做二次校验（YAGNI）。
 
 **终局链（`turtle:guess` solved 与 `turtle:abandon` 共用，主进程内完成）：**
 
@@ -264,7 +306,7 @@ wall:bankReveal(id)                      → { standardAnswer, solution, mdPath 
 ## 6. 渲染层接线
 
 - `src/shared/types.ts` + `src/renderer/api.d.ts`：`ModuleId` 加 `'reasoning'`；`RecycleRow.source` 联合类型追加两值；`Api` 加 `turtle` / `wall` 两命名空间（形状照 §4）；`TurtleSoupRow / TurtleGameRow / TurtleGameMessage / WallPuzzleRow / WallDayCell` 等类型定义。
-- `electron/preload.ts`：桥接新通道（与 Api 保持同步）。
+- `electron/preload.ts`：桥接新通道（与 Api 保持同步）；v1.3 加 `reasoning:stockCheck` 与 `reasoning:stockChanged` 事件桥接（照 `recycle:changed` 模式）。
 - `App.tsx`：MODULES 在 recycle 前插 `{ id: 'reasoning', label: '推理角', icon: 'psychology' }`；keep-alive 渲染 `<ReasoningModule />`；`CHANNEL_BY_MODULE` 不加映射；本模块无需 onOpenAi（赛后讨论由用户手动到助手频道）。
 - 样式入 App.css（照现有模式），遵循双主题 CSS 变量与「框/按键/弹窗用主题相近色系」约束，图标一律 Material Symbols。
 
@@ -274,6 +316,7 @@ wall:bankReveal(id)                      → { standardAnswer, solution, mdPath 
 - 条目 5：回收站五板块 → 六板块（+ 推理角：汤恢复回汤库、对局记录恢复回记录列表；每日题不进回收站）。
 - 条目 12：侧边栏顺序插入推理角（致知己之后、回收站之前）。
 - 条目 8（LLM 未配置交互）、条目 9（不新增频道、画像注入口径）无需改动，推理角按现行规则执行。
+- v1.3：条目 3 结构化数据清单追加 `wall_pool`（预生成题池）；其余条目无改动（不新增模块/板块/定时任务/settings）。
 
 ## 8. 验收清单
 
@@ -292,3 +335,7 @@ wall:bankReveal(id)                      → { standardAnswer, solution, mdPath 
 - [ ]  **v1.2 精选题库**：首批 10 题入库展示；作答终态判答 + 看解答二次确认；详情 md 含标准论证；已破计数正确
 - [ ]  回收站第 6 板块：汤/对局记录二次确认入站、恢复、3 天彻底删除（game 连带消息与 md）
 - [ ]  画像注入口径：出题注入、判答/点评不注入；typecheck 双配置通过
+- [ ]  **v1.3 每日题池命中秒开**（零 LLM 等待）；连胜难度推导与题型轮换（避近 2 日）行为不变
+- [ ]  **v1.3 练习场**：按难度/题型从池取题秒回；池无匹配兜底现场生成；PRACTICE_GONE 口径不变
+- [ ]  **v1.3 补充泵**：汤库 fresh < 5 补到 10、题池 < 5 补到 10（难度稀缺优先、题型多样、avoid 含近 20 题 + 池内互避）；三触发点（启动延迟 10s / 消耗后 / 进入模块）各自生效
+- [ ]  **v1.3 边界**：池空兜底现场生成（文案「题库见底，现场出题中…」）；LLM 未配置泵静默（console.warn）而手动入口照规则 8；两阶段失败不落池；`pumping` 防重入；转正同事务不双份；`reasoning:stockChanged` 列表渐进刷新 + 空态文案更新；池表不进回收站
