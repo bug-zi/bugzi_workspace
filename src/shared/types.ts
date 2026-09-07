@@ -8,6 +8,7 @@ export type ModuleId =
   | 'verify'
   | 'zhijiji'
   | 'reasoning'
+  | 'wenbi'
   | 'recycle'
   | 'profile'
 
@@ -194,6 +195,30 @@ export interface InspirationRecord {
   deleted_at: string | null
 }
 
+/** 浮生记条目（wenbi_journals 表，文笔坊 specs §1）：无标题，时间线行=创建日期+首行摘要；正文在 md_path 的真实 .md 文件 */
+export interface WenbiJournalRecord {
+  id: number
+  md_path: string
+  /** 大事件标记（1=是）：置顶小节聚合展示 */
+  is_event: 0 | 1
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 写作台文章（wenbi_articles 表，文笔坊 specs §1）：zone 四区流转 */
+export interface WenbiArticleRecord {
+  id: number
+  title: string
+  zone: 'idea' | 'writing' | 'done' | 'published'
+  md_path: string
+  /** 区内排序（拖拽顺序） */
+  sort: number
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
 export interface VerifyRecord {
   id: number
   claim: string
@@ -215,6 +240,8 @@ export interface RecycleItem {
     | 'reasoning_soup'
     | 'reasoning_game'
     | 'drafts'
+    | 'wenbi_journal'
+    | 'wenbi_article'
   item_id: number
   payload: string
   created_at: string

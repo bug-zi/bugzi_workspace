@@ -581,7 +581,7 @@ export default function TurtlePanel() {
         </select>
         <button className="btn btn-primary" disabled={generating} onClick={() => void generate()}>
           <span className={`material-symbols-outlined${generating ? ' spin' : ''}`}>casino</span>
-          {generating ? 'AI 出汤中…' : '来 3 碗汤'}
+          {generating ? '出题中，审题人正在验汤…' : '来 3 碗汤'}
         </button>
         <div className="recycle-tabs" style={{ marginLeft: 'auto' }}>
           <button

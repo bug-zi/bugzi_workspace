@@ -1,5 +1,5 @@
 // 回收站服务：入站/恢复/彻底删除/3天自动清理（回收站 specs §1/§3/§4）
-import { getDb, nowIso } from '../db/db'
+import { getDb, nowIso, recordMottoTombstone } from '../db/db'
 import { mdDelete } from './files'
 
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000
@@ -13,6 +13,8 @@ export type RecycleSource =
   | 'reasoning_soup'
   | 'reasoning_game'
   | 'drafts'
+  | 'wenbi_journal'
+  | 'wenbi_article'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -22,7 +24,9 @@ const TABLES: Record<RecycleSource, string> = {
   zhijiji: 'zhijiji_questions',
   reasoning_soup: 'turtle_soups',
   reasoning_game: 'turtle_games',
-  drafts: 'drafts'
+  drafts: 'drafts',
+  wenbi_journal: 'wenbi_journals',
+  wenbi_article: 'wenbi_articles'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -35,7 +39,9 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   zhijiji: null,
   reasoning_soup: null,
   reasoning_game: 'md_path',
-  drafts: 'md_path'
+  drafts: 'md_path',
+  wenbi_journal: 'md_path',
+  wenbi_article: 'md_path'
 }
 
 export interface RecycleRow {
@@ -108,6 +114,22 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回草稿本原频道：仅清标记（channel 保留，恢复后仍在原频道列表）
       d.prepare('UPDATE drafts SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
+    case 'wenbi_journal':
+      // 回浮生记时间线：仅清标记（分节钉在 created_at，无需复位）
+      d.prepare('UPDATE wenbi_journals SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'wenbi_article':
+      // 回写作台构思区区末（文笔坊 specs §5：恢复回最初级区）
+      {
+        const tail = d
+          .prepare("SELECT MAX(sort) AS m FROM wenbi_articles WHERE zone = 'idea' AND deleted_at IS NULL")
+          .get() as { m: number | null }
+        d.prepare("UPDATE wenbi_articles SET deleted_at = NULL, zone = 'idea', sort = ? WHERE id = ?").run(
+          (tail.m ?? 0) + 1,
+          rb.item_id
+        )
+      }
+      break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
   return { source: rb.source, item_id: rb.item_id }
@@ -153,6 +175,13 @@ export function hardDelete(recycleId: number): void {
     d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
     if (row?.md_path) mdDelete(row.md_path)
     return
+  }
+  if (rb.source === 'mottos') {
+    // 物理删除前写墓碑留底（优化建议区第24轮）：供生成查重，防已删格言复现
+    const row = d.prepare('SELECT content FROM mottos WHERE id = ?').get(rb.item_id) as
+      | { content: string }
+      | undefined
+    if (row) recordMottoTombstone(row.content)
   }
   // reasoning_soup 走默认路径：仅删汤行（汤无 md；对局记录是快照，不随汤删除——specs §5）
   d.prepare(`DELETE FROM ${table} WHERE id = ?`).run(rb.item_id)

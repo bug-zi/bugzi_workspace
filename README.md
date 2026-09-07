@@ -29,7 +29,7 @@
 - 禁止 emoji 作图标，图标取自 [Google Fonts Icons](https://fonts.google.com/icons)；组件框 / 按键 / 弹窗禁止彩亮颜色，须与主题色系一致
 - 三栏式布局：左侧模块导航 → 中间主栏 → 右侧 AI 助手边栏（可收起 / 展开，模块感知，v1 单会话持久保存）
 - LLM/MCP 未配置时 AI 功能按钮不置灰，点击弹窗提示并「去配置」直达个人中心
-- 完整规则见 `docs/project/需求（功能模块）/总需求文档.md` 与 `docs/project/样式/design.md`
+- 完整规则见 `docs/project/左侧边栏/总需求文档.md` 与 `docs/project/样式/design.md`
 
 ## 文档体系
 
@@ -37,11 +37,11 @@
 
 | 内容 | 维护方 |
 | --- | --- |
-| `docs/project/需求（功能模块）/<模块>/design.md` | 开发者主导，AI 可提建议（需审核） |
-| `docs/project/需求（功能模块）/<模块>/designs-specs.md` | **AI 生成并维护**，开发的直接依据，开发者仅简单审核 |
+| `docs/project/左侧边栏/<模块>/design.md` | 开发者主导，AI 可提建议（需审核） |
+| `docs/project/左侧边栏/<模块>/designs-specs.md` | **AI 生成并维护**，开发的直接依据，开发者仅简单审核 |
 | `docs/project/样式/design.md` | 开发者 |
 | `docs/log/<YYMMDD>.md` | AI（每天一个开发日志） |
-| `docs/project/需求（功能模块）/总需求文档.md` | 开发者主导，AI 可提建议（需审核） |
+| `docs/project/左侧边栏/总需求文档.md` | 开发者主导，AI 可提建议（需审核） |
 | `docs/project/idea/` | **开发者私有**，AI 不读取不修改 |
 | `docs/project/问题疑惑区.md` | 开发者记录疑惑处，AI 不主动查阅 |
 

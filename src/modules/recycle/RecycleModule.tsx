@@ -14,12 +14,15 @@ const TABS: { key: string; label: string }[] = [
   { key: 'verify', label: '辩真阁' },
   { key: 'zhijiji', label: '致知己' },
   { key: 'reasoning', label: '推理角' },
-  { key: 'drafts', label: '草稿本' }
+  { key: 'drafts', label: '草稿本' },
+  { key: 'wenbi', label: '文笔坊' }
 ]
 
-/** 行属于哪个页签（推理角两来源同组） */
+/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组） */
 function tabOf(source: RecycleRow['source']): string {
-  return source === 'reasoning_soup' || source === 'reasoning_game' ? 'reasoning' : source
+  if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
+  if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
+  return source
 }
 
 /** 恢复去向文案（specs §5：汤回汤库、对局记录回记录列表） */
@@ -39,9 +42,20 @@ function backToOf(source: RecycleRow['source']): string {
       return '推理角汤库'
     case 'drafts':
       return '草稿本原频道'
+    case 'wenbi_journal':
+      return '浮生记时间线'
+    case 'wenbi_article':
+      return '写作台构思区'
     default:
       return '推理角对局记录列表'
   }
+}
+
+/** 来源板块小字（文笔坊页签内区分两板块） */
+function srcTag(source: RecycleRow['source']): string {
+  if (source === 'wenbi_journal') return '浮生记 · '
+  if (source === 'wenbi_article') return '文章 · '
+  return ''
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -62,6 +76,11 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
     if (row.source === 'drafts') return String(p.title ?? '')
+    if (row.source === 'wenbi_journal') {
+      const d = new Date(String(p.created_at ?? ''))
+      return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} 的记录`
+    }
+    if (row.source === 'wenbi_article') return String(p.title ?? '')
     return String(p.claim ?? '')
   } catch {
     return `#${row.item_id}`
@@ -155,6 +174,7 @@ export default function RecycleModule() {
               <div className="row-main">
                 <div className="row-title" title={summaryOf(r)}>{summaryOf(r)}</div>
                 <div className="row-sub" title="放入回收站时间 ｜ 彻底删除时间">
+                  {srcTag(r.source)}
                   {fmtTime(r.created_at)} ｜ {purgeTime(r.created_at)}
                 </div>
               </div>

@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -465,6 +465,56 @@ function migrate(): void {
     `)
     d.exec('PRAGMA user_version = 14')
   }
+
+  if (version < 15) {
+    // v15：海龟汤质量优化（海龟汤修改反馈）——汤库存「核心诡计一句话」概括（trick_note），
+    // 供出题/审题注入避免清单防跨批同构；纯内部机制，不进任何 UI（防剧透）。
+    // 存量回填由启动后一次性 LLM 任务完成（services.backfillTrickNotes），迁移只加列。
+    d.exec('ALTER TABLE turtle_soups ADD COLUMN trick_note TEXT')
+    d.exec('PRAGMA user_version = 15')
+  }
+
+  if (version < 16) {
+    // v16：格言删除记忆墓碑（优化建议区第24轮）——物理删除的格言留底 content，
+    // 供「来10条格言」生成查重防复现；表只增不删（代码侧判重查全量，prompt 注入限量）。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS motto_tombstones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        content_norm TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `)
+    d.exec('PRAGMA user_version = 16')
+  }
+
+  if (version < 17) {
+    // v17：文笔坊（文笔坊 specs §1）——浮生记条目 + 写作台文章。浮生记无标题字段（时间线行=创建日期+首行摘要），
+    // is_event 为大事件标记；文章 zone 四区流转（idea 构思 / writing 写作 / done 完稿 / published 已发布）。
+    // 正文分别存 md/wenbi/journal/{id}.md、md/wenbi/article/{id}.md，删除走回收站软删（deleted_at）。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS wenbi_journals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        md_path TEXT NOT NULL,
+        is_event INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS wenbi_articles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        zone TEXT NOT NULL DEFAULT 'idea',
+        md_path TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_wenbi_articles_zone ON wenbi_articles(zone);
+    `)
+    d.exec('PRAGMA user_version = 17')
+  }
 }
 
 // ---------- 通用工具 ----------
@@ -555,4 +605,21 @@ export function isDupMotto(existing: Iterable<string>, norm: string): boolean {
     }
   }
   return false
+}
+
+/**
+ * 已删除格言墓碑（优化建议区第24轮）：mottos 物理删除前留底，供 generateMottos 查重
+ * 防「来10条格言」复现已删格言。同规范化内容已存在则跳过（防手动加回再删堆积重复行）。
+ */
+export function recordMottoTombstone(content: string): void {
+  const norm = normalizeText(content)
+  if (!norm) return
+  const d = getDb()
+  const exists = d.prepare('SELECT 1 FROM motto_tombstones WHERE content_norm = ?').get(norm)
+  if (exists) return
+  d.prepare('INSERT INTO motto_tombstones (content, content_norm, created_at) VALUES (?, ?, ?)').run(
+    content,
+    norm,
+    nowIso()
+  )
 }

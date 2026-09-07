@@ -338,13 +338,38 @@ export interface GenerateMottosResult {
   excerptInserted: number
   /** 入库的编撰条数（v2.0 §7.3） */
   composedInserted: number
+  /** 因句式禁令被剔除的编撰条数（优化建议区第23轮） */
+  patternRejected: number
+  /** 命中已删除格言墓碑被剔除的条数（优化建议区第24轮，两轮合计） */
+  tombstoneRejected: number
+  /** 补足轮最终入库条数（优化建议区第24轮） */
+  supplemented: number
 }
+
+/** LLM 生成返回的格言条目（kind 缺省/非法由 mottoKind 容错推断） */
+type GeneratedMotto = { content: string; source: string; kind?: string }
 
 /** kind 缺失/非法时按出处推断（v2.0 §7.3 解析容错）：编撰条 v10 起署名 debugzi，旧格式「AI 编撰」仍兼容 */
 function mottoKind(kind: string | undefined, source: string): 'excerpt' | 'composed' {
   if (kind === 'excerpt' || kind === 'composed') return kind
   return /(?:ai\s*编撰|debugzi)/i.test(source) ? 'composed' : 'excerpt'
 }
+
+/**
+ * 编撰条禁用句式（优化建议区第23轮）：按句式家族与 generateMottos prompt 禁令对应
+ * （prompt 第 5 类拆 5a/5b 两条；正则口径略宽于 prompt 字面，作兜底），
+ * 仅校验 composed 条；摘录条（真实名言）豁免。命中即剔除、不补足。
+ */
+const COMPOSED_BANNED_PATTERNS: RegExp[] = [
+  /(?:不是|并非)[^，,。；;！？\n]{1,24}[，,][^，,。；;！？\n]{0,16}而是/, // 1 不是/并非A，而是B
+  /与其说?[^，,。；;！？\n]{0,24}[，,][^，,。；;！？\n]{0,12}不如说?/, // 2 与其（说）A，不如（说）B
+  /真正的[^，,。；;！？\n]{1,16}[，,][^。；;！？\n]{0,10}(?:从来)?(?:不是|是|都是)/, // 3 真正的A，（从来）是/不是/都是B
+  /所谓[^，,。；;！？\n]{1,16}[，,](?:不过是|只是)/, // 4 所谓A，不过是/只是B
+  /[，,](?:才算|才配)/, // 5a ……，才算/才配
+  /唯有[^，,。；;！？\n]{1,16}[，,](?:才|方可)/, // 5b 唯有A，才/方可B
+  /(?:所有|一切)[^，,。；;！？\n]{1,20}[，,]都/, // 6 所有/一切A，都B（全称断言）
+  /愿你/ // 7 愿你祝福腔（中文格言出现即祝福腔，误伤率极低，从宽抓）
+]
 
 /** 「来10条格言」（v2.0：5 摘录 + 5 编撰）：正式区风格样本 → LLM 生成 → 增强查重入库草稿区 */
 export async function generateMottos(): Promise<GenerateMottosResult> {
@@ -362,55 +387,115 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const avoidList = existingRows.length
     ? existingRows.map((r) => `- ${r.content}`).join('\n')
     : '（暂无）'
-  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 10 条新格言：恰好 5 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 5 条由你自行编撰（kind 为 "composed"，source 标「debugzi」）。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 10 项（5 条 excerpt + 5 条 composed），不要输出其他任何内容。`
-  const res = await chatCompletion({
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.9,
-    jsonMode: true
-  })
-  let items: { content: string; source: string; kind?: string }[]
-  try {
-    items = parseJsonArray(res.content)
-  } catch {
-    // 解析失败自动重试一次（specs §3.1）
-    const retry = await chatCompletion({
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.9,
-      jsonMode: true
-    })
-    items = parseJsonArray(retry.content)
+  // 已删除格言墓碑（优化建议区第24轮）：表只增不删——代码侧判重用全量 norms，
+  // prompt 注入只取最近 300 条控制长度；补足轮同样携带（见 buildPrompt）
+  const tombstoneRows = d
+    .prepare('SELECT content, content_norm FROM motto_tombstones ORDER BY created_at DESC, id DESC')
+    .all() as { content: string; content_norm: string }[]
+  const tombstoneNorms = tombstoneRows.map((t) => t.content_norm)
+  const tombstoneSection = tombstoneRows.length
+    ? `\n\n以下是我明确删除过的格言，同样不得生成，也不得仅差微小改写：\n${tombstoneRows
+        .slice(0, 300)
+        .map((t) => `- ${t.content}`)
+        .join('\n')}`
+    : ''
+  /** 生成 prompt：第一轮 (5, 5, '')；补足轮传缺口配比与本批已入库清单（extraAvoid） */
+  const buildPrompt = (nExcerpt: number, nComposed: number, extraAvoid: string): string =>
+    `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 ${nExcerpt + nComposed} 条新格言：恰好 ${nExcerpt} 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 ${nComposed} 条由你自行编撰（kind 为 "composed"，source 标「debugzi」）。\n\n你自行编撰的 ${nComposed} 条额外遵守句式禁令——以下 7 类对仗套话一律禁止：\n1. 「不是A，而是B」「并非A，而是B」\n2. 「与其A，不如B」「与其说A，不如说B」\n3. 「真正的A，是/从来不是B」\n4. 「所谓A，不过是B」\n5. 「……，才算……」「唯有A，才B」类排他强调\n6. 「所有/一切A，都B」全称断言\n7. 「愿你……」祝福腔\n编撰条请像正式区样本那样平实、具体、有画面，靠内容本身立住，不要靠句式端着。摘录条（kind 为 "excerpt"）不受此限，如实引用原文。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}${extraAvoid ? `\n${extraAvoid}` : ''}${tombstoneSection}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 ${nExcerpt + nComposed} 项（${nExcerpt} 条 excerpt + ${nComposed} 条 composed），不要输出其他任何内容。`
+  /** 单趟调用 + 解析（解析失败自动重试一次，specs §3.1；两轮共用） */
+  const callAndParse = async (prompt: string): Promise<GeneratedMotto[]> => {
+    const call = () =>
+      chatCompletion({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.9,
+        jsonMode: true
+      })
+    const res = await call()
+    try {
+      return parseJsonArray(res.content)
+    } catch {
+      const retry = await call()
+      return parseJsonArray(retry.content)
+    }
   }
   // 入库前查重（§7.4.2/§7.4.3）：规范化一致或互为子串（长度门槛内）即重复；
-  // 比对集合 = 三区 + 回收站全部格言，且随本批插入逐步扩充（批内互斥）
+  // 比对集合 = 三区 + 回收站全部格言 + 全量墓碑，且随本批插入逐步扩充（批内互斥）。
+  // 墓碑先判（可归因 tombstoneRejected，第24轮），库内/批内后判（静默跳过，维持旧口径）
   const allNorms = existingRows.map((r) => normalizeText(r.content))
   const now = nowIso()
   // 插到草稿区开头（优化建议区「序号+拖拽排序」决策：新格言插区首）：
-  // 逐条 MIN(sort)-1 递减，先插入的排更前
-  let headSort = (
+  // 逐条 MIN(sort)-1 递减，先插入的排更前（初始化即归一，防闭包内 null 收窄失效）
+  const headSortRaw = (
     d.prepare("SELECT MIN(sort) AS m FROM mottos WHERE status = 'draft' AND deleted_at IS NULL").get() as {
       m: number | null
     }
   ).m
-  if (headSort == null) headSort = 1
+  let headSort = headSortRaw == null ? 1 : headSortRaw
   const ins = d.prepare(
     "INSERT INTO mottos (content, source, status, origin, gen_kind, sort, tags, created_at, updated_at) VALUES (?, ?, 'draft', 'ai', ?, ?, '[]', ?, ?)"
   )
   let inserted = 0
   let excerptInserted = 0
   let composedInserted = 0
-  for (const it of items) {
-    const key = normalizeText(it.content)
-    if (!key || isDupMotto(allNorms, key)) continue
-    allNorms.push(key)
-    headSort -= 1
-    // gen_kind 落库（DB v6）：驱动 AI 徽章仅编撰条显示、摘录条不打
-    const kind = mottoKind(it.kind, it.source)
-    ins.run(it.content, it.source, kind, headSort, now, now)
-    if (kind === 'composed') composedInserted++
-    else excerptInserted++
-    inserted++
+  let patternRejected = 0
+  let tombstoneRejected = 0
+  const batchInsertedContents: string[] = []
+  /** 一批候选过同一套过滤（墓碑 → 库内/批内 → 句式）后入库，计数累计到外层（两轮共用） */
+  const insertBatch = (items: GeneratedMotto[]): void => {
+    for (const it of items) {
+      const key = normalizeText(it.content)
+      if (!key) continue
+      if (isDupMotto(tombstoneNorms, key)) {
+        tombstoneRejected++
+        continue
+      }
+      if (isDupMotto(allNorms, key)) continue
+      // gen_kind 落库（DB v6）：驱动 AI 徽章仅编撰条显示、摘录条不打
+      const kind = mottoKind(it.kind, it.source)
+      // 句式禁令兜底（优化建议区第23轮）：仅编撰条，命中剔除；摘录条豁免（真实名言不受限）
+      if (kind === 'composed' && COMPOSED_BANNED_PATTERNS.some((p) => p.test(it.content))) {
+        patternRejected++
+        continue
+      }
+      allNorms.push(key)
+      batchInsertedContents.push(it.content)
+      headSort -= 1
+      ins.run(it.content, it.source, kind, headSort, now, now)
+      if (kind === 'composed') composedInserted++
+      else excerptInserted++
+      inserted++
+    }
   }
-  return { generated: items.length, inserted, excerptInserted, composedInserted }
+  // 第一轮：5 摘录 + 5 编撰
+  const firstItems = await callAndParse(buildPrompt(5, 5, ''))
+  let generated = firstItems.length
+  insertBatch(firstItems)
+  // 补足轮（优化建议区第24轮·统一补一轮）：第一轮剔除（墓碑/库内/句式）后按 5/5 配比
+  // 补缺口，本批已入库进避免清单，重跑同一套过滤；失败非致命，保留第一轮结果
+  let supplemented = 0
+  const shortfallExcerpt = Math.max(0, 5 - excerptInserted)
+  const shortfallComposed = Math.max(0, 5 - composedInserted)
+  if (shortfallExcerpt > 0 || shortfallComposed > 0) {
+    try {
+      const batchAvoid = batchInsertedContents.map((c) => `- ${c}`).join('\n')
+      const more = await callAndParse(buildPrompt(shortfallExcerpt, shortfallComposed, batchAvoid))
+      generated += more.length
+      const before = inserted
+      insertBatch(more)
+      supplemented = inserted - before
+    } catch {
+      // 补足调用/解析失败非致命（第24轮）：损失只是少几条，不值得整批报错
+    }
+  }
+  return {
+    generated,
+    inserted,
+    excerptInserted,
+    composedInserted,
+    patternRejected,
+    tombstoneRejected,
+    supplemented
+  }
 }
 
 // ---------- 灵感泉 v2.0（灵感泉 specs §6：从零生成 + AI 完善） ----------
@@ -739,6 +824,48 @@ export async function refineInspiration(id: number): Promise<string> {
   return md
 }
 
+// ---------- 写作台 Copilot 协笔（文笔坊 specs §4） ----------
+// 零 AI 边界：本函数只读 wenbi_articles；md/wenbi/journal/（浮生记）永不进入任何 prompt。
+
+export type WenbiCopilotAction = 'draft' | 'continue' | 'polish' | 'rewrite'
+
+/** Copilot 协笔：起稿/续写/润色/改写。只生成建议不写库，采纳由渲染层完成（AI 永不直接改正文） */
+export async function copilotWriting(
+  articleId: number,
+  action: WenbiCopilotAction,
+  selection?: string
+): Promise<string> {
+  if ((action === 'polish' || action === 'rewrite') && (!selection || !selection.trim())) {
+    throw new Error('NO_SELECTION')
+  }
+  const row = getDb().prepare('SELECT title, md_path FROM wenbi_articles WHERE id = ?').get(articleId) as
+    | { title: string; md_path: string }
+    | undefined
+  if (!row) throw new Error('NOT_FOUND')
+  let body = ''
+  try {
+    body = mdRead(row.md_path).slice(0, 4000)
+  } catch {
+    /* 正文空按未写处理 */
+  }
+  const digest = profileDigest()
+  const head = `${digest}${digest ? '\n\n' : ''}你是我的写作搭档，懂我的文风与领域。以下是我正在写的文章：\n标题：${row.title}\n正文：\n${body || '（正文暂空）'}`
+  const instructions: Record<WenbiCopilotAction, string> = {
+    draft: '请基于标题为这篇文章起稿：先给一份大纲（## 二级标题分节，每节一句话说明这一节写什么），再写出开头一两段。合计不超过 500 字。',
+    continue: '请顺着正文接着往下写 200~400 字：保持语气与叙述连贯，不要重复已有内容，从正文结束处自然续起。',
+    polish: `请润色下面这段文字：保持原意与信息不变，让表达更准确、更流畅。只输出润色后的这段文字，不要任何解释。\n待润色段落：\n${selection}`,
+    rewrite: `请换一种写法重写下面这段文字：可以调整句式与切入角度，但事实与要点不动。只输出重写后的这段文字，不要任何解释。\n待改写段落：\n${selection}`
+  }
+  const prompt = `${head}\n\n${instructions[action]}\n\n用简体中文 Markdown 输出，只输出正文内容，不要任何解释、前言或代码围栏。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: action === 'draft' || action === 'continue' ? 0.7 : 0.4
+  })
+  const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
 // ---------- 知识卡片生成（万象库 specs §3.1） ----------
 
 export interface GenerateWikiResult {
@@ -1028,12 +1155,17 @@ export interface TurtleSoupDraft {
   analysis: string
   difficulty: 'easy' | 'medium' | 'hard'
   theme: string
+  /** 核心诡计一句话概括（如「用前一天的旧录像伪造离场记录」）——落库防跨批同构，不进 UI */
+  trick_note: string
 }
 
 /**
- * 「来 3 碗汤」：原创出 3 碗海龟汤入库（specs §3）。
- * 出题注入画像摘要 + 已有汤避免清单；质量标准与逐碗自检写进 prompt
- * （汤面铺足事实抓手 / 汤底逐一回收 / 本格自洽 / 可判定）——design.md 汤库节。
+ * 「来 3 碗汤」：原创出 3 碗海龟汤入库（specs §3；海龟汤修改反馈——出题标准 v2 + 逐碗审题）。
+ * 出题注入画像摘要 + 已有汤避免清单 + 近 9 碗诡计摘要清单（防跨批同构）；
+ * 出题后逐碗串行审题（260907 二调：串行适配中转通道并发限制；硬伤才打回——常识门槛/
+ * 逻辑硬伤/同构/极端报菜名），不合格碗携问题清单重出一次，复审无硬伤即入碗（难度偏好
+ * 仍不符时按审题人重评档如实落库，不弃碗）——弃碗不弃批，3 碗全灭才抛错；
+ * 落库难度以最后一次通过审题的评定为准。
  */
 export async function generateSoups(
   preference: 'random' | 'easy' | 'medium' | 'hard'
@@ -1045,51 +1177,95 @@ export async function generateSoups(
   const avoidList = existing.length
     ? existing.map((r) => `- 《${r.title}》（${r.theme_tag}）`).join('\n')
     : '（暂无）'
-  const prefText =
+  const recentTricks = (
+    d
+      .prepare('SELECT trick_note FROM turtle_soups WHERE trick_note IS NOT NULL ORDER BY id DESC LIMIT 9')
+      .all() as { trick_note: string }[]
+  ).map((r) => r.trick_note)
+  const recentTrickList = recentTricks.length
+    ? recentTricks.map((s, i) => `${i + 1}. ${s}`).join('\n')
+    : '（暂无）'
+  const requiredDifficulty = preference === 'random' ? undefined : preference
+  const difficultyText =
     preference === 'random'
       ? '难度不限，三碗难度错开为佳'
       : `三碗均按「${DIFF_ZH[preference]}」难度出题`
-  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是一位资深海龟汤出题人，为一位喜欢推理的玩家原创出题。
 
-## 已有汤清单（汤名与题材组合请避开，不得重复或高度雷同）
-${avoidList}
+  const drafts = await composeSoups(
+    buildSoupPrompt({ count: 3, difficultyText, avoidList, recentTrickList }),
+    3
+  )
 
-## 出题要求（严格执行）
-1. 恰好原创 3 碗海龟汤。禁止搬运网传经典汤；可借鉴经典推理母题（身份诡计、时间诡计、物证矛盾、叙述视角等）但必须重组出全新情节。
-2. 每碗产出：title（汤名，2~6 字）、surface（汤面）、bottom（汤底）、analysis（裁判解析——把汤底展开讲透的完整背景：人物、时间线、动机、每个关键细节的因果，供裁判判答用）。
-3. ${prefText}；每碗自评难度（easy/medium/hard）并打一枚题材标签（theme，4~8 字，如「本格·罪案」「现代·亲情」「诡计·日常」）。
-4. surface 80~200 字；bottom 150~400 字；analysis 200~500 字。
+  /** 最终入碗：落库难度一律以最后一次通过审题的评定为准 */
+  const finals: { soup: TurtleSoupDraft; difficulty: 'easy' | 'medium' | 'hard' }[] = []
 
-## 质量标准（输出前逐碗自检，不合格的碗重写替换后再输出）
-① 汤面铺足可供盘问的具体事实（抓手）：至少 3 个可被玩家提问验证的具体细节（日期、物件、身份、动作、位置等），像「致命日记」给出全部日记日期、「谁盖住了我」给出四次「被盖住」的场景那样；反面示例：汤面只给一句结论式悬念（如「现场被人布置过」）而不铺事实，玩家无从问起——不合格。
-② 汤底逐一回收汤面全部细节：汤面出现的每个元素在汤底都有解释，无悬空元素。
-③ 本格自洽：无超自然、无巧合堆砌，因果链在现实逻辑内成立。
-④ 可判定性：事实链封闭，玩家的判断类问题都能明确答「是 / 否 / 与汤无关」。
-
-以 JSON 对象返回，最外层是对象，格式：{"soups":[{"title":"...","surface":"...","bottom":"...","analysis":"...","difficulty":"easy|medium|hard","theme":"..."}]}，soups 数组内恰好 3 项，不要输出其他任何内容。`
-  const call = () =>
-    chatCompletion({
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.9,
-      jsonMode: true
+  // 逐碗串行：审题（重试一次兜通道抖动）→ 无硬伤即入碗；有硬伤/难度不符 → 重出一次再
+  // 审，复审无硬伤即入碗（难度按重评落库）。全程串行，与全仓 LLM 调用惯例同构（中转
+  // 通道有账号并发上限，并行突发会触发 429 退避共振）
+  for (const draft of drafts) {
+    const r1 = await reviewSoupSafe(draft, {
+      recentTricks,
+      peerTricks: drafts.filter((o) => o !== draft).map((o) => o.trick_note),
+      requiredDifficulty
     })
-  let soups: TurtleSoupDraft[]
-  try {
-    soups = parseSoupArray((await call()).content)
-  } catch {
-    // 解析失败自动重试一次（同 generateMottos 惯例）；仍失败 → 抛错，不落半截数据
-    soups = parseSoupArray((await call()).content)
+    if (!r1) continue // 审题通道两次故障 → 弃碗
+    if (r1.qualityOk && r1.difficultyOk) {
+      finals.push({ soup: draft, difficulty: r1.ratedDifficulty })
+      continue
+    }
+    // 打回重出一次：random 模式补位档 = 审题人重评档（维持批内错开）；指定模式 = 偏好档
+    const target = requiredDifficulty ?? r1.ratedDifficulty
+    try {
+      const [redone] = await composeSoups(
+        buildSoupPrompt({
+          count: 1,
+          difficultyText: `本碗按「${DIFF_ZH[target]}」难度出题`,
+          avoidList,
+          recentTrickList,
+          redoProblems: r1.problems,
+          keepTricks: finals.map((f) => f.soup.trick_note)
+        }),
+        1
+      )
+      const r2 = await reviewSoupSafe(redone, {
+        recentTricks,
+        peerTricks: finals.map((f) => f.soup.trick_note),
+        requiredDifficulty
+      })
+      // 复审无硬伤即入碗（难度偏好仍不符时按重评档如实落库，260907 二调不再弃碗）；
+      // 复审仍有硬伤 → 弃碗不弃批
+      if (r2?.qualityOk) finals.push({ soup: redone, difficulty: r2.ratedDifficulty })
+    } catch {
+      // 重出失败 → 弃碗
+    }
   }
+
+  if (finals.length === 0) {
+    throw new Error('本批汤未通过审题或生成通道不稳定，未落库，请稍后重试')
+  }
+
   const now = nowIso()
   const ins = d.prepare(
-    "INSERT INTO turtle_soups (title, surface, bottom, analysis, difficulty, theme_tag, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'fresh', ?, ?)"
+    "INSERT INTO turtle_soups (title, surface, bottom, analysis, difficulty, theme_tag, trick_note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh', ?, ?)"
   )
-  for (const s of soups) ins.run(s.title, s.surface, s.bottom, s.analysis, s.difficulty, s.theme, now, now)
-  return { generated: soups.length, inserted: soups.length }
+  for (const f of finals) {
+    ins.run(
+      f.soup.title,
+      f.soup.surface,
+      f.soup.bottom,
+      f.soup.analysis,
+      f.difficulty,
+      f.soup.theme,
+      f.soup.trick_note,
+      now,
+      now
+    )
+  }
+  return { generated: finals.length, inserted: finals.length }
 }
 
-/** 解析出汤返回（恰好 3 碗、三件套齐全才算合格，否则抛错不落库） */
-function parseSoupArray(raw: string): TurtleSoupDraft[] {
+/** 解析出汤返回（数量与三件套齐全才算合格，否则抛错不落库；出题 3 碗、打回重出 1 碗共用） */
+function parseSoupArray(raw: string, expected = 3): TurtleSoupDraft[] {
   const parsed = parseJsonObject(raw)
   const arr = Array.isArray(parsed.soups)
     ? (parsed.soups as unknown[])
@@ -1103,10 +1279,12 @@ function parseSoupArray(raw: string): TurtleSoupDraft[] {
       typeof item.surface === 'string' &&
       typeof item.bottom === 'string' &&
       typeof item.analysis === 'string' &&
+      typeof item.trick_note === 'string' &&
       item.title.trim() &&
       item.surface.trim() &&
       item.bottom.trim() &&
-      item.analysis.trim()
+      item.analysis.trim() &&
+      item.trick_note.trim()
     ) {
       out.push({
         title: item.title.trim(),
@@ -1114,12 +1292,225 @@ function parseSoupArray(raw: string): TurtleSoupDraft[] {
         bottom: item.bottom.trim(),
         analysis: item.analysis.trim(),
         difficulty: normDifficulty(item.difficulty),
-        theme: typeof item.theme === 'string' && item.theme.trim() ? item.theme.trim() : '本格'
+        theme: typeof item.theme === 'string' && item.theme.trim() ? item.theme.trim() : '本格',
+        trick_note: item.trick_note.trim()
       })
     }
   }
-  if (out.length !== 3) throw new Error(`LLM 返回 ${out.length} 碗合格汤（应为 3 碗）`)
+  if (out.length !== expected) {
+    throw new Error(`LLM 返回 ${out.length} 碗合格汤（应为 ${expected} 碗）`)
+  }
   return out
+}
+
+/** 出题 prompt v2 组装（海龟汤修改反馈：四条新标准 + 巧思总纲 + trick_note 产出 + 摘要避免清单） */
+function buildSoupPrompt(opts: {
+  count: number
+  /** 难度要求句（如「三碗均按『中等』难度出题」/「本碗按『困难』难度出题」） */
+  difficultyText: string
+  avoidList: string
+  recentTrickList: string
+  /** 打回重出：审题人问题清单（不给原碗内容，防锚定修补——照思维墙打回惯例） */
+  redoProblems?: string[]
+  /** 打回重出：同批已保留碗的 trick_note（批内互避） */
+  keepTricks?: string[]
+}): string {
+  const redoBlock =
+    opts.redoProblems && opts.redoProblems.length > 0
+      ? `\n## 上一次出的这碗汤被审题人打回，问题如下（重新出题必须全部规避）\n${opts.redoProblems
+          .map((p) => `- ${p}`)
+          .join('\n')}\n`
+      : ''
+  const keepBlock =
+    opts.keepTricks && opts.keepTricks.length > 0
+      ? `\n## 本碗需与以下同批已保留汤的核心诡计思路明显不同\n${opts.keepTricks
+          .map((t) => `- ${t}`)
+          .join('\n')}\n`
+      : ''
+  return `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是一位资深海龟汤出题人，为一位喜欢推理的玩家原创出题。
+
+## 已有汤清单（汤名与题材组合请避开，不得重复或高度雷同）
+${opts.avoidList}
+
+## 近期已用过的核心诡计思路（新汤的核心思路必须与它们明显不同）
+${opts.recentTrickList}
+${redoBlock}${keepBlock}
+## 出题要求（严格执行）
+1. 恰好原创 ${opts.count} 碗海龟汤。禁止搬运网传经典汤。好汤的标志是：真相揭示后，玩家回看汤面，发现每个寻常细节都另有含义——核心诡计应让多个寻常细节咬合成一个不寻常的真相。不设类型清单，思路不受任何分类束缚。
+2. 每碗产出：title（汤名，2~6 字）、surface（汤面）、bottom（汤底）、analysis（裁判解析——把汤底展开讲透的完整背景：人物、时间线、动机、每个关键细节的因果，供裁判判答用）、trick_note（核心诡计一句话概括，15~40 字，如「用前一天的旧录像伪造离场记录」——只描述诡计思路本身，不复述案情）。
+3. ${opts.difficultyText}；每碗自评难度（easy/medium/hard）并打一枚题材标签（theme，4~8 字，如「本格·罪案」「现代·亲情」「诡计·日常」）。
+4. surface 80~200 字；bottom 150~400 字；analysis 200~500 字。${
+    opts.count > 1 ? '\n5. 各碗的核心诡计思路（trick_note）彼此明显不同。' : ''
+  }
+
+## 难度定义（自评难度必须对照给出）
+- easy：单层反转，关键线索在汤面中较显眼，玩家盘问较少即可逼近汤底
+- medium：双层反转，或关键线索有伪装，需先排除一个误导方向
+- hard：多层反转或强误导，关键线索全部隐性，需玩家自己想到盘问方向
+
+## 质量标准（输出前逐碗自检，不合格的碗重写替换后再输出）
+① 常识可解：解题所需知识限于日常生活常识；专业知识可作佐证、不得作解题钥匙。自检：一个观察敏锐的普通人，不查任何资料，只凭盘问能否逼近汤底？
+② 对手不降智：若汤涉及对手/作案者的计划，破绽必须源于其固有盲区（信息差、无法预料的变量、成本权衡），不得是与其缜密程度不相称的低级疏忽。自检：对手再谨慎一点，这个诡计还会漏吗？若「多检查一步就不会漏」，不合格。
+③ 线索自然隐藏：汤面至少 3 个可供盘问的具体事实（日期、物件、身份、动作、位置等），以平常口吻织入叙事，不得集中罗列异常；其中至多一半呈现为显性异常，至少一条是隐性线索——表面完全平常，汤底揭示后含义才反转。自检：把汤面里的异常挑出来，如果一眼能挑出全部，就不合格。
+④ 汤底逐一回收：汤面出现的每个元素在汤底都有解释，无悬空元素。
+⑤ 本格自洽：无超自然、无巧合堆砌，因果链在现实逻辑内成立。
+⑥ 可判定性：事实链封闭，玩家的判断类问题都能明确答「是 / 否 / 与汤无关」。
+
+以 JSON 对象返回，最外层是对象，格式：{"soups":[{"title":"...","surface":"...","bottom":"...","analysis":"...","trick_note":"...","difficulty":"easy|medium|hard","theme":"..."}]}，soups 数组内恰好 ${opts.count} 项，不要输出其他任何内容。`
+}
+
+/** 单趟出题调用 + 解析（解析失败自动重试一次，同 generateMottos 惯例；仍失败抛错不落库） */
+async function composeSoups(prompt: string, count: number): Promise<TurtleSoupDraft[]> {
+  const call = () =>
+    chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.9, jsonMode: true })
+  try {
+    return parseSoupArray((await call()).content, count)
+  } catch {
+    return parseSoupArray((await call()).content, count)
+  }
+}
+
+export interface SoupReview {
+  /** 质量判定：无硬伤 = true（线索自然/难度等主观意见不影响） */
+  qualityOk: boolean
+  /** 难度判定：random 模式恒 true；指定偏好时重评档与偏好档相符 = true（不符打回一次，重出后按实落库） */
+  difficultyOk: boolean
+  problems: string[]
+  /** 审题人独立重评的难度档（落库以此为准） */
+  ratedDifficulty: 'easy' | 'medium' | 'hard'
+}
+
+/**
+ * 审题（半盲验证，海龟汤修改反馈；260907 二调：硬伤才打回）：审题人先只读汤面以玩家视角
+ * 记录一手证据，再读汤底审查——立场「默认放行，拿不准算过」：只有硬伤才打回
+ * （常识门槛 / 逻辑硬伤含回收与可判定 / 同构 / 极端报菜名）；线索自然与难度属提示性
+ * 意见不打回。指定难度偏好时重评档不符由代码硬校验计入打回一次，重出后仍不符由
+ * 调用方按重评档落库。调用/解析失败由 reviewSoupSafe 重试一次兜底。
+ */
+async function reviewSoup(
+  draft: TurtleSoupDraft,
+  ctx: {
+    recentTricks: string[]
+    peerTricks: string[]
+    /** 玩家指定的难度偏好（random 模式为 undefined） */
+    requiredDifficulty?: 'easy' | 'medium' | 'hard'
+  }
+): Promise<SoupReview> {
+  const targetLine = ctx.requiredDifficulty
+    ? `本轮玩家指定了难度偏好「${DIFF_ZH[ctx.requiredDifficulty]}」——按定义独立重评实际难度档即可，偏差不影响 verdict（系统会另行处理）。`
+    : '本轮难度不限——按定义独立重评实际难度档即可，不影响 verdict。'
+  const res = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `你是海龟汤的审题人。下面这碗汤将发给一位喜欢推理的玩家。你的立场是：**默认放行，拿不准算过**——只有发现下述具体硬伤才打回；主观层面的不完美（诡计还能更巧妙、线索还能更隐蔽）不构成打回理由。
+
+第一步：只读【汤面】，以玩家视角记下：第一直觉的猜测方向、最想盘问的 3 个问题、一眼注意到的异常。
+第二步：读【汤底】【裁判解析】与【出题人自评】，只查以下硬伤：
+
+1. 常识门槛：解题的关键一环必须用到需查资料的专业知识（天文、地理、法医、化学、密码学等）——普通人只凭生活常识与盘问无法逼近汤底。
+2. 逻辑硬伤：因果链断裂或自相矛盾；汤面出现的元素在汤底没有交代（悬空）；靠巧合堆砌推进；存在无法用「是/否」判定的关键事实。
+3. 同构：核心诡计思路与「近期已用思路清单」或「同批其他汤」高度相同。
+4. 极端报菜名：汤面的异常一眼即可全部挑出、且没有任何一条表面平常的线索——线索完全不加遮掩。
+
+提示性意见（写进你的审查过程、但不影响 verdict）：线索呈现是否自然；难度按「easy=单层反转线索较显眼 / medium=双层反转或线索有伪装需排除误导 / hard=多层反转或强误导关键线索全隐性」独立重评。${targetLine}
+
+【汤面】
+${draft.surface}
+
+【汤底】
+${draft.bottom}
+
+【裁判解析】
+${draft.analysis}
+
+【出题人自评】难度：${DIFF_ZH[draft.difficulty]}；题材：${draft.theme}；核心诡计思路：${draft.trick_note}
+
+## 近期已用思路清单
+${ctx.recentTricks.length ? ctx.recentTricks.map((s, i) => `${i + 1}. ${s}`).join('\n') : '（暂无）'}
+
+## 同批其他汤的核心思路
+${ctx.peerTricks.length ? ctx.peerTricks.map((s) => `- ${s}`).join('\n') : '（无）'}
+
+只输出 JSON：{"verdict":"pass|fail","ratedDifficulty":"easy|medium|hard","problems":["硬伤1","硬伤2"]}。verdict 为 fail 当且仅当发现上述硬伤；problems 仅在 fail 时非空、只列硬伤不列主观意见。`
+      }
+    ],
+    temperature: 0.2,
+    jsonMode: true
+  })
+  const parsed = parseJsonObject(res.content)
+  const problems = Array.isArray(parsed.problems)
+    ? parsed.problems.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : []
+  const rated = normDifficulty(parsed.ratedDifficulty)
+  const qualityOk = parsed.verdict === 'pass' && problems.length === 0
+  const difficultyOk = !ctx.requiredDifficulty || rated === ctx.requiredDifficulty
+  if (qualityOk && !difficultyOk) {
+    problems.push(
+      `难度复核为「${DIFF_ZH[rated]}」，与玩家指定的「${DIFF_ZH[ctx.requiredDifficulty!]}」不符`
+    )
+  }
+  return { qualityOk, difficultyOk, problems, ratedDifficulty: rated }
+}
+
+/** 审题调用 + 解析（失败自动重试一次；两次均失败返回 null = 弃碗——通道故障与汤质量无关） */
+async function reviewSoupSafe(
+  draft: TurtleSoupDraft,
+  ctx: {
+    recentTricks: string[]
+    peerTricks: string[]
+    requiredDifficulty?: 'easy' | 'medium' | 'hard'
+  }
+): Promise<SoupReview | null> {
+  try {
+    return await reviewSoup(draft, ctx)
+  } catch {
+    try {
+      return await reviewSoup(draft, ctx)
+    } catch {
+      return null
+    }
+  }
+}
+
+/**
+ * 存量汤诡计摘要一次性回填（海龟汤修改反馈）：启动后 fire-and-forget，
+ * 全量（含已玩过/回收站软删——软删汤思路同样算「已用过」）为 trick_note 为 NULL
+ * 的汤补一句核心诡计概括。失败静默（console.warn）下次启动再试；LLM 未配置跳过；
+ * 跑完即无、不建定时器。
+ */
+export async function backfillTrickNotes(): Promise<void> {
+  try {
+    const d = getDb()
+    const rows = d
+      .prepare('SELECT id, title, bottom FROM turtle_soups WHERE trick_note IS NULL')
+      .all() as { id: number; title: string; bottom: string }[]
+    if (rows.length === 0) return
+    const res = await chatCompletion({
+      messages: [
+        {
+          role: 'user',
+          content: `为下列海龟汤各写一句「核心诡计思路」概括（trick_note）：只描述诡计思路本身（如「用前一天的旧录像伪造离场记录」），不复述案情、不评价质量，每句 15~40 字。
+
+${rows.map((r) => `# ${r.id}《${r.title}》\n汤底：${r.bottom}`).join('\n\n')}
+
+以 JSON 对象返回：{"notes":[{"id":1,"trick_note":"..."}]}，数组恰好 ${rows.length} 项，id 与上表一致，不要输出其他任何内容。`
+        }
+      ],
+      temperature: 0.2,
+      jsonMode: true
+    })
+    const parsed = parseJsonObject(res.content)
+    if (!Array.isArray(parsed.notes)) return
+    const upd = d.prepare('UPDATE turtle_soups SET trick_note = ? WHERE id = ? AND trick_note IS NULL')
+    for (const n of parsed.notes as Record<string, unknown>[]) {
+      if (n && typeof n.id === 'number' && typeof n.trick_note === 'string' && n.trick_note.trim()) {
+        upd.run(n.trick_note.trim(), n.id)
+      }
+    }
+  } catch (e) {
+    console.warn('[backfillTrickNotes] 存量汤诡计摘要回填失败，下次启动再试：', e)
+  }
 }
 
 export interface SoupAskResult {

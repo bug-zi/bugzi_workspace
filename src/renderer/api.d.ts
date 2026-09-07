@@ -6,6 +6,7 @@ export type ModuleId =
   | 'verify'
   | 'zhijiji'
   | 'reasoning'
+  | 'wenbi'
   | 'recycle'
   | 'profile'
 
@@ -95,6 +96,30 @@ export interface InspirationRecord {
   deleted_at: string | null
 }
 
+/** 浮生记条目（wenbi_journals 表，文笔坊 specs §1）：无标题，时间线行=创建日期+首行摘要；正文在 md_path 的真实 .md 文件 */
+export interface WenbiJournalRecord {
+  id: number
+  md_path: string
+  /** 大事件标记（1=是）：置顶小节聚合展示 */
+  is_event: 0 | 1
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 写作台文章（wenbi_articles 表，文笔坊 specs §1）：zone 四区流转 */
+export interface WenbiArticleRecord {
+  id: number
+  title: string
+  zone: 'idea' | 'writing' | 'done' | 'published'
+  md_path: string
+  /** 区内排序（拖拽顺序） */
+  sort: number
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
 export interface VerifyRecord {
   id: number
   claim: string
@@ -116,6 +141,8 @@ export interface RecycleRow {
     | 'reasoning_soup'
     | 'reasoning_game'
     | 'drafts'
+    | 'wenbi_journal'
+    | 'wenbi_article'
   item_id: number
   payload: string
   created_at: string
@@ -513,6 +540,34 @@ export interface Api {
     /** 草稿入回收站（前端二次确认后调用） */
     discard(id: number): Promise<boolean>
   }
+  wenbi: {
+    /** 浮生记条目列表（created_at 倒序；零 AI 板块） */
+    journalList(): Promise<WenbiJournalRecord[]>
+    /** 新建一条记录（返回整行，渲染层据 created_at 拼日期标题并 autoEdit） */
+    journalCreate(): Promise<WenbiJournalRecord>
+    /** 大事件标记切换 */
+    journalSetEvent(id: number, isEvent: boolean): Promise<boolean>
+    /** 记录入回收站（前端二次确认后调用） */
+    journalDiscard(id: number): Promise<boolean>
+    /** 文章列表（区内按 sort） */
+    articleList(): Promise<WenbiArticleRecord[]>
+    /** 新建文章（返回 id；md 模板 `# 标题`） */
+    articleCreate(zone: string, title: string): Promise<number>
+    /** 改标题（不动 updated_at） */
+    articleRename(id: number, title: string): Promise<boolean>
+    /** 拖拽/菜单移动（bump updated_at） */
+    articleMove(id: number, zone: string, sort: number): Promise<boolean>
+    /** 区内重排归一化（批量） */
+    articleReorder(moves: { id: number; zone: string; sort: number }[]): Promise<boolean>
+    /** 编辑保存后触碰（bump updated_at） */
+    articleTouch(id: number): Promise<boolean>
+    /** 文章入回收站（前端二次确认后调用） */
+    articleDiscard(id: number): Promise<boolean>
+    /** 导出 .md（保存对话框；取消返回 null） */
+    articleExport(id: number): Promise<string | null>
+    /** Copilot 协笔：起稿/续写/润色/改写，返回建议文本（不写库）；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    copilot(id: number, action: 'draft' | 'continue' | 'polish' | 'rewrite', selection?: string): Promise<string>
+  }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
     create(content: string, source: string, status: string, tags?: string[]): Promise<number>
@@ -528,6 +583,11 @@ export interface Api {
       inserted: number
       excerptInserted: number
       composedInserted: number
+      patternRejected: number
+      /** 命中已删除格言墓碑被剔除的条数（优化建议区第24轮） */
+      tombstoneRejected: number
+      /** 补足轮最终入库条数（优化建议区第24轮） */
+      supplemented: number
     }>
     normalize(s: string): Promise<string>
     /** 未删除区内判重（v2.0：规范化一致或包含关系） */

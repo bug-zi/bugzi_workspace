@@ -5,6 +5,7 @@ import { initDb } from './db/db'
 import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
 import { registerIpc } from './ipc'
 import { startSchedulers } from './services/scheduler'
+import { backfillTrickNotes } from './ai/services'
 import { applyDataDirAtStartup } from './services/storage'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
@@ -73,6 +74,8 @@ if (!app.requestSingleInstanceLock()) {
     initDb()
     registerIpc()
     startSchedulers()
+    // 存量汤诡计摘要一次性回填（海龟汤质量优化 spec）：错开启动高峰，失败静默（内部自 catch）
+    setTimeout(() => void backfillTrickNotes(), 10_000).unref()
     createWindow()
 
     app.on('activate', () => {

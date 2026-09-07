@@ -1,6 +1,6 @@
 // IPC 全通道注册（主进程）：渲染层 window.api.* 的后端
 import { ipcMain, dialog, BrowserWindow, shell, app, clipboard } from 'electron'
-import { getDb, nowIso, normalizeText, isDupMotto, stripMottoNoteHeader } from './db/db'
+import { getDb, nowIso, normalizeText, isDupMotto, stripMottoNoteHeader, recordMottoTombstone } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
@@ -27,6 +27,7 @@ import {
   profileDigest,
   compactAiSession,
   clearAiSession,
+  copilotWriting,
   generateSoups,
   judgeSoupQuestion,
   judgeSoupGuess,
@@ -43,7 +44,7 @@ import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
 import { SettingsKeys } from '../src/shared/types'
 import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
-import { copyFileSync, unlinkSync } from 'node:fs'
+import { copyFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
@@ -344,10 +345,12 @@ export function registerIpc(): void {
   ipcMain.handle('mottos:generate', () => generateMottos())
   ipcMain.handle('mottos:normalize', (_e, s: string) => normalizeText(s))
   ipcMain.handle('mottos:deleteForever', (_e, id: number) => {
-    // 直接删除（优化建议区）：越过回收站彻底删除，连带笔记 md（同 hardDelete 的处理口径）
-    const row = getDb().prepare('SELECT note_path FROM mottos WHERE id = ?').get(id) as
-      | { note_path: string | null }
+    // 直接删除（优化建议区）：越过回收站彻底删除，连带笔记 md（同 hardDelete 的处理口径）；
+    // 物理删除前写墓碑留底（优化建议区第24轮，防「来10条格言」复现已删格言）
+    const row = getDb().prepare('SELECT content, note_path FROM mottos WHERE id = ?').get(id) as
+      | { content: string; note_path: string | null }
       | undefined
+    if (row) recordMottoTombstone(row.content)
     getDb().prepare('DELETE FROM mottos WHERE id = ?').run(id)
     if (row?.note_path) mdDelete(row.note_path)
     return true
@@ -529,6 +532,98 @@ export function registerIpc(): void {
     getDb().prepare('UPDATE drafts SET updated_at = ? WHERE id = ?').run(nowIso(), id)
     return true
   })
+
+  // ---------- 文笔坊（DB v17，文笔坊 specs §2/§3/§4）：浮生记零 AI + 写作台 + Copilot ----------
+  ipcMain.handle('wenbi:journalList', () =>
+    getDb()
+      .prepare('SELECT * FROM wenbi_journals WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC')
+      .all()
+  )
+  /** 新建一条记录：返回整行（渲染层需 created_at 拼弹窗标题日期） */
+  ipcMain.handle('wenbi:journalCreate', () => {
+    const d = getDb()
+    const now = nowIso()
+    const r = d
+      .prepare("INSERT INTO wenbi_journals (md_path, created_at, updated_at) VALUES ('PENDING', ?, ?)")
+      .run(now, now)
+    const id = Number(r.lastInsertRowid)
+    const mdPath = `md/wenbi/journal/${id}.md`
+    d.prepare('UPDATE wenbi_journals SET md_path = ? WHERE id = ?').run(mdPath, id)
+    mdCreate(mdPath, '')
+    return d.prepare('SELECT * FROM wenbi_journals WHERE id = ?').get(id)
+  })
+  /** 大事件标记切换：不动 updated_at（标记非内容变更，时间线位置钉在 created_at） */
+  ipcMain.handle('wenbi:journalSetEvent', (_e, id: number, isEvent: boolean) => {
+    getDb().prepare('UPDATE wenbi_journals SET is_event = ? WHERE id = ?').run(isEvent ? 1 : 0, id)
+    return true
+  })
+  ipcMain.handle('wenbi:journalDiscard', (_e, id: number) => {
+    discardToRecycle('wenbi_journal', id)
+    return true
+  })
+  ipcMain.handle('wenbi:articleList', () =>
+    getDb().prepare('SELECT * FROM wenbi_articles WHERE deleted_at IS NULL ORDER BY zone, sort, id').all()
+  )
+  ipcMain.handle('wenbi:articleCreate', (_e, zone: string, title: string) => {
+    const d = getDb()
+    const tail =
+      (
+        d.prepare('SELECT MAX(sort) AS m FROM wenbi_articles WHERE zone = ? AND deleted_at IS NULL').get(zone) as {
+          m: number | null
+        }
+      ).m ?? 0
+    const now = nowIso()
+    const r = d
+      .prepare('INSERT INTO wenbi_articles (title, zone, md_path, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(title, zone, 'PENDING', tail + 1, now, now)
+    const id = Number(r.lastInsertRowid)
+    const mdPath = `md/wenbi/article/${id}.md`
+    d.prepare('UPDATE wenbi_articles SET md_path = ? WHERE id = ?').run(mdPath, id)
+    mdCreate(mdPath, `# ${title}\n`)
+    return id
+  })
+  /** 改标题不动 updated_at（drafts 改名先例，列表时间稳定） */
+  ipcMain.handle('wenbi:articleRename', (_e, id: number, title: string) => {
+    getDb().prepare('UPDATE wenbi_articles SET title = ? WHERE id = ?').run(title.trim().slice(0, 100) || '未命名文章', id)
+    return true
+  })
+  ipcMain.handle('wenbi:articleMove', (_e, id: number, zone: string, sort: number) => {
+    getDb().prepare('UPDATE wenbi_articles SET zone = ?, sort = ?, updated_at = ? WHERE id = ?').run(zone, sort, nowIso(), id)
+    return true
+  })
+  /** 拖拽重排后归一化（批量） */
+  ipcMain.handle('wenbi:articleReorder', (_e, moves: { id: number; zone: string; sort: number }[]) => {
+    const stmt = getDb().prepare('UPDATE wenbi_articles SET zone = ?, sort = ?, updated_at = ? WHERE id = ?')
+    for (const m of moves) stmt.run(m.zone, m.sort, nowIso(), m.id)
+    return true
+  })
+  /** MdDialog 编辑保存后的触碰：只 bump updated_at（draft:touch 先例） */
+  ipcMain.handle('wenbi:articleTouch', (_e, id: number) => {
+    getDb().prepare('UPDATE wenbi_articles SET updated_at = ? WHERE id = ?').run(nowIso(), id)
+    return true
+  })
+  ipcMain.handle('wenbi:articleDiscard', (_e, id: number) => {
+    discardToRecycle('wenbi_article', id)
+    return true
+  })
+  /** 导出 .md：系统保存对话框（默认文件名=标题），取消返回 null */
+  ipcMain.handle('wenbi:articleExport', async (_e, id: number) => {
+    const row = getDb().prepare('SELECT title, md_path FROM wenbi_articles WHERE id = ?').get(id) as
+      | { title: string; md_path: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    const content = mdRead(row.md_path)
+    const r = await dialog.showSaveDialog(win()!, {
+      defaultPath: `${row.title.replace(/[\\/:*?"<>|]/g, '_')}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (r.canceled || !r.filePath) return null
+    writeFileSync(r.filePath, content, 'utf-8')
+    return r.filePath
+  })
+  ipcMain.handle('wenbi:copilot', async (_e, id: number, action: string, selection?: string) =>
+    copilotWriting(id, action as 'draft' | 'continue' | 'polish' | 'rewrite', selection)
+  )
 
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>

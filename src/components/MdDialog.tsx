@@ -40,6 +40,17 @@ export interface MdDialogProps {
     /** 让 AI 追问（携带当前正文，非编辑态） */
     onAskAi: (content: string) => void
   }
+  /** 浮生记大事件标记（文笔坊 specs §2.2，仅浮生记传入）：编辑态头部显示开关，切换即时生效 */
+  eventToggle?: { checked: boolean; onChange: (v: boolean) => void }
+  /** 写作台 Copilot 协笔（文笔坊 specs §4，仅写作台传入）：编辑态工具行 + 建议预览卡 */
+  copilot?: {
+    request: (
+      action: 'draft' | 'continue' | 'polish' | 'rewrite',
+      ctx: { title: string; content: string; selection?: string }
+    ) => Promise<string>
+    /** 请求失败回调（渲染层区分 LLM_NOT_CONFIGURED 与普通错误） */
+    onError: (e: unknown) => void
+  }
   /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
   autoEdit?: boolean
   /** 右侧内嵌栏（致知己追问，优化建议区第13轮）：传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
@@ -47,7 +58,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, autoEdit, sidePanel } = props
+  const { open, title, subtitle, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, eventToggle, copilot, autoEdit, sidePanel } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -55,6 +66,48 @@ export default function MdDialog(props: MdDialogProps) {
   const [titleDraft, setTitleDraft] = useState(title)
   // 致知己：覆盖当前版本勾选（每次进入编辑态重置）
   const [overwrite, setOverwrite] = useState(false)
+  // 文笔坊 Copilot 协笔（specs §4）：textarea 选区跟踪 + 生成中状态 + 建议卡
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const selRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 })
+  const [copilotBusy, setCopilotBusy] = useState<'draft' | 'continue' | 'polish' | 'rewrite' | null>(null)
+  const [suggestion, setSuggestion] = useState<{
+    action: 'draft' | 'continue' | 'polish' | 'rewrite'
+    text: string
+    selStart: number
+    selEnd: number
+  } | null>(null)
+  const trackSel = (): void => {
+    const ta = taRef.current
+    if (ta) selRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
+  }
+  const hasSelection = (): boolean => selRef.current.end > selRef.current.start
+
+  const runCopilot = async (action: 'draft' | 'continue' | 'polish' | 'rewrite'): Promise<void> => {
+    if (!copilot || copilotBusy) return
+    const sel = draft.slice(selRef.current.start, selRef.current.end)
+    if ((action === 'polish' || action === 'rewrite') && !sel.trim()) return
+    setCopilotBusy(action)
+    try {
+      const text = await copilot.request(action, { title, content: draft, selection: sel || undefined })
+      setSuggestion({ action, text, selStart: selRef.current.start, selEnd: selRef.current.end })
+    } catch (e) {
+      copilot.onError(e)
+    } finally {
+      setCopilotBusy(null)
+    }
+  }
+
+  /** 采纳：润色/改写替换发起时选区；起稿/续写插入发起时光标处——只改编辑态草稿，落盘仍走「完成」保存 */
+  const adoptSuggestion = (): void => {
+    if (!suggestion) return
+    if (suggestion.action === 'polish' || suggestion.action === 'rewrite') {
+      setDraft(draft.slice(0, suggestion.selStart) + suggestion.text + draft.slice(suggestion.selEnd))
+    } else {
+      const pos = suggestion.selEnd
+      setDraft(draft.slice(0, pos) + suggestion.text + draft.slice(pos))
+    }
+    setSuggestion(null)
+  }
   const bodyRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   // autoEdit 仅在 open 的首次加载生效（版本切换换 filePath 不再触发）
@@ -241,6 +294,17 @@ export default function MdDialog(props: MdDialogProps) {
           )}
           {editing ? (
             <>
+              {eventToggle && (
+                <label className="ver-overwrite" title="大事件：浮生记顶部「大事件」小节置顶聚合">
+                  <input
+                    type="checkbox"
+                    checked={eventToggle.checked}
+                    onChange={(e) => eventToggle.onChange(e.target.checked)}
+                    style={{ accentColor: 'var(--color-primary)' }}
+                  />
+                  大事件
+                </label>
+              )}
               {versioned && (
                 <label className="ver-overwrite" title="勾选后保存时序号不变、日期更新为覆盖当日">
                   <input
@@ -301,22 +365,128 @@ export default function MdDialog(props: MdDialogProps) {
             {loading ? (
               <div>加载中…</div>
             ) : editing ? (
-              <textarea
-                className="editor"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') void saveAndExit()
-                }}
-                autoFocus
-                spellCheck={false}
-              />
+              <>
+                {copilot && (
+                  <div className="md-copilot-bar">
+                    <button
+                      className="btn btn-ghost"
+                      disabled={copilotBusy != null}
+                      onClick={() => void runCopilot('draft')}
+                      title="基于标题生成大纲或开头"
+                    >
+                      <span className="material-symbols-outlined">auto_awesome</span>
+                      AI 起稿
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      disabled={copilotBusy != null}
+                      onClick={() => void runCopilot('continue')}
+                      title="从光标处接着往下写"
+                    >
+                      <span className="material-symbols-outlined">arrow_forward</span>
+                      续写
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      disabled={copilotBusy != null || !hasSelection()}
+                      onClick={() => void runCopilot('polish')}
+                      title={hasSelection() ? '润色选中段落（保持原意）' : '先选中要润色的段落'}
+                    >
+                      <span className="material-symbols-outlined">brush</span>
+                      润色
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      disabled={copilotBusy != null || !hasSelection()}
+                      onClick={() => void runCopilot('rewrite')}
+                      title={hasSelection() ? '换一种写法重写选中段落' : '先选中要改写的段落'}
+                    >
+                      <span className="material-symbols-outlined">refresh</span>
+                      改写
+                    </button>
+                    {copilotBusy && <span className="module-sub">协笔生成中…</span>}
+                  </div>
+                )}
+                <textarea
+                  className="editor"
+                  ref={taRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onSelect={trackSel}
+                  onKeyUp={trackSel}
+                  onClick={trackSel}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') void saveAndExit()
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                />
+              </>
             ) : (
               <div className="md-view" ref={bodyRef} />
             )}
           </div>
           {sidePanel && <aside className="dialog-side">{sidePanel}</aside>}
         </div>
+        {/* Copilot 建议预览卡（文笔坊 specs §4.1）：对照 + 采纳/放弃/重新生成，采纳只改编辑态草稿不落盘 */}
+        {suggestion && editing && (
+          <div className="md-copilot-card">
+            <div className="md-copilot-card-head">
+              <span>
+                {suggestion.action === 'draft'
+                  ? 'AI 起稿'
+                  : suggestion.action === 'continue'
+                    ? '续写'
+                    : suggestion.action === 'polish'
+                      ? '润色建议'
+                      : '改写建议'}
+              </span>
+              <span className="module-sub">采纳后随「完成」一并保存</span>
+            </div>
+            <div className="md-copilot-card-body">
+              {(suggestion.action === 'polish' || suggestion.action === 'rewrite') && (
+                <>
+                  <div className="md-copilot-diff">
+                    <div className="module-sub">原文</div>
+                    <div className="md-view">{draft.slice(suggestion.selStart, suggestion.selEnd)}</div>
+                  </div>
+                  <div className="md-copilot-diff ai">
+                    <div className="module-sub">AI 版</div>
+                    <div
+                      className="md-view"
+                      ref={(el) => {
+                        if (el) el.innerHTML = renderMd(suggestion.text)
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+              {(suggestion.action === 'draft' || suggestion.action === 'continue') && (
+                <div
+                  className="md-view"
+                  ref={(el) => {
+                    if (el) el.innerHTML = renderMd(suggestion.text)
+                  }}
+                />
+              )}
+            </div>
+            <div className="md-copilot-card-foot">
+              <button
+                className="btn btn-ghost"
+                disabled={copilotBusy != null}
+                onClick={() => void runCopilot(suggestion.action)}
+              >
+                重新生成
+              </button>
+              <button className="btn" onClick={() => setSuggestion(null)}>
+                放弃
+              </button>
+              <button className="btn btn-primary" onClick={adoptSuggestion}>
+                采纳
+              </button>
+            </div>
+          </div>
+        )}
         {/* 生成审核三选（优化建议区）：加入=关闭并保留，丢弃/直接删除由调用方确认后执行 */}
         {review && !editing && (
           <div className="dialog-footer">

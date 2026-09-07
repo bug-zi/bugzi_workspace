@@ -52,6 +52,8 @@ const api = {
           | 'reasoning_soup'
           | 'reasoning_game'
           | 'drafts'
+          | 'wenbi_journal'
+          | 'wenbi_article'
         item_id: number
         payload: string
         created_at: string
@@ -143,6 +145,11 @@ const api = {
       inserted: number
       excerptInserted: number
       composedInserted: number
+      patternRejected: number
+      /** 命中已删除格言墓碑被剔除的条数（优化建议区第24轮） */
+      tombstoneRejected: number
+      /** 补足轮最终入库条数（优化建议区第24轮） */
+      supplemented: number
     }> => ipcRenderer.invoke('mottos:generate'),
     normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s),
     /** 未删除区内判重（v2.0 §7.4：规范化一致或包含关系） */
@@ -337,6 +344,46 @@ const api = {
     touch: (id: number): Promise<boolean> => ipcRenderer.invoke('draft:touch', id),
     /** 草稿入回收站（前端二次确认后调用） */
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'drafts', id)
+  },
+  wenbi: {
+    /** 浮生记条目列表（created_at 倒序；零 AI 板块） */
+    journalList: (): Promise<import('../src/shared/types').WenbiJournalRecord[]> =>
+      ipcRenderer.invoke('wenbi:journalList'),
+    /** 新建一条记录（返回整行，渲染层据 created_at 拼日期标题并 autoEdit） */
+    journalCreate: (): Promise<import('../src/shared/types').WenbiJournalRecord> =>
+      ipcRenderer.invoke('wenbi:journalCreate'),
+    /** 大事件标记切换 */
+    journalSetEvent: (id: number, isEvent: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:journalSetEvent', id, isEvent),
+    /** 记录入回收站（前端二次确认后调用） */
+    journalDiscard: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:journalDiscard', id),
+    /** 文章列表（区内按 sort） */
+    articleList: (): Promise<import('../src/shared/types').WenbiArticleRecord[]> =>
+      ipcRenderer.invoke('wenbi:articleList'),
+    /** 新建文章（返回 id；md 模板 `# 标题`） */
+    articleCreate: (zone: string, title: string): Promise<number> =>
+      ipcRenderer.invoke('wenbi:articleCreate', zone, title),
+    /** 改标题（不动 updated_at） */
+    articleRename: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:articleRename', id, title),
+    /** 拖拽/菜单移动（bump updated_at） */
+    articleMove: (id: number, zone: string, sort: number): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:articleMove', id, zone, sort),
+    /** 区内重排归一化（批量） */
+    articleReorder: (moves: { id: number; zone: string; sort: number }[]): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:articleReorder', moves),
+    /** 编辑保存后触碰（bump updated_at） */
+    articleTouch: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:articleTouch', id),
+    /** 文章入回收站（前端二次确认后调用） */
+    articleDiscard: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:articleDiscard', id),
+    /** 导出 .md（保存对话框；取消返回 null） */
+    articleExport: (id: number): Promise<string | null> => ipcRenderer.invoke('wenbi:articleExport', id),
+    /** Copilot 协笔：起稿/续写/润色/改写，返回建议文本（不写库）；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    copilot: (
+      id: number,
+      action: 'draft' | 'continue' | 'polish' | 'rewrite',
+      selection?: string
+    ): Promise<string> => ipcRenderer.invoke('wenbi:copilot', id, action, selection)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
