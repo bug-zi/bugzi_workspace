@@ -1,6 +1,8 @@
 # 白噪音 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/白噪音/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（六项决策与被否方案）见同目录 `2026-09-08-白噪音-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / Toast / 弹窗与主题色系、Material Symbols 用法）。**纯渲染层实现：主进程零改动**——无新 IPC、无 DB 迁移（复用 settings 表与 `window.api.settings.get/set` 既有通道）、无新 npm 依赖、CSP 零改动、不新增 AiChannel。
+> **260908 已实施**（typecheck/build 通过，记录见 `docs/log/260908.md`）。实施与 specs 一致，一处实现细化：引擎订阅的 `getSnapshot` 返回版本号（任何变化自增）而非仅播放态——UI（左栏控件高亮/页面滑杆/播放按钮）统一由版本号驱动重渲染、全部从引擎单例取值，避免 UI 侧重复状态。
+> **260908 实施后修订（开发者反馈）**：左栏底部控件由「双区（图标播放/暂停 + 文字进页）」改为**整块单击进混音器页**——原双区在实际使用中不可辨识，整块行为与左栏其余模块项一致；播放态仅作图标主题色高亮提示，快捷播放/暂停入口收敛到混音器页内。§5.2 已按此改写。
 
 ## 0. 命名与常量
 
@@ -122,20 +124,23 @@ export const SCENES: NoiseScene[]   // 首版仅 rain；后续新场景 = 追加
 - keep-alive 区之外、main-area 内条件渲染 `{module === 'noise' && <NoisePage />}`（不 keep-alive）。
 - 激活/失活自定义事件携带 `'noise'` 时无模块认领（listener 均比对自身 id），无害；从真实模块进白噪音页，该模块正常收到失活事件（海龟汤计时等语义保持）。
 
-### 5.2 左栏底部双区控件（替换现主题按钮位）
+### 5.2 左栏底部常驻控件（替换现主题按钮位；260908 修订版）
 
 ```tsx
-<div className="nav-item noise-control">
-  <button className={`noise-toggle${playing ? ' playing' : ''}`} onClick={() => noiseEngine.toggle()}
-          title={playing ? '暂停白噪音' : '播放白噪音'}>
-    <span className="material-symbols-outlined">graphic_eq</span>
-  </button>
-  <button className="noise-open" onClick={() => activateModule('noise')} title="打开白噪音混音器">白噪音</button>
-</div>
+<button
+  className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
+  onClick={() => activateModule('noise')}
+  title={noisePlaying ? '白噪音播放中 · 点击打开混音器' : '打开白噪音混音器'}
+>
+  <span className={`material-symbols-outlined${noisePlaying ? ' noise-playing' : ''}`}>graphic_eq</span>
+  <span className="nav-label">白噪音</span>
+</button>
 ```
 
-- `playing` 经 `useSyncExternalStore(noiseEngine.subscribe, noiseEngine.getSnapshot)`。
-- App.css：`.noise-control` 布局对齐既有 nav-item（图标 + 文字纵向外壳，内部左右双区）；`.playing` 图标主题色高亮；hover 用既有 `--color-primary-soft`。
+- 整块单击 = 切到主栏混音器页（与左栏其余模块项行为一致）；**不承担播放/暂停**，快捷播放/暂停只在混音器页内。
+- 播放态：图标加 `noise-playing` 类主题色高亮，仅作状态提示；title 随播放态切换文案。
+- `noisePlaying` 经 `useSyncExternalStore(noiseEngine.subscribe, noiseEngine.getSnapshot)` 后从引擎读取。
+- App.css：`.noise-control .material-symbols-outlined.noise-playing { color: var(--color-primary) }`；其余样式全部复用 nav-item 体系。
 
 ### 5.3 主题按钮迁移右栏底部
 

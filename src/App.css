@@ -1140,3 +1140,35 @@
   padding: 2px 12px;
   font-size: 0.85em;
 }
+
+/* ===== 白噪音：左栏底部常驻控件（specs §5.2 修订版，替换原主题按钮位） ===== */
+/* 整块 = 普通 nav-item（单击进混音器页）；播放中图标主题色高亮作状态提示 */
+.noise-control .material-symbols-outlined.noise-playing {
+  color: var(--color-primary);
+}
+
+/* ===== 白噪音：右栏列容器 + 底部主题按钮（specs §5.3，自左栏底部迁来） ===== */
+.right-col {
+  display: flex;
+  flex-direction: column;
+}
+.right-col > .ai-sidebar,
+.right-col > .draft-sidebar {
+  flex: 1;
+  min-height: 0;
+}
+.right-col-theme {
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.right-col-theme:hover {
+  background: var(--color-primary-soft);
+}

@@ -39,7 +39,7 @@
 - `services.ts`：会话管理（list/getActive/setActive/create/rename/delete/listMessages/append/edit/clear/compact）、`appendSystemToChannelSession`（系统消息自动建会话）、`MODULE_LABELS`（消息来源模块中文名）。
 - **频道人设** `CHANNEL_PERSONAS`（五频道，与渲染层 CHANNELS 同步）：身份声明（AI_NAME 单一事实源）+ 频道行拼合为 system prompt；频道人设全文见代码，概要见 design.md §2。
 - **画像记忆化**：`profileIndex()`（索引：类别 + 24 字摘要）入边栏对话 system prompt；`PROFILE_LOOKUP:关键词` 协议——渲染层/主进程识别 `<<<…>>>` 标记（历史摘要压缩时以 `/<<<[^>]*>>>/g` 剥离）检索画像补注入再答一轮；`PROFILE_SUGGEST` 提议入档协议；生成类功能用 `profileDigest()`（每条 60 字）。
-- `llm.ts`：OpenAI 兼容 chat/completions；`normalizeChatUrl` 自动拼 `/v1/chat/completions`；429 尊重 Retry-After 否则 2s/4s/8s 退避重试 3 次；`LlmNotConfiguredError` → 渲染层 GoConfigDialog；`listUpstreamModels`（个人中心拉模型列表）、`testLlmConnection`。
+- `llm.ts`：OpenAI 兼容 chat/completions；`normalizeChatUrl` 自动拼 `/v1/chat/completions`；429 尊重 Retry-After 否则 2s/4s/8s 退避重试 3 次；`LlmNotConfiguredError` → 渲染层 GoConfigDialog；`listUpstreamModels`（个人档拉模型列表）、`testLlmConnection`。
 
 ## 5. 渲染层组件
 
@@ -54,7 +54,7 @@
 | `currentModule` | 模块感知（moduleLabel 显示来源） |
 | `pending: { text, channel, auto } \| null` | 模块动作直发（openAiWith）；auto 时切频道后自动发送 |
 | `onPendingConsumed` / `messagesVersion` | pending 消费 / 消息版本 bump（系统消息触发展开） |
-| `onNavigateToProfile` | 「去配置」直达个人中心 |
+| `onNavigateToProfile` | 「去配置」直达个人档 |
 
 - 内部常量：`CHANNELS`（五频道 id/label/icon）、`ACTIVE_SESSION_KEYS`（与主进程同步）、`ROLE_LABEL`（assistant 显示 AI_NAME）。
 - 行为要点：乐观上屏（临时负 id，完成后库记录替换）、消息 MdView 渲染（用户/系统纯文本）、输入框高度自适应（超视口 30% 内滚）、/clear /compact 命令、会话浮层（单击切换/hover 重命名·删除）、删消息保 scrollTop、左缘 7px 拖宽 280–560px。
@@ -63,7 +63,7 @@
 
 - 模块直发：`App.openAiWith(prefill, {auto})` → `CHANNEL_BY_MODULE` 映射频道 → pending → AiSidebar 发送（格言「AI 解读」/万象「问 AI」等）。
 - 致知己内嵌追问栏（MdDialog sidePanel 扩展位）：与全局边栏同频道同数据、同一激活会话。
-- 辩真阁：验证过程 `ai:pushSystem` → 激活会话 + `ai:message` 事件。
+- 辩真（万象库「辩真」板块，260908 并入）：验证过程 `ai:pushSystem` → 激活会话 + `ai:message` 事件；频道经 openAiWith 的 channel 覆盖直连。
 
 ## 7. 验收清单（现状核对）
 

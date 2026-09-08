@@ -24,8 +24,8 @@ export default function GoConfigDialog(props: GoConfigDialogProps) {
   if (!open) return null
   const text =
     kind === 'llm'
-      ? '请先在个人中心配置 LLM，以启用 AI 功能。'
-      : '请先在个人中心配置并启用 MCP，以启用联网搜索。'
+      ? '请先在个人档配置 LLM，以启用 AI 功能。'
+      : '请先在个人档配置并启用 MCP，以启用联网搜索。'
   return (
     <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="dialog" style={{ width: 400 }}>

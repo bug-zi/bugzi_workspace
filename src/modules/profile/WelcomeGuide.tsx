@@ -91,7 +91,7 @@ export default function WelcomeGuide(props: WelcomeGuideProps) {
             <div className="welcome-step">
               <span className="material-symbols-outlined" style={{ fontSize: 44 }}>smart_toy</span>
               <div style={{ lineHeight: 1.8 }}>
-                建议先去个人中心配置 LLM，让 {AI_NAME} 上线陪你开工
+                建议先去个人档配置 LLM，让 {AI_NAME} 上线陪你开工
                 <br />
                 <span className="module-sub">（格言生成、知识卡片、AI 对话、辩真验证）</span>
               </div>

@@ -1,4 +1,4 @@
-/* ===== 书架（书架 specs §3）：封面网格 + 阅读视图 ===== */
+/* ===== 书架（书架 specs §3 + 优化第1轮）：封面网格 + 阅读视图 ===== */
 
 /* 书架网格 */
 .bk-grid {
@@ -91,6 +91,10 @@
   flex-direction: column;
   gap: 8px;
 }
+/* 优化第1轮 §8.1：epub 阅读加宽（pdf 维持 980px） */
+.bk-reader-page.bk-reader-wide {
+  max-width: 1200px;
+}
 .bk-reader-bar {
   display: flex;
   align-items: center;
@@ -111,9 +115,25 @@
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
-.bk-reader-body {
+/* 阅读条右侧紧凑按钮（目录 / 模式） */
+.bk-bar-btn {
+  padding: 5px 10px;
+  gap: 4px;
+}
+.bk-bar-btn.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+/* 阅读主区行：侧栏 + 正文（优化第1轮 §8.4） */
+.bk-reader-flex {
   flex: 1;
   min-height: 0;
+  display: flex;
+  gap: 10px;
+}
+.bk-reader-body {
+  flex: 1;
+  min-width: 0;
   position: relative;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -121,16 +141,27 @@
   overflow: hidden;
 }
 
-/* epub 容器（scrolled 流式，内部滚动） */
+/* epub 容器（scrolled 流式，内部滚动；左右留白防贴边） */
 .bk-epub-host {
   position: absolute;
   inset: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  padding: 12px 36px 24px;
+}
+/* scrolled 流式下 epub.js 给内层 .epub-container 设行内 overflow:auto（含 X 轴）——
+   切模式后首视图宽度未收敛时会出现横向可拖（260909 开发者反馈，跳章即消失）；
+   X 轴一律裁掉（行内样式需 !important 覆盖；竖向滚动不受影响，翻页模式本就 overflow hidden） */
+.bk-epub-host .epub-container {
+  overflow-x: hidden !important;
+}
+/* 翻页模式：分页由 epub.js 接管，宿主禁滚动（防分页视图数像素溢出被拖动） */
+.bk-epub-host.bk-page-mode {
+  overflow: hidden;
 }
 
-/* pdf 连续滚动 */
-.bk-pdf-scroll {
+/* pdf 容器：滚动 = 连续滚动；翻页 = 单页居中 */
+.bk-pdf-host {
   position: absolute;
   inset: 0;
   overflow-y: auto;
@@ -140,6 +171,10 @@
   gap: 10px;
   padding: 10px 0;
 }
+.bk-pdf-host.bk-pdf-page-mode {
+  overflow: hidden;
+  justify-content: center;
+}
 .pdf-page-wrap {
   width: min(92%, 880px);
   flex-shrink: 0;
@@ -147,6 +182,21 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
 }
 .pdf-page-wrap canvas {
+  display: block;
+  width: 100%;
+}
+/* 单页视图（翻页模式）：当前页居中 */
+.bk-pdf-single {
+  width: min(94%, 900px);
+  flex-shrink: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+.bk-pdf-single canvas {
   display: block;
   width: 100%;
 }
@@ -174,4 +224,214 @@
 }
 .bk-nav-down {
   bottom: 12px;
+}
+
+/* ===== 阅读侧栏（优化第1轮 §8.4/§8.5）：目录 | 笔记 ===== */
+.bk-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.bk-sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 0;
+  flex-shrink: 0;
+}
+.bk-sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.bk-sidebar-tab {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.88em;
+}
+.bk-sidebar-tab.active {
+  color: var(--color-text);
+  background: var(--color-surface-strong);
+  border-color: var(--color-border);
+}
+.bk-sidebar-close {
+  padding: 3px;
+}
+.bk-sidebar-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bk-sidebar-empty {
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  text-align: center;
+  padding: 24px 12px;
+  line-height: 1.7;
+}
+/* 目录项（递归缩进） */
+.bk-toc-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+.bk-toc-item:hover {
+  background: var(--color-primary-soft);
+}
+.bk-toc-item.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  font-weight: 500;
+}
+.bk-toc-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.bk-toc-page {
+  flex-shrink: 0;
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 笔记项 */
+.bk-note-item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bk-note-item:hover {
+  border-color: var(--color-primary);
+}
+.bk-note-quote {
+  font-size: 0.82em;
+  line-height: 1.55;
+  color: var(--color-text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.bk-note-text {
+  font-size: 0.82em;
+  line-height: 1.55;
+  color: var(--color-primary-deep);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.bk-note-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72em;
+  color: var(--color-text-secondary);
+}
+.bk-note-del {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+}
+.bk-note-del:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+/* ===== 划词/标注气泡（优化第1轮 §8.5，epub 专用；挂 host 内随滚动） ===== */
+.bk-sel-bubble {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  width: max-content;
+}
+.bk-sel-bubble > button {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 0.85em;
+}
+.bk-sel-bubble > button:hover {
+  background: var(--color-primary-soft);
+}
+.bk-sel-row {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.bk-sel-row button {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: 0.85em;
+}
+.bk-sel-row button:hover {
+  background: var(--color-primary-soft);
+}
+.bk-sel-input {
+  width: 220px;
+  min-height: 64px;
+  resize: vertical;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85em;
+  font-family: inherit;
+  line-height: 1.5;
+}
+/* 点击已高亮文字的气泡：批注内容展示 */
+.bk-mark-note {
+  max-width: 260px;
+  font-size: 0.85em;
+  line-height: 1.55;
+  color: var(--color-primary-deep);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 4px 6px;
 }

@@ -6,24 +6,24 @@ import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 // 页签 key：单一来源用 source 值；「推理角」为组页签（reasoning_soup 汤 + reasoning_game
-// 对局记录混排一页，specs §5）
+// 对局记录混排一页，specs §5）。260908 辩真阁并入万象库：verify 来源聚合进「万象库」块，页签九块变八块。
 const TABS: { key: string; label: string }[] = [
   { key: 'mottos', label: '格言库' },
   { key: 'wiki', label: '万象库' },
   { key: 'inspirations', label: '灵感泉' },
-  { key: 'verify', label: '辩真阁' },
   { key: 'zhijiji', label: '致知己' },
   { key: 'reasoning', label: '推理角' },
   { key: 'drafts', label: '草稿本' },
   { key: 'wenbi', label: '文笔坊' },
-  { key: 'ledger', label: '账本' }
+  { key: 'ledger', label: '记账本' }
 ]
 
-/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；账本三来源同组） */
+/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；记账本三来源同组；辩真并入万象库块） */
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
   if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
+  if (source === 'verify') return 'wiki'
   return source
 }
 
@@ -37,7 +37,7 @@ function backToOf(source: RecycleRow['source']): string {
     case 'inspirations':
       return '灵感泉草稿区'
     case 'verify':
-      return '历史记录列表'
+      return '万象库·辩真历史记录'
     case 'zhijiji':
       return '致知己主列表'
     case 'reasoning_soup':
@@ -49,23 +49,24 @@ function backToOf(source: RecycleRow['source']): string {
     case 'wenbi_article':
       return '写作台构思区'
     case 'ledger_tx':
-      return '账本月度列表'
+      return '记账本月度列表'
     case 'ledger_account':
-      return '账本账户列表'
+      return '记账本账户列表'
     case 'ledger_category':
-      return '账本分类列表'
+      return '记账本分类列表'
     default:
       return '推理角对局记录列表'
   }
 }
 
-/** 来源板块小字（文笔坊页签内区分两板块；账本页签内区分流水/账户/分类） */
+/** 来源板块小字（文笔坊页签内区分两板块；记账本页签内区分流水/账户/分类；辩真并入万象库块后区分词条/记录） */
 function srcTag(source: RecycleRow['source']): string {
   if (source === 'wenbi_journal') return '浮生记 · '
   if (source === 'wenbi_article') return '文章 · '
   if (source === 'ledger_tx') return '流水 · '
   if (source === 'ledger_account') return '账户 · '
   if (source === 'ledger_category') return '分类 · '
+  if (source === 'verify') return '辩真 · '
   return ''
 }
 

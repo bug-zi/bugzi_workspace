@@ -59,7 +59,9 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
         let body = ''
         try {
           const raw = await window.api.md.read(it.md_path)
-          body = raw.replace(/\s+/g, ' ').trim().slice(0, 120)
+          // 第28轮：预览取首段（首个空行前）——AI 条=完整引子句、手动条=正文第一行，不再混入 ## 标记符
+          const firstPara = raw.trim().split(/\n\s*\n/)[0] ?? ''
+          body = firstPara.replace(/\s+/g, ' ').trim().slice(0, 120)
         } catch {
           /* 无正文则不显示预览 */
         }

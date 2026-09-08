@@ -430,7 +430,7 @@ export default function ProfileModule() {
     <div className="profile-page">
       <div className="module-header">
         <span className="material-symbols-outlined">person</span>
-        <span className="module-title">个人中心</span>
+        <span className="module-title">个人档</span>
       </div>
 
       {/* 个人信息 */}

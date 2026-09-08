@@ -266,3 +266,22 @@
 :root[data-theme='dark'] .feed-probe-line.ok {
   color: #fff;
 }
+
+/* 加载更早（收件箱/已归档 30 天窗口外触达——优化建议区第28轮） */
+.feed-load-more {
+  margin: 6px auto 14px;
+  padding: 8px 18px;
+  border-radius: 16px;
+  border: 1px dashed var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.feed-load-more:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+:root[data-theme='dark'] .feed-load-more:hover {
+  color: #fff;
+}

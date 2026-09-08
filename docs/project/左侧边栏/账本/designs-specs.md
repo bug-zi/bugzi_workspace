@@ -1,10 +1,11 @@
-# 账本 designs-specs.md
+# 记账本 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/账本/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（八项决策与被否方案）见同目录 `archive/2026-09-08-账本-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / Toast / ActionMenu 与主题色系、Material Symbols 用法）、回收站既有机制（recycle.ts，本 spec §5 扩展）。**纯本地零 AI**：不依赖 LLM/MCP/jobs.ts、不新增 AiChannel、CSP 零改动、无新 npm 依赖。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）；**版本号落定 v21**（无并行挤占），listTx 增补「未分类」筛选哨兵 -1（占比条未分类桶下钻，categoryId NULL 与全部的 null 需区分）。
+> **260908 显示名更名（开发者指令）**：记账本 → **记账本**（ModuleId `ledger`、目录名、DB 表名均不变，仅 UI 文案含回收站块名与恢复去向文案）。
 
 ## 0. 命名与常量
 
-- `ModuleId`（src/shared/types.ts:4）增 `'ledger'`；App.tsx `MODULES` 注册 `{ id: 'ledger', label: '账本', icon: 'account_balance_wallet' }`，位置在信息源与回收站之间（wenbi → bookshelf → feed → **ledger** → recycle → profile）。
+- `ModuleId`（src/shared/types.ts:4）增 `'ledger'`；App.tsx `MODULES` 注册 `{ id: 'ledger', label: '记账本', icon: 'account_balance_wallet' }`，位置（260908 重排后）在推理角与白噪音之间（… → reasoning → **ledger** → noise → recycle → profile）。
 - **不新增 AiChannel**（零 AI 模块）；`CHANNEL_BY_MODULE` 不列 → 默认 'assistant'。
 - 金额上限：`MAX_AMOUNT_CENTS = 9_999_999_999`（约 1 亿元）；月份参数格式 `'YYYY-MM'`；流水日期 `'YYYY-MM-DD'`。
 - 元↔分换算：输入 `Math.round(parseFloat(x) * 100)`，展示 `(cents / 100).toFixed(2)`；合法性：`/^\d+(\.\d{1,2})?$/` 且 > 0 且 ≤ 上限。
@@ -75,7 +76,7 @@ CREATE INDEX idx_ledger_tx_account ON ledger_tx(account_id);
 ### 3.1 LedgerModule.tsx（单主视图）
 
 - 状态：`month`（默认当月）、`filterCategoryId: number | null`、账户/统计/流水三组数据；保存/删除后全部重载（实时聚合无需局部对账）。
-- `useModuleActivated('ledger', load)`：切回模块刷新（回收站恢复账本条目后回来即见）。
+- `useModuleActivated('ledger', load)`：切回模块刷新（回收站恢复记账本条目后回来即见）。
 - 卡片区：总资产卡（Σ 余额，不随月份）+ `< 2026年9月 >` 切换 + 收入/支出卡（随月份）；月份可无限前翻。
 - 占比条：`breakdown` 渲染（分类名 + 占比条 div 宽度百分比 + 金额 + 百分比）；条与文字用主题色 CSS 变量（浅樱粉/深宝蓝），**禁彩亮色**；点击行 toggle `filterCategoryId`（选中态主题色描边），列表随筛；再点或点「全部」取消。
 - 流水列表：`listTx` 结果按日分组；组头 `MM月DD日` + 今天/昨天相对称呼 + 当日支出小计；行 = `分类 · 账户 · 备注` + 金额（支出 `-¥36.00`，收入 `+¥xxx`；颜色仅主题文字色）；行尾 `⋯` 复用 `ActionMenu`（编辑/删除）。
@@ -124,9 +125,9 @@ CREATE INDEX idx_ledger_tx_account ON ledger_tx(account_id);
   - `ledger_tx` / `ledger_category` → 默认路径删行。
   - `ledger_account` → 删账户行 + `DELETE FROM ledger_tx WHERE account_id = ? AND id NOT IN (SELECT item_id FROM recycle_bin WHERE source = 'ledger_tx')`（在站流水留给自己的回收流程处置）。
 - RecycleModule.tsx：
-  - `TABS` 增 `{ key: 'ledger', label: '账本' }`（文笔坊之后）。
+  - `TABS` 增 `{ key: 'ledger', label: '记账本' }`（文笔坊之后）。
   - `tabOf`：三 source → `'ledger'`。
-  - `backToOf`：`ledger_tx` → `'账本月度列表'`、`ledger_account` → `'账本账户列表'`、`ledger_category` → `'账本分类列表'`。
+  - `backToOf`：`ledger_tx` → `'记账本月度列表'`、`ledger_account` → `'记账本账户列表'`、`ledger_category` → `'记账本分类列表'`。
   - `srcTag`：`'流水 · '` / `'账户 · '` / `'分类 · '`。
   - `summaryOf`：流水 `` `${date} ${category_name ?? '未分类'} ${type==='expense' ? '-' : '+'}¥${(amount_cents/100).toFixed(2)}` ``、账户 `` `账户：${name}` ``、分类 `` `${kind==='expense' ? '支出' : '收入'}分类：${name}` ``。
   - **快照冗余**：流水入站前的行快照需带显示名——`ledger:tx:remove` 在 discard 前用 `SELECT t.*, c.name AS category_name, a.name AS account_name`（LEFT JOIN 口径同 §2.3）取整行再交 `discardToRecycle` 入 payload，summaryOf 从 payload 直取 `category_name ?? '未分类'`；恢复/删除只读写已知列，不受冗余列影响。
@@ -134,7 +135,7 @@ CREATE INDEX idx_ledger_tx_account ON ledger_tx(account_id);
 
 ## 6. 接线
 
-- App.tsx：`MODULES` 增 ledger（feed → ledger → recycle）；keep-alive 区 `{m.id === 'ledger' && <LedgerModule />}`（切页仅隐藏不卸载）；**不传 `onOpenAi`**（零边栏联动）。
+- App.tsx：`MODULES` 增 ledger（260908 重排后为 reasoning → ledger → 白噪音控件 → recycle）；keep-alive 区 `{m.id === 'ledger' && <LedgerModule />}`（切页仅隐藏不卸载）；**不传 `onOpenAi`**（零边栏联动）。
 - `src/modules/ledger/`：`LedgerModule.tsx` + `TxDialog.tsx` + `ManageDialog.tsx` + `ledger.css`。
 
 ## 7. 明确不做（design.md 背书）
@@ -150,10 +151,10 @@ CREATE INDEX idx_ledger_tx_account ON ledger_tx(account_id);
 - [ ] 期初余额：新建/编辑账户设置后该账户余额与总资产立即体现
 - [ ] 占比条点击分类 → 流水列表筛选；取消恢复
 - [ ] 编辑流水预填正确；弹窗内删除走二次确认
-- [ ] 删流水 → 回收站账本块 → 恢复原样回来（原日期/账户/分类）
+- [ ] 删流水 → 回收站记账本块 → 恢复原样回来（原日期/账户/分类）
 - [ ] 删带流水账户：确认文案含流水数；站内仅账户一条；恢复级联拉回流水；彻底删级联清且不误删在站流水（「先删流水后删账户」双场景）
 - [ ] 删在用分类：流水变「未分类」；恢复不回挂；分类彻底删后流水仍显「未分类」（LEFT JOIN 防悬空）
-- [ ] 回收站九块：账本页签三 source 混排、恢复去向文案、剩余时间显示
+- [ ] 回收站九块：记账本页签三 source 混排、恢复去向文案、剩余时间显示
 - [ ] 名称查重（账户全局、分类同 kind）Toast 拒绝
 - [ ] 金额精度：0.1 + 0.2 累计显示 0.30
 - [ ] 双主题下卡片/占比条/宫格/弹窗外观一致；`npm run typecheck` / `npm run build` 通过

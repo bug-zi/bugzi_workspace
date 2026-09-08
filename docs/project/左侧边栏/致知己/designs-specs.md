@@ -1,10 +1,10 @@
 # 致知己 designs-specs.md
 
-> 本文档由 AI 基于 `docs/project/左侧边栏/致知己/design.md`（260905 开发者审核通过）与《总需求文档.md》生成，是开发的直接依据。覆盖三块：①致知己模块本体 ②个人中心「我的画像」 ③右侧 AI 边栏「频道制」改造。依赖：样式/designs-specs.md 的 AI 边栏与 MdDialog、回收站/designs-specs.md 的接入约定。
+> 本文档由 AI 基于 `docs/project/左侧边栏/致知己/design.md`（260905 开发者审核通过）与《总需求文档.md》生成，是开发的直接依据。覆盖三块：①致知己模块本体 ②个人档「我的画像」 ③右侧 AI 边栏「频道制」改造。依赖：样式/designs-specs.md 的 AI 边栏与 MdDialog、回收站/designs-specs.md 的接入约定。
 
 ## 0. 命名与常量
 
-- 模块 id：`zhijiji`；侧边栏名「致知己」；图标 Material Symbols `self_improvement`；位置：辩真阁与回收站之间。
+- 模块 id：`zhijiji`；侧边栏名「致知己」；图标 Material Symbols `self_improvement`；位置（260908 重排后）：文笔坊与灵感泉之间。
 - md 目录：`md/zhijiji/`，版本文件命名 `md/zhijiji/{questionId}-v{seq}.md`（文件名稳定；版本日期存 DB，覆盖时只更新 DB 日期不重命名文件）。
 - 版本标识：`v{seq}-{YYMMDD}`，如 `v3-260905`。
 - AI 频道 id：`assistant`（助手）｜`wiki`（万象·问答）｜`zhijiji`（致知己·追问）｜`verify`（辩真·核查）。
@@ -87,7 +87,7 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 
 **删除与回收站：**
 
-- 删除问题 = 二次确认 → `item:discard('zhijiji_questions', id)` → 回收站「致知己」板块（第五块，页签顺序：格言库/万象库/灵感泉/辩真阁/致知己）；payload 摘要 = 问题标题。
+- 删除问题 = 二次确认 → `item:discard('zhijiji_questions', id)` → 回收站「致知己」板块（260908 八块口径：格言库/万象库〔含辩真〕/灵感泉/致知己/推理角/草稿本/文笔坊/记账本）；payload 摘要 = 问题标题。
 - 恢复：清 `deleted_at` 回主列表（全部版本 md 原样保留——照格言笔记封存模式）；3 天自动彻底删除照旧。
 - 彻底删除：删问题行 + 全部版本行 + 全部版本 md 文件。
 
@@ -101,7 +101,7 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 - `renameQuestion(id, title)` → boolean
 - `discard(id)` → item:discard 路由
 
-## 3. 个人中心「我的画像」
+## 3. 个人档「我的画像」
 
 - 位置：个人信息与 App 设置之间的新 zone「我的画像」（header + 条数徽标 + 「+ 新增」）。
 - 条目行：类别（badge）+ 内容 + 编辑/删除 icon-btn；空态提示文案。
@@ -165,5 +165,5 @@ ALTER TABLE ai_sessions ADD COLUMN channel TEXT NOT NULL DEFAULT 'assistant';
 - [X]  删除→回收站第五块；恢复回主列表（版本齐全）；彻底删除含全部版本 md；3 天自动清理
 - [ ]  画像：增删改查、类别 datalist、AI 来源徽标；对话走「索引+按需检索」、生成类注入 60 字摘要、辩真不注入（配画像后可感知）
 - [ ]  频道：四频道切换、各频道独立会话历史与激活；存量会话归助手频道；万象问AI/辩真验证自动切对应频道；辩真过程消息进核查频道
-- [ ]  画像建议卡片：助手消息识别标记→卡片→加入/忽略均剥除标记；加入后个人中心可见（AI 徽标）
+- [ ]  画像建议卡片：助手消息识别标记→卡片→加入/忽略均剥除标记；加入后个人档可见（AI 徽标）
 - [ ]  typecheck 双配置通过

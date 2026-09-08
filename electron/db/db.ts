@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
 import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { WALL_BANK_SEED, WALL_BANK_SEED_V22 } from './wallBankSeed'
+import { WALL_BANK_SEED_V22 } from './wallBankSeed'
 
 let db: DatabaseSync | null = null
 
@@ -416,8 +416,9 @@ function migrate(): void {
   if (version < 13) {
     // v13：思维墙洞察题重做（specs v1.2）——① wall_puzzles 增 standard_reasoning
     // （出题时的标准论证，判答讲解与详情 md 共用）；② 精选题库 wall_bank（双层题源
-    // 第二层：人工策展存量难题，AI 只判答不出题，status todo→solved/failed 终态），
-    // 迁移时插入首批评选 10 题（wallBankSeed.ts，均已人工验证）。
+    // 第二层：人工策展存量难题，AI 只判答不出题，status todo→solved/failed 终态）。
+    // （v1.6 题型换血后种子数组已删：此处只建表不插种子，现行种子走 v22 的
+    // WALL_BANK_SEED_V22；v13 批次旧题由 v23 迁移删除。）
     d.exec(`
       ALTER TABLE wall_puzzles ADD COLUMN standard_reasoning TEXT;
 
@@ -437,13 +438,6 @@ function migrate(): void {
         updated_at TEXT NOT NULL
       );
     `)
-    const now13 = new Date().toISOString()
-    const insBank = d.prepare(
-      'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-    for (const b of WALL_BANK_SEED) {
-      insBank.run(b.title, b.tag, b.difficulty, b.puzzle, b.answer, b.solution, b.source, 'todo', now13, now13)
-    }
     d.exec('PRAGMA user_version = 13')
   }
 
@@ -641,8 +635,7 @@ function migrate(): void {
 
   if (version < 22) {
     // v22：思维墙题型换血（v1.6）——精选题库追加 8 道思维游戏题
-    // （4 道经开发者例题校准 + 4 道待人工验证，source 标「AI 起草」），
-    // 只追加不动旧；WALL_BANK_SEED 保持 v13 原样防全新用户重复插入。
+    // （4 道经开发者例题校准 + 4 道待人工验证，source 标「AI 起草」），只追加不动旧。
     // （v1.3 规划的 wall_pool 题池未实施，无池存量旧题需清理——
     // 每日一题/练习场均现场两阶段生成，换血后自动全走新 prompt。）
     const now22 = new Date().toISOString()
@@ -653,6 +646,50 @@ function migrate(): void {
       insBank22.run(b.title, b.tag, b.difficulty, b.puzzle, b.answer, b.solution, b.source, 'todo', now22, now22)
     }
     d.exec('PRAGMA user_version = 22')
+  }
+
+  if (version < 23) {
+    // v23：移除 v13 批次的 10 道数学种子题（开发者指令——题型换血后旧题不再保留，
+    // 含已作答/已揭示的；全新用户经改造后的 v13 已不插种子，此迁移对其为空操作）。
+    // 按标题白名单精确删除防误删；已生成的题解 md（md/wall/bank/{id}.md）连带清理。
+    const retiredTitles = [
+      '蓝眼睛的岛民',
+      '和积问题',
+      '100 囚徒与 100 个抽屉',
+      '海盗分金',
+      '千桶毒酒',
+      '2017 张卡片',
+      '全装错的信',
+      '约瑟夫环',
+      '37% 法则',
+      '分赌本问题'
+    ]
+    const placeholders23 = retiredTitles.map(() => '?').join(', ')
+    const retiredRows = d
+      .prepare(`SELECT id, md_path FROM wall_bank WHERE title IN (${placeholders23})`)
+      .all(...retiredTitles) as { id: number; md_path: string | null }[]
+    for (const r of retiredRows) {
+      if (r.md_path) {
+        const abs = join(userDataDir(), r.md_path)
+        if (existsSync(abs)) unlinkSync(abs)
+      }
+    }
+    d.prepare(`DELETE FROM wall_bank WHERE title IN (${placeholders23})`).run(...retiredTitles)
+    d.exec('PRAGMA user_version = 23')
+  }
+
+  if (version < 24) {
+    // v24：书架优化第1轮 §8.5——划词笔记（高光/批注，CFI 区间定位；仅 epub）。
+    // 删书级联清理由 BookService.deleteBook 负责（此处不建 FK 约束，与全库惯例一致）。
+    d.exec(`CREATE TABLE book_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      cfi_range TEXT NOT NULL,
+      quote TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('PRAGMA user_version = 24')
   }
 }
 

@@ -1,6 +1,7 @@
 # 万象库 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/万象库/design.md` 与《总需求文档.md》第 1、5、6、8 条生成，是开发的直接依据。依赖：样式/designs-specs.md 的 MdDialog 与 AI 边栏、回收站/designs-specs.md 的接入约定。
+> **260908 辩真阁并入（开发者指令）**：万象库改双板块——顶部「百科 | 辩真」tab（recycle-tabs 样式，推理角同款 keep-alive 隐藏切换），百科 = 本 specs 原有全部内容，辩真 = 原辩真阁面板整体迁入（`src/modules/wiki/VerifyPanel.tsx`，数据层 verify_records 表/IPC/md/回收站 source 零改动）。`WikiModuleProps.onOpenAi` 签名放宽为 `(prefill?, opts?: { auto?; channel? })`，辩真板块经 App 层 `openAiWith` 的 channel 覆盖直连「辩真·核查」频道；`ModuleId` 移除 `'verify'`。
 
 ## 1. 数据表
 

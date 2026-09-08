@@ -1,6 +1,6 @@
 // 信息源（信息源 specs §3）：源列表 + 文章列表三段式 + 阅读视图（主栏内切换）
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ArticleSummary, FeedRecord } from '../../shared/types'
+import type { ArticleSummary, FeedRecord, FeedView } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ArticleView, { relTime } from './ArticleView'
 import { useToast } from '../../components/Toast'
@@ -14,6 +14,10 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const [feeds, setFeeds] = useState<FeedWithUnread[]>([])
   const [activeFeed, setActiveFeed] = useState<number | null>(null)
   const [articles, setArticles] = useState<ArticleSummary[]>([])
+  // 收件箱模式（优化建议区第28轮）：unread=只显未读读完即消失；archive=已读按时间翻；30 天窗口，「加载更早」前移
+  const [view, setView] = useState<FeedView>('unread')
+  const [sinceDays, setSinceDays] = useState(30)
+  const [remaining, setRemaining] = useState(0)
   const [fetching, setFetching] = useState(false)
   const [readingId, setReadingId] = useState<number | null>(null)
   const [readingArticle, setReadingArticle] = useState<Awaited<ReturnType<typeof window.api.articles.open>> | null>(null)
@@ -27,10 +31,26 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const fetchingRef = useRef(false)
 
   const load = useCallback(async () => {
-    const [fs, as] = await Promise.all([window.api.feeds.list(), window.api.articles.list(activeFeed)])
+    const [fs, lv] = await Promise.all([
+      window.api.feeds.list(),
+      window.api.articles.list(activeFeed, view, sinceDays)
+    ])
     setFeeds(fs)
-    setArticles(as)
-  }, [activeFeed])
+    setArticles(lv.articles)
+    setRemaining(lv.remaining)
+  }, [activeFeed, view, sinceDays])
+
+  /** 切视图/切源窗口重置 30 天（优化建议区第28轮） */
+  const switchView = (v: FeedView): void => {
+    if (view === v) return
+    setView(v)
+    setSinceDays(30)
+  }
+  const switchFeed = (id: number | null): void => {
+    if (activeFeed === id) return
+    setActiveFeed(id)
+    setSinceDays(30)
+  }
 
   /** 拉取全部源 + 刷新（进模块自动 + 手动刷新共用） */
   const refresh = useCallback(async (): Promise<void> => {
@@ -147,9 +167,21 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
     <div className="module-page feed-page">
       <div className="module-header">
         <div className="module-title">信息源</div>
-        <div className="module-sub">
-          {feeds.length} 个源{totalUnread > 0 ? ` · ${totalUnread} 篇未读` : ''}
+        <div className="recycle-tabs" style={{ marginLeft: 14 }}>
+          <button
+            className={`recycle-tab${view === 'unread' ? ' active' : ''}`}
+            onClick={() => switchView('unread')}
+          >
+            收件箱
+          </button>
+          <button
+            className={`recycle-tab${view === 'archive' ? ' active' : ''}`}
+            onClick={() => switchView('archive')}
+          >
+            已归档
+          </button>
         </div>
+        <div className="module-sub">{feeds.length} 个源{totalUnread > 0 ? ` · ${totalUnread} 篇未读` : ''}</div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="btn" onClick={() => void refresh()} disabled={fetching}>
             <span className={`material-symbols-outlined${fetching ? ' spin' : ''}`}>refresh</span>
@@ -172,7 +204,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
         <aside className="feed-sources">
           <div
             className={`feed-src-item${activeFeed === null ? ' active' : ''}`}
-            onClick={() => setActiveFeed(null)}
+            onClick={() => switchFeed(null)}
           >
             <span className="feed-src-name">全部文章</span>
             {totalUnread > 0 && <span className="feed-unread-badge">{totalUnread}</span>}
@@ -182,7 +214,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
               key={f.id}
               className={`feed-src-item${activeFeed === f.id ? ' active' : ''}`}
               title={f.fetch_error ? `上次拉取失败：${f.fetch_error}` : f.feed_url}
-              onClick={() => setActiveFeed(f.id)}
+              onClick={() => switchFeed(f.id)}
             >
               {f.fetch_error && <span className="feed-src-error" />}
               <span className="feed-src-name">{f.title}</span>
@@ -219,22 +251,37 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
 
         {/* 中栏：文章列表 */}
         <div className="feed-list">
-          {articles.length === 0 ? (
+          {articles.length === 0 && remaining === 0 ? (
             <div className="empty-state">
               <span className="material-symbols-outlined">rss_feed</span>
-              {fetching ? '正在拉取…' : activeFeedRow ? '该源暂无文章' : '暂无文章，点「刷新」拉取'}
+              {fetching
+                ? '正在拉取…'
+                : view === 'unread'
+                  ? activeFeedRow
+                    ? '该源没有未读文章'
+                    : '没有未读文章，点「刷新」拉取新内容'
+                  : activeFeedRow
+                    ? '该源近 30 天没有已读文章'
+                    : '近 30 天没有已读文章'}
             </div>
           ) : (
-            articles.map((a) => (
-              <div key={a.id} className={`feed-art-row${a.read_at ? '' : ' unread'}`} onClick={() => void openArticle(a.id)}>
-                <div className="feed-art-title">{a.title}</div>
-                {a.preview && <div className="feed-art-preview">{a.preview}</div>}
-                <div className="feed-art-meta">
-                  {activeFeed === null && <span>{feeds.find((f) => f.id === a.feed_id)?.title ?? ''}</span>}
-                  <span>{relTime(a.published_at ?? a.fetched_at)}</span>
+            <>
+              {articles.map((a) => (
+                <div key={a.id} className={`feed-art-row${a.read_at ? '' : ' unread'}`} onClick={() => void openArticle(a.id)}>
+                  <div className="feed-art-title">{a.title}</div>
+                  {a.preview && <div className="feed-art-preview">{a.preview}</div>}
+                  <div className="feed-art-meta">
+                    {activeFeed === null && <span>{feeds.find((f) => f.id === a.feed_id)?.title ?? ''}</span>}
+                    <span>{relTime(a.published_at ?? a.fetched_at)}</span>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+              {remaining > 0 && (
+                <button className="feed-load-more" onClick={() => setSinceDays((s) => s + 30)}>
+                  加载更早 30 天 · 还剩 {remaining} 篇
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

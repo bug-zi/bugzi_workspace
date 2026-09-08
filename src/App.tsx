@@ -1,5 +1,5 @@
 // 三栏布局 + 模块路由（样式 specs §3）
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ThemeProvider, useAppSettings } from './theme/ThemeProvider'
 import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
@@ -7,7 +7,6 @@ import DraftSidebar from './components/DraftSidebar'
 import MottosModule from './modules/mottos/MottosModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
-import VerifyModule from './modules/verify/VerifyModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
 import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
@@ -17,32 +16,37 @@ import LedgerModule from './modules/ledger/LedgerModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
+import NoisePage from './modules/noise/NoisePage'
+import { noiseEngine } from './services/noiseEngine'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
+// 左栏模块顺序（260908 开发者指令重排 + 辩真阁并入万象库 + 三模块改名：书架→藏书架、账本→记账本、个人中心→个人档）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'mottos', label: '格言库', icon: 'format_quote' },
   { id: 'wiki', label: '万象库', icon: 'public' },
-  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
-  { id: 'verify', label: '辩真阁', icon: 'fact_check' },
-  { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
-  { id: 'reasoning', label: '推理角', icon: 'psychology' },
-  { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
-  { id: 'bookshelf', label: '书架', icon: 'auto_stories' },
+  { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
   { id: 'feed', label: '信息源', icon: 'rss_feed' },
-  { id: 'ledger', label: '账本', icon: 'account_balance_wallet' },
+  { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
+  { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
+  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
+  { id: 'reasoning', label: '推理角', icon: 'psychology' },
+  { id: 'ledger', label: '记账本', icon: 'account_balance_wallet' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
-  { id: 'profile', label: '个人中心', icon: 'person' }
+  { id: 'profile', label: '个人档', icon: 'person' }
 ]
 
-/** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道 */
+/** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道；
+ *  辩真阁已并入万象库，'verify' 频道由万象库辩真板块经 openAiWith 的 channel 覆盖直达 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
   mottos: 'motto',
   wiki: 'wiki',
-  verify: 'verify',
   zhijiji: 'zhijiji'
 }
+
+/** 主栏视图：十二模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1） */
+type MainView = ModuleId | 'noise'
 
 export default function App() {
   return (
@@ -61,9 +65,9 @@ export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
 
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
-  const [module, setModule] = useState<ModuleId>('mottos')
+  const [module, setModule] = useState<MainView>('mottos')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
-  const moduleRef = useRef<ModuleId>('mottos')
+  const moduleRef = useRef<MainView>('mottos')
   useEffect(() => {
     moduleRef.current = module
   }, [module])
@@ -93,13 +97,25 @@ function Shell() {
     })
   }, [])
 
+  // 白噪音启动恢复（specs §4）：只灌参数不播放——重启默认暂停，手动点播放
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.NoiseState).then((raw) => {
+      if (!raw) return
+      try {
+        noiseEngine.loadState(JSON.parse(raw) as Record<string, unknown>)
+      } catch {
+        /* 坏数据静默容错，引擎内回退场景 defaults */
+      }
+    })
+  }, [])
+
   const switchRightPanel = useCallback((p: 'ai' | 'draft' | null): void => {
     setRightPanel(p)
     void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')
   }, [])
 
   // 切换模块 = 激活目标模块（常驻组件监听此事件自行刷新/启停计时）
-  const activateModule = useCallback((id: ModuleId) => {
+  const activateModule = useCallback((id: MainView) => {
     const prev = moduleRef.current
     setModule(id)
     moduleRef.current = id
@@ -109,14 +125,16 @@ function Shell() {
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
-  // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.auto 时切频道后自动发送）
+  // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.channel 显式覆盖——万象库辩真板块直连核查频道；
+  // opts.auto 时切频道后自动发送）
   const openAiWith = useCallback(
-    (prefill?: string, opts?: { auto?: boolean }) => {
+    (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => {
       switchRightPanel('ai')
       setAiForceOpen((v) => !v)
       setAiPending({
         text: prefill ?? '',
-        channel: CHANNEL_BY_MODULE[module] ?? 'assistant',
+        channel:
+          opts?.channel ?? (module !== 'noise' ? CHANNEL_BY_MODULE[module] : undefined) ?? 'assistant',
         auto: opts?.auto ?? false
       })
     },
@@ -128,6 +146,10 @@ function Shell() {
     if (!aiForceOpen) return
   }, [aiForceOpen])
 
+  // 白噪音播放态（引擎版本号驱动：图标高亮与页面播放按钮同步）
+  useSyncExternalStore(noiseEngine.subscribe, noiseEngine.getSnapshot)
+  const noisePlaying = noiseEngine.isPlaying()
+
   return (
     <>
       <div className="app-bg" />
@@ -135,21 +157,31 @@ function Shell() {
         {/* 左侧边栏 */}
         <nav className="sidebar">
           {MODULES.map((m) => (
-            <button
-              key={m.id}
-              className={`nav-item${module === m.id ? ' active' : ''}`}
-              onClick={() => activateModule(m.id)}
-              title={m.label}
-            >
-              <span className="material-symbols-outlined">{m.icon}</span>
-              <span className="nav-label">{m.label}</span>
-            </button>
+            <Fragment key={m.id}>
+              {/* 白噪音控件列于记账本与回收站之间（260908 开发者指令：进列表不再钉底部） */}
+              {m.id === 'recycle' && (
+                <button
+                  className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
+                  onClick={() => activateModule('noise')}
+                  title={noisePlaying ? '白噪音播放中 · 点击打开混音器' : '打开白噪音混音器'}
+                >
+                  <span className={`material-symbols-outlined${noisePlaying ? ' noise-playing' : ''}`}>
+                    graphic_eq
+                  </span>
+                  <span className="nav-label">白噪音</span>
+                </button>
+              )}
+              <button
+                className={`nav-item${module === m.id ? ' active' : ''}`}
+                onClick={() => activateModule(m.id)}
+                title={m.label}
+              >
+                <span className="material-symbols-outlined">{m.icon}</span>
+                <span className="nav-label">{m.label}</span>
+              </button>
+            </Fragment>
           ))}
           <div className="sidebar-spacer" />
-          <button className="nav-item" onClick={toggleTheme} title={theme === 'light' ? '切到深色' : '切到浅色'}>
-            <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
-            <span className="nav-label">主题</span>
-          </button>
         </nav>
 
         {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
@@ -165,9 +197,6 @@ function Shell() {
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
               {m.id === 'inspirations' && <InspirationsModule onOpenAi={openAiWith} />}
-              {m.id === 'verify' && (
-                <VerifyModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
-              )}
               {m.id === 'zhijiji' && (
                 <ZhijijiModule onNavigateToProfile={() => activateModule('profile')} />
               )}
@@ -180,24 +209,36 @@ function Shell() {
               {m.id === 'profile' && <ProfileModule />}
             </div>
           ))}
+          {/* 白噪音混音器页（不 keep-alive：引擎在组件外，页面卸载播放不断；specs §5.1） */}
+          {module === 'noise' && <NoisePage />}
         </main>
 
-        {/* 右侧边栏（右缘双面板互斥：debugzi 常驻挂载保持生成态，草稿本按需挂载） */}
-        <AiSidebar
-          collapsed={rightPanel !== 'ai'}
-          showRail={rightPanel === null}
-          onExpand={() => switchRightPanel('ai')}
-          onCollapse={() => switchRightPanel(null)}
-          onOpenDraft={() => switchRightPanel('draft')}
-          currentModule={module}
-          pending={aiPending}
-          onPendingConsumed={() => setAiPending(null)}
-          messagesVersion={aiVersion}
-          onNavigateToProfile={() => activateModule('profile')}
-        />
-        {rightPanel === 'draft' && (
-          <DraftSidebar onCollapse={() => switchRightPanel(null)} turtleGame={turtleGame} />
-        )}
+        {/* 右侧边栏（右缘双面板互斥：debugzi 常驻挂载保持生成态，草稿本按需挂载）；
+            外包列容器底部挂主题按钮（specs §5.3，自左栏底部迁来）——三态常驻窗口右下角 */}
+        <div className="right-col">
+          <AiSidebar
+            collapsed={rightPanel !== 'ai'}
+            showRail={rightPanel === null}
+            onExpand={() => switchRightPanel('ai')}
+            onCollapse={() => switchRightPanel(null)}
+            onOpenDraft={() => switchRightPanel('draft')}
+            currentModule={module}
+            pending={aiPending}
+            onPendingConsumed={() => setAiPending(null)}
+            messagesVersion={aiVersion}
+            onNavigateToProfile={() => activateModule('profile')}
+          />
+          {rightPanel === 'draft' && (
+            <DraftSidebar onCollapse={() => switchRightPanel(null)} turtleGame={turtleGame} />
+          )}
+          <button
+            className="right-col-theme"
+            onClick={toggleTheme}
+            title={theme === 'light' ? '切到深色' : '切到浅色'}
+          >
+            <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
+          </button>
+        </div>
       </div>
 
       {/* 首次启动引导（个人中心 specs §4） */}

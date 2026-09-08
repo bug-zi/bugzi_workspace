@@ -126,7 +126,7 @@ export default function LedgerModule() {
   return (
     <div className="module-page ledger-page">
       <div className="module-header">
-        <div className="module-title">账本</div>
+        <div className="module-title">记账本</div>
         <div className="module-sub">{accounts.length} 个账户</div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="btn" onClick={() => setManageOpen(true)}>

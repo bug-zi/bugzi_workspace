@@ -61,13 +61,13 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 ### 1.2 主题状态与切换
 
 - 主题存 SQLite settings 表（key-value），启动时读入设置 `data-theme`。
-- 双入口切换（总需求文档第 7 条）：左侧边栏底部一键切换图标 + 个人中心 App 设置下拉项；两处切换即时生效（切换 `data-theme` + 写库），全 App 无刷新换肤。
-- 背景图更换：个人中心设置里选择本地图片 → 复制到 `<userData>/bg/` 覆盖对应文件 → 刷新 `--bg-image`。（入口在个人中心，机制在本模块实现。）
+- 双入口切换（总需求文档第 7 条）：左侧边栏底部一键切换图标 + 个人档 App 设置下拉项；两处切换即时生效（切换 `data-theme` + 写库），全 App 无刷新换肤。
+- 背景图更换：个人档设置里选择本地图片 → 复制到 `<userData>/bg/` 覆盖对应文件 → 刷新 `--bg-image`。（入口在个人档，机制在本模块实现。）
 
 ## 2. 图标（样式 design.md 第 3 条）
 
 - 全 App 统一 Material Symbols Outlined（Google Fonts 引入），禁 emoji。
-- 八模块图标：格言库 format_quote、万象库 public、灵感泉 lightbulb、辩真阁 fact_check、致知己 self_improvement、推理角 psychology、回收站 delete、个人中心 person；AI 边栏 forum；主题切换 light_mode/dark_mode。保持 Outlined 风格统一。
+- 模块图标（260908 现状·十一模块 + 白噪音）：格言库 format_quote、万象库 public、藏书架 auto_stories、信息源 rss_feed、文笔坊 history_edu、致知己 self_improvement、灵感泉 lightbulb、推理角 psychology、记账本 account_balance_wallet、回收站 delete、个人档 person；白噪音 graphic_eq；AI 边栏 forum；主题切换 light_mode/dark_mode。保持 Outlined 风格统一。
 
 ## 3. 三栏布局（样式 design.md 第 5 条 + 总需求文档第 12 条）
 
@@ -82,7 +82,7 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 └──────┴──────────────────────────┴─────────────┘
 ```
 
-- 左侧边栏：垂直排列，宽约 72px 展开态（图标+模块名竖排或横排悬浮提示均可，实现时定）。模块顺序固定：格言库 → 万象库 → 灵感泉 → 辩真阁 → 致知己 → 推理角 → 回收站 → 个人中心。当前模块高亮（`--color-primary-soft` 底）。侧边栏底部：主题切换图标。
+- 左侧边栏：垂直排列，宽约 72px 展开态（图标+模块名竖排或横排悬浮提示均可，实现时定）。模块顺序固定（260908 重排）：格言库 → 万象库 → 藏书架 → 信息源 → 文笔坊 → 致知己 → 灵感泉 → 推理角 → 记账本 → 白噪音 → 回收站 → 个人档（白噪音为非模块全局功能入口）。当前模块高亮（`--color-primary-soft` 底）。主题切换图标在右侧边栏底部右下角（260908 自左栏底部迁来，三态常驻）。
 - 中间主栏：模块路由（格言库为默认页），内容区滚动，背景透出主题背景图。
 - 右侧 AI 助手边栏：可收起/展开（边缘把手或按钮），收起时仅留窄条。宽度可拖拽调整（v1 可选）。
 
@@ -97,11 +97,11 @@ CSS 变量双套，`:root[data-theme='light']` 与 `:root[data-theme='dark']`：
 - 自由对话：多轮聊天，输入框 + 消息气泡列表，支持流式输出渲染。
 - 模块感知：每轮请求附带当前所在模块名与简短上下文标签（如 `当前模块：格言库`），system prompt 中指示 AI 优先围绕该模块话题。
 - 频道制（260905 致知己配套改造，详见 致知己/designs-specs.md）：边栏内按场景分频道——助手 / 万象·问答 / 致知己·追问 / 辩真·核查，每频道独立会话历史（ai_messages 表加 channel 字段，存量会话归助手频道）与独立 system prompt 人设；手动展开停在上次所在频道。各频道及全部 AI 功能的上下文注入「我的画像」。
-- 万象库「问 AI」与辩真阁验证过程会向此边栏推送消息（见各模块 specs）。
+- 万象库「问 AI」与辩真（万象库「辩真」板块）验证过程会向此边栏推送消息（见各模块 specs）。
 
 ### 4.2 降级（总需求文档第 8 条）
 
-- LLM 未配置（无默认 LLM）时：边栏仍可打开，输入框可点击，发送时弹窗提示「请先在个人中心配置 LLM」+「去配置」按钮直达个人中心。
+- LLM 未配置（无默认 LLM）时：边栏仍可打开，输入框可点击，发送时弹窗提示「请先在个人档配置 LLM」+「去配置」按钮直达个人档。
 
 ## 5. 全局 md 弹窗组件 MdDialog（总需求文档第 6 条）
 
@@ -130,5 +130,5 @@ interface MdDialogProps {
 - [ ] 全 App 无 emoji 图标，Material Symbols Outlined 统一
 - [ ] 八模块路由可达，侧边栏顺序与高亮正确，默认页格言库
 - [ ] AI 边栏可收起/展开，能自由对话（已配置 LLM 时），历史持久
-- [ ] LLM 未配置时发送 → 提示弹窗 + 直达个人中心
+- [ ] LLM 未配置时发送 → 提示弹窗 + 直达个人档
 - [ ] MdDialog 组件：渲染态 → 双击编辑 → 失焦保存恢复渲染，各模块场景可复用

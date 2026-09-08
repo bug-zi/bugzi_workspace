@@ -1,4 +1,5 @@
-// 辩真阁模块（辩真阁 specs 全量）：提交即验、重复检测、MCP 检索、过程推 AI 边栏
+// 辩真面板（260908 辩真阁并入万象库为「辩真」板块，设计记录见 左侧边栏/辩真阁/）：
+// 提交即验、重复检测、MCP 检索、过程推 AI 边栏核查频道（onOpenAi 由 WikiModule 包装 channel:'verify'）
 import { useCallback, useEffect, useState } from 'react'
 import type { VerifyRecord } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
@@ -7,12 +8,12 @@ import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
-export interface VerifyModuleProps {
+export interface VerifyPanelProps {
   onOpenAi: (prefill?: string) => void
   bumpAi: () => void
 }
 
-export default function VerifyModule(props: VerifyModuleProps) {
+export default function VerifyPanel(props: VerifyPanelProps) {
   const { toast } = useToast()
   const [records, setRecords] = useState<VerifyRecord[]>([])
   const [claim, setClaim] = useState('')
@@ -47,8 +48,8 @@ export default function VerifyModule(props: VerifyModuleProps) {
     if (aiVersion > 0) props.bumpAi()
   }, [aiVersion, props])
 
-  // keep-alive：切回辩真阁时刷新记录列表
-  useModuleActivated('verify', () => void load())
+  // keep-alive：切回万象库时刷新记录列表（板块常驻挂载，模块级激活即含辩真板块）
+  useModuleActivated('wiki', () => void load())
 
   const runVerify = async (): Promise<void> => {
     const text = claim.trim()
@@ -66,7 +67,7 @@ export default function VerifyModule(props: VerifyModuleProps) {
     const jobId = crypto.randomUUID()
     setRunJob(jobId)
     setClaim('')
-    props.onOpenAi() // 展开边栏看过程
+    props.onOpenAi() // 展开边栏看过程（核查频道）
     try {
       const r = await window.api.verify.run(jobId, text)
       toast(`验证完成，可信度 ${r.credibility}%`)
@@ -93,12 +94,6 @@ export default function VerifyModule(props: VerifyModuleProps) {
 
   return (
     <div className="module-page">
-      <div className="module-header">
-        <span className="material-symbols-outlined">fact_check</span>
-        <span className="module-title">辩真阁</span>
-        <span className="module-sub">输入观点，AI 联网检索验证（需 LLM + MCP）</span>
-      </div>
-
       {/* 输入区 */}
       <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <textarea
@@ -113,7 +108,7 @@ export default function VerifyModule(props: VerifyModuleProps) {
               void runVerify()
             }
           }}
-          placeholder={'输入待验证的观点…\n（Ctrl+Enter 提交，自动开始验证）'}
+          placeholder={'输入待验证的观点，AI 联网检索验证（需 LLM + MCP）…\n（Ctrl+Enter 提交，自动开始验证）'}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button className="btn btn-primary" onClick={() => void runVerify()} disabled={running || !claim.trim()}>

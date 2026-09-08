@@ -1,11 +1,12 @@
-# 书架 designs-specs.md
+# 藏书架 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/书架/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（六项决策与被否方案）见同目录 `archive/2026-09-08-书架-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / Toast 与主题色系约束、Material Symbols 用法）、个人中心/designs-specs.md（全局字体设置读取惯例）。**本模块零 AI**——不依赖 electron/ai/*（jobs/取消机制不涉及）、不新增 AiChannel、无画像注入。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）。
+> **260908 显示名更名（开发者指令）**：藏书架 → **藏书架**（ModuleId `bookshelf`、目录名、DB/文件路径均不变，仅 UI 文案）。
 
 ## 0. 命名与常量
 
-- `ModuleId` 增 `'bookshelf'`；App.tsx `MODULES` 注册 `{ id: 'bookshelf', label: '书架', icon: 'auto_stories' }`，位置在文笔坊与回收站之间（与信息源同期立项，最终顺序 wenbi → **bookshelf** → **feed** → recycle → profile）。
-- **不新增 AiChannel**；`CHANNEL_BY_MODULE` 不列书架 → 默认 'assistant'（模块内无任何边栏联动与 AI 按钮）。
+- `ModuleId` 增 `'bookshelf'`；App.tsx `MODULES` 注册 `{ id: 'bookshelf', label: '藏书架', icon: 'auto_stories' }`，位置（260908 重排后）在万象库与信息源之间（mottos → wiki → **bookshelf** → **feed** → … → recycle → profile）。
+- **不新增 AiChannel**；`CHANNEL_BY_MODULE` 不列藏书架 → 默认 'assistant'（模块内无任何边栏联动与 AI 按钮）。
 - db.ts 目录数组（db.ts:35）增两项：`'books'`、`'covers'`——`<userData>/books/<id>.<epub|pdf>`、`<userData>/covers/<id>.<jpg|png|webp>`。
 - 封面经 bzres:// 加载：`bzres://root/covers/<file>`——bzres.ts 的 `root` 命名空间本就映射 userData 任意子路径且支持 png/jpg/webp/gif/bmp mime，**零协议改动**。
 - 书籍二进制不走路由协议：`books:readFile` IPC 返回 Uint8Array，直接喂 epub.js `ePub()` / pdfjs `getDocument({ data })`（两库均接受 ArrayBuffer/TypedArray，避开 file:// 与 webSecurity 问题）。
@@ -31,7 +32,7 @@ CREATE TABLE books (
 );
 ```
 
-- **版本号实况（260908 实施落定）**：设计写 v18，被并行会话海龟汤计时（优化建议区第26轮）占用 v18，书架迁移实际占 **v19**（信息源占 v20）。
+- **版本号实况（260908 实施落定）**：设计写 v18，被并行会话海龟汤计时（优化建议区第26轮）占用 v18，藏书架迁移实际占 **v19**（信息源占 v20）。
 - `BooksRecord` 补 `src/shared/types.ts` + `src/renderer/api.d.ts` 两处（全库惯例）；file_path/cover_path 一律存相对路径。
 
 ## 2. 主进程 BookService（新建 `electron/services/books.ts`）
@@ -62,8 +63,8 @@ CREATE TABLE books (
 
 ### 3.1 BookshelfModule.tsx（壳）
 
-- 视图态 `selectedBookId: number | null`——null 显书架、非 null 显 `<ReaderView book={…} onBack={…}>`（主栏内切换，写作台页面化同款语义）。
-- 书架网格：封面卡 = 封面图（`bzres://root/` + cover_path）或书名占位卡 + 书名/作者 + 进度角标（`{percent}%` 或「未读」）+ `more_horiz` 菜单（删除）。顶栏「导入书籍」按钮（icon `upload_file`）。
+- 视图态 `selectedBookId: number | null`——null 显藏书架、非 null 显 `<ReaderView book={…} onBack={…}>`（主栏内切换，写作台页面化同款语义）。
+- 藏书架网格：封面卡 = 封面图（`bzres://root/` + cover_path）或书名占位卡 + 书名/作者 + 进度角标（`{percent}%` 或「未读」）+ `more_horiz` 菜单（删除）。顶栏「导入书籍」按钮（icon `upload_file`）。
 - 列表排序 SQL：`ORDER BY (last_read_at IS NULL), last_read_at DESC, added_at DESC`。
 - 导入流程：`books:browse()` → `books:import(paths)` → 结果含 duplicate → ConfirmDialog「N 本疑似已导入（列书名），仍要导入？」→ `books:import(dupPaths, true)`；failed → toast 错误；成功 → 刷新列表。
 - 删除：ConfirmDialog（「彻底删除，不可恢复」——不入回收站措辞）→ `books:delete` → 刷新。
@@ -72,8 +73,8 @@ CREATE TABLE books (
 ### 3.2 EpubReader.tsx
 
 - `ePub(uint8array)` → `rendition.renderTo(container, { width: '100%', height: '100%', flow: 'scrolled' })`（连续滚动，与 pdf 一致）；`display(progress_cfi ?? undefined)` 恢复。
-- **主题注入**：iframe 内用不了外层 CSS 变量——`getComputedStyle(document.documentElement)` 读主题色变量取具体色值，`rendition.themes.default({ body: { color, background } })` 注入（浅色樱花粉黑字/深色宝蓝白字）；字号跟个人中心全局字体大小设置同源读取。
-- **进度**：`book.locations.generate()`（大书异步，完成前 percent 显示旧值/「在读」）→ `rendition.on('relocated', …)` 取 CFI 与 percent，**节流 3 秒**调 `books:saveProgress`，组件卸载（返回书架）时再 flush 一次。
+- **主题注入**：iframe 内用不了外层 CSS 变量——`getComputedStyle(document.documentElement)` 读主题色变量取具体色值，`rendition.themes.default({ body: { color, background } })` 注入（浅色樱花粉黑字/深色宝蓝白字）；字号跟个人档全局字体大小设置同源读取。
+- **进度**：`book.locations.generate()`（大书异步，完成前 percent 显示旧值/「在读」）→ `rendition.on('relocated', …)` 取 CFI 与 percent，**节流 3 秒**调 `books:saveProgress`，组件卸载（返回藏书架）时再 flush 一次。
 - 翻页导航：scrolled 流式下滚动即翻页；容器顶部/底部各留 `arrow_upward`/`arrow_downward` 浮动按钮做章节级跳转兜底（`book.spine` 上下章）。
 
 ### 3.3 PdfReader.tsx
@@ -110,9 +111,82 @@ CREATE TABLE books (
 
 - [ ]  DB v18 迁移：books 表建成、books/covers 两目录 ensure、新装库顺序迁移覆盖
 - [ ]  导入：epub（title/author/封面提取）与 pdf（文件名/占位卡）；多选批量；重复导入确认流（跳过/强导入）；解析失败副本清理 + toast
-- [ ]  书架：网格陈列、无封面占位卡、排序（最近阅读在前、未读过按导入时间）
+- [ ]  藏书架：网格陈列、无封面占位卡、排序（最近阅读在前、未读过按导入时间）
 - [ ]  epub 阅读：滚动翻页、章节跳转按钮、进度%显示、CFI 恢复直达；pdf 阅读：连续滚动、懒渲染、页码指示、页码恢复
 - [ ]  进度节流 3 秒落库 + 退出 flush；中途强杀重开进度大体不丢
 - [ ]  双主题：epub 注入配色正确切换；pdf 容器背景跟主题；字号跟全局设置
-- [ ]  删除：二次确认 → 记录与物理文件清理 → 书架刷新
+- [ ]  删除：二次确认 → 记录与物理文件清理 → 藏书架刷新
 - [ ]  坏文件：打开解析失败 toast 不崩；`npm run typecheck` / `npm run build` 通过
+
+## 8. 优化第 1 轮（260908 立项实施，260909 开发者验证通过；设计记录 `archive/2026-09-08-书架优化-design.md`，来源 `优化设计.md`）
+
+> 设计决策记录（含被否方案）见 `archive/2026-09-08-书架优化-design.md`（落地后归档）。本节为实施直接依据。改动面：`src/modules/bookshelf/` 全量 + db.ts（v24）+ books.ts + ipc.ts/preload.ts/api.d.ts/shared/types.ts + SettingsKeys 一键；藏书架视图（封面网格/导入/删除）零改动。**实施中四处偏离初稿、经开发者反馈修错定稿**（详见 `docs/log/260908.md` 三节修错 + `260909.md` 两节）：模式切换改全量重挂、W/S 改按住流式滚动、标注同步竞态修复、容器 X 轴钳制——本节按最终实况书写。
+
+### 8.1 宽度与防横向拖拽
+
+- `bookshelf.css`：`.bk-reader-page.bk-reader-wide { max-width: 1200px }`——epub 阅读视图由 BookshelfModule 按书籍格式加 `bk-reader-wide` 类；**pdf 不加，维持 980px**。
+- EpubReader 主题注入（applyTheme）追加护栏规则（epub.js themes 按原始选择器 insertRule，逗号键可用）：
+  - `'img, svg, video, table': { max-width: '100%', height: 'auto' }`
+  - `pre: { overflow-x: 'auto' }`（代码块横向溢出块内消化）
+- `.bk-epub-host` 加左右内边距（`padding: 12px 36px 24px`），文字不贴边。
+- **容器层钳制（260909 修错）**：epub.js scrolled 模式给内层 `.epub-container` 设行内 `overflow: auto` 含 X 轴——`bookshelf.css` 增 `.bk-epub-host .epub-container { overflow-x: hidden !important }`（行内样式需 important 覆盖；竖向滚动不受影响）。翻页模式另加 `.bk-epub-host.bk-page-mode { overflow: hidden }`（宿主禁滚，防分页视图数像素溢出被拖动）。
+- **挂载后重排（260909 修错）**：EpubReader 挂 ResizeObserver 监听 host（防抖 80ms，覆盖侧栏开合/窗口缩放——epub.js 只听 window resize）调 `rendition.resize(w, h)`；且首帧 display 完成后立即按**内容盒净尺寸**（clientWidth/Height 减 padding；直传含 padding 值会令容器溢出）重排一次，消除挂载竞态下的旧宽残留（切模式后首视图横向可拖、跳章即消失的根因）。
+
+### 8.2 键盘导航（双模式映射；260909 修订：W/S 按住流式滚动）
+
+- `src/modules/bookshelf/readerKeys.ts`：`parseReaderKey(e)`——W/↑、S/↓、A/←、D/→（大小写不敏感）；焦点在 input/textarea/contentEditable 时返回 null（输入保护）；`dirOfKey(e)` 为无输入保护的键值归一（keyup 停滚动必须总能归一——防「按住时焦点移入输入框再松开」泄漏滚动）。
+- `createHoldScroller()`（260909 修订）：keydown（忽略系统重发）登记方向并启动 rAF 循环，逐帧小步 `scrollTop`（约 550px/s）→ 长按连续流动、松开即停、轻点小幅位移；window blur 与组件卸载兜底全停。**epub 滚真实容器 `.epub-container`**（scrolled 流式的滚动容器是它而非宿主），pdf 滚宿主。
+- EpubReader / PdfReader 各挂 window keydown/keyup（`preventDefault`），共用映射表：
+
+| 按键 | 滚动模式 | 翻页模式 |
+|---|---|---|
+| W / ↑（按住） | 流式上滚（≈550px/s） | 上一节 |
+| S / ↓（按住） | 流式下滚 | 下一节 |
+| A / ← | 上一章 | 上一页（epub `rendition.prev()`；pdf 单页视图 -1） |
+| D / → | 下一章 | 下一页（epub `rendition.next()`；pdf +1） |
+
+### 8.3 双阅读模式（260909 修订：epub 模式切换全量重挂）
+
+- BookshelfModule 阅读条加模式切换按钮（显示「滚动」/「翻页」）；settings 新键 `SettingsKeys.BooksReadingMode = 'books_reading_mode'`（值 `scroll`|`page`，默认 scroll），全局记忆，打开书时读取。
+- **EpubReader 模式切换 = 换 key 全量重挂**（`key={`${id}-${mode}`}`）：`rendition.flow()` 运行时切换与「同 Book 销毁重建 rendition」两版实测均有排版/空白 wart（scroll→page 方向），彻底重开最稳；toggleMode 先 `books:list` 取最新进度行更新 `reading`（防节流 3 秒窗口内进度丢失回跳到开书位置）。renderTo 初始 flow = `scrolled|paginated` + `spread: 'none'`（单栏）；代价为重读文件 + locations 后台重建（期间 percent 用内置近似，CFI 恢复不受影响）。
+- PdfReader 接收 `mode` prop（key 不含 mode，内部重建）：scroll = 现有连续滚动实现不动；page = 单页居中视图——当前页 canvas 按容器宽渲染（`width/height auto` + `max-width/height 100%` 防长页裁剪），离屏 canvas 渲染后 blit（缓存当前 ±1 页防闪白），A/D 翻页（边界 clamp），进度照常页码节流落库、恢复直达。
+
+### 8.4 目录侧栏（双页签：目录 | 笔记）
+
+- 新建 `src/modules/bookshelf/ReaderSidebar.tsx`（展示组件）：约 240px，左侧滑入，页签切换；`ReaderTocItem { label, href?, page?, depth, children? }` 渲染递归缩进列表。
+- BookshelfModule 持侧栏状态 `{ open, tab }`；阅读条「目录」按钮（icon `toc`）开合；展开态仅会话内。
+- 数据上行：readers 加载完成后 `props.onToc(items)` 上报——epub `book.loaded.navigation`（NavItem.subitems 递归）；pdf `pdf.getOutline()` + `dest → getPageIndex → 页码`。
+- 跳转下行：readers 经 `useImperativeHandle` 暴露 `jumpToCfi / jumpToToc(href)`（epub）、`jumpToPage(n)`（pdf），侧栏点击调 ref。
+- 当前章节高亮：epub relocated 记录当前 href → 侧栏项 active；pdf 按当前页落在的 outline 区间 active。
+- 无目录显示「本书无目录」占位；pdf 翻页模式 W/S = outline 顶层序列前后跳（无 outline 不响应）。
+
+### 8.5 笔记本（仅 epub；DB v24）
+
+- v24 迁移：`book_notes` 表（id / book_id / cfi_range / quote / note DEFAULT '' / created_at）；`books:delete` 级联 `DELETE FROM book_notes WHERE book_id = ?`。
+- `BooksNote` 接口（shared/types.ts + api.d.ts）；BookService 四方法 + IPC 四通道：
+
+| 通道 | 签名 | 行为 |
+|---|---|---|
+| `books:notesList` | `(bookId) => Promise<BooksNote[]>` | created_at 倒序 |
+| `books:noteAdd` | `(bookId, { cfiRange, quote, note? }) => Promise<BooksNote>` | 新增（note 缺省 ''） |
+| `books:noteUpdate` | `(noteId, note) => Promise<boolean>` | 编辑批注 |
+| `books:noteRemove` | `(noteId) => Promise<boolean>` | 彻底删除（渲染层二次确认） |
+
+- 状态归属：BookshelfModule 持 `notes` state（进阅读视图时 notesList，pdf 为空数组），传 EpubReader 渲染标注；增删改经回调（`onAddNote/onUpdateNote/onRemoveNote`）由模块走 IPC + setState，删除先 ConfirmDialog。
+- 划词浮窗：`rendition.on('selected', (cfiRange, contents))` → `contents.range(cfiRange)` 取矩形，叠加 iframe 与 host 偏移（含 scrollTop）定位 `bk-sel-bubble`（absolute 挂 host 内，随滚动）。「高光」= noteAdd(note='')；「批注」= 浮窗展开 textarea 保存。同 cfiRange 已存在 → toast「已有高光」不入库。
+- 标注渲染：EpubReader 的 `syncAnnotations()`（**260908 修错：抽为统一入口并在 createRendition 首帧 display 后补调——书文件读取与 notes 加载竞态曾致标注整轮不渲染**）读 notesRef diff 增删——`annotations.highlight(cfi, {id}, cb, 'bz-hl', { fill: 主题色, 'fill-opacity': '0.4', 'mix-blend-mode': 'multiply' })`；有批注的再加 `underline(cfi, {id}, cb, 'bz-hl-ul', { stroke: 主题深色, 'stroke-opacity': '0.9', 'mix-blend-mode': 'multiply' })`。cb 点击高亮 → 气泡（原文 + 批注 + 编辑/删除；marks-pane 从 iframe 代理的 click 坐标为 iframe 系，`proxiedPointInHost` 换算定位）。主题切换按色值代全量重涂。
+- 笔记页签：原文两行截断 + 批注 + 相对时间 + 删除按钮；点击 `rendition.display(cfiRange)` 跳回。pdf 显示「PDF 暂不支持划词笔记」。
+
+### 8.6 划词/高光主题色
+
+- applyTheme 注入 `'::selection': { background: <'--color-selection' 具体值> }`（浅色樱花粉半透明 / 深色宝蓝半透明，与全局划词色同源）。
+- 高亮 fill 取 `--color-selection`、批注下划线 stroke 取 `--color-primary-deep` 具体值；主题切换随 applyTheme 重注入 + 标注重涂（remove 全部再 add）。
+
+### 8.7 验收（260909 开发者验证通过）
+
+- [x] epub 任意书无横向拖拽（宽容器 1200px + 护栏）；pdf 维持 980px
+- [x] 双模式按键映射全表生效；批注输入时打字不触发导航
+- [x] 模式切换保位置、全局记忆、重启恢复；pdf 单页翻页不闪白
+- [x] 目录侧栏双引擎跳转准确、当前章节高亮、无目录占位
+- [x] epub 划词→高光/批注→重开书仍在；笔记页签跳回定位准；编辑/删除闭环（删除二次确认）
+- [x] 划词色/高亮色随双主题切换；删书清笔记；typecheck/build 通过

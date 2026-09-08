@@ -1,0 +1,102 @@
+/* ===== 白噪音混音器页（specs §3） ===== */
+/* 本页 zone 头不可折叠（无点击语义） */
+.noise-page .zone-header {
+  cursor: default;
+}
+.noise-play .material-symbols-outlined {
+  font-size: 20px;
+}
+
+/* 场景条 */
+.noise-scenes {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.noise-scene-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 88px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.noise-scene-card:hover {
+  border-color: var(--color-primary);
+}
+.noise-scene-card.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.noise-scene-card .material-symbols-outlined {
+  font-size: 26px;
+}
+
+/* 滑杆区：竖向分层滑杆一排 + 右侧主音量 */
+.noise-mixer {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  padding: 14px 18px;
+}
+.noise-faders {
+  display: flex;
+  gap: 18px;
+  flex: 1;
+  justify-content: space-evenly;
+}
+.noise-fader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 52px;
+}
+/* 竖向滑杆（Chromium writing-mode 方案；direction rtl 让最大值朝上） */
+.noise-fader input[type='range'] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 24px;
+  height: 190px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.noise-fader-value {
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.noise-fader-label {
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  max-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.noise-master {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 1px solid var(--color-border);
+  padding-left: 20px;
+}
+.noise-master input[type='range'] {
+  width: 140px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* chips 通用排布（预设 + 自定义混音共用） */
+.noise-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 2px 2px;
+}

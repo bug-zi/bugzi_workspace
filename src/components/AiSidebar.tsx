@@ -638,7 +638,7 @@ export default function AiSidebar(props: AiSidebarProps) {
       </div>
       {needConfig && (
         <div className="ai-need-config">
-          请先在个人中心配置 LLM
+          请先在个人档配置 LLM
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button className="btn" onClick={() => setNeedConfig(false)}>暂不</button>
             <button className="btn btn-primary" onClick={() => { setNeedConfig(false); onNavigateToProfile() }}>去配置</button>
@@ -681,15 +681,19 @@ export default function AiSidebar(props: AiSidebarProps) {
 }
 
 function moduleLabel(m: string): string {
+  // 260908：辩真阁并入万象库（verify 移除）；账本→记账本、个人中心→个人档
   const map: Record<string, string> = {
     mottos: '格言库',
     wiki: '万象库',
     inspirations: '灵感泉',
-    verify: '辩真阁',
     zhijiji: '致知己',
     reasoning: '推理角',
+    bookshelf: '藏书架',
+    feed: '信息源',
+    wenbi: '文笔坊',
+    ledger: '记账本',
     recycle: '回收站',
-    profile: '个人中心'
+    profile: '个人档'
   }
   return map[m] ?? m
 }

@@ -1,11 +1,10 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
-// 模块标识
+// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；数据层 verify_records/回收站 source/AI verify 频道均保留）
 export type ModuleId =
   | 'mottos'
   | 'wiki'
   | 'inspirations'
-  | 'verify'
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
@@ -61,7 +60,12 @@ export const SettingsKeys = {
   DraftWidth: 'draft_width',
   DraftActiveChannel: 'draft_active_channel',
   DraftActiveGeneral: 'draft_active_general',
-  DraftActiveTurtle: 'draft_active_turtle'
+  DraftActiveTurtle: 'draft_active_turtle',
+  // 白噪音（260908 立项）：当前混音状态 + 自定义混音列表（均 JSON 字符串；重启记参数默认暂停）
+  NoiseState: 'noise_state',
+  NoiseCustomMixes: 'noise_custom_mixes',
+  // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
+  BooksReadingMode: 'books_reading_mode'
 } as const
 
 export type Theme = 'light' | 'dark'
@@ -260,6 +264,19 @@ export type BooksImportResult =
   | { path: string; status: 'duplicate'; title: string }
   | { path: string; status: 'failed'; error: string }
 
+/** 书架划词笔记（book_notes 表，书架优化第1轮 §8.5）：note 空 = 纯高光；仅 epub（pdf 无文本层） */
+export interface BooksNote {
+  id: number
+  book_id: number
+  /** epub.js CFI 区间定位（划词范围） */
+  cfi_range: string
+  /** 划选原文摘录（截断约 500 字） */
+  quote: string
+  /** 批注内容；空字符串 = 纯高光 */
+  note: string
+  created_at: string
+}
+
 /** 信息源源（feeds 表，信息源 specs §1）：fetch_error 空=上次拉取成功 */
 export interface FeedRecord {
   id: number
@@ -302,6 +319,16 @@ export interface ArticleSummary {
   has_summary: boolean
   /** 正文剥标签预览（前 120 字） */
   preview: string
+}
+
+/** 文章列表视图（优化建议区第28轮）：unread=收件箱（只显未读，读完即消失）；archive=已归档（已读按时间翻） */
+export type FeedView = 'unread' | 'archive'
+
+/** 文章列表返回体（优化建议区第28轮）：窗口内轻量行 + 窗口外剩余计数（「加载更早」按钮展示） */
+export interface FeedListView {
+  articles: ArticleSummary[]
+  /** 同条件（视图 + 源筛选）去时间窗口的 COUNT——窗口外还有多少篇可加载 */
+  remaining: number
 }
 
 /** 拉取结果（feeds:fetchAll 逐源返回；单源失败不阻断） */

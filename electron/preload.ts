@@ -425,8 +425,21 @@ const api = {
       id: number,
       p: { cfi?: string | null; page?: number | null; percent: number }
     ): Promise<boolean> => ipcRenderer.invoke('books:saveProgress', id, p),
-    /** 彻底删除（前端二次确认后调用，连物理文件） */
-    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('books:delete', id)
+    /** 彻底删除（前端二次确认后调用，连物理文件与笔记） */
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('books:delete', id),
+    /** 划词笔记列表（created_at 倒序，仅 epub 有数据） */
+    notesList: (bookId: number): Promise<import('../src/shared/types').BooksNote[]> =>
+      ipcRenderer.invoke('books:notesList', bookId),
+    /** 新增笔记（note 缺省 '' = 纯高光） */
+    noteAdd: (
+      bookId: number,
+      n: { cfiRange: string; quote: string; note?: string }
+    ): Promise<import('../src/shared/types').BooksNote> => ipcRenderer.invoke('books:noteAdd', bookId, n),
+    /** 编辑批注内容 */
+    noteUpdate: (noteId: number, note: string): Promise<boolean> =>
+      ipcRenderer.invoke('books:noteUpdate', noteId, note),
+    /** 彻底删除单条笔记（前端二次确认后调用） */
+    noteRemove: (noteId: number): Promise<boolean> => ipcRenderer.invoke('books:noteRemove', noteId)
   },
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -445,9 +458,13 @@ const api = {
     remove: (id: number): Promise<boolean> => ipcRenderer.invoke('feeds:remove', id)
   },
   articles: {
-    /** 文章列表（feedId=null 全部；轻量行 + 预览） */
-    list: (feedId: number | null): Promise<import('../src/shared/types').ArticleSummary[]> =>
-      ipcRenderer.invoke('articles:list', feedId),
+    /** 文章列表（feedId=null 全部；view=unread 收件箱/archive 已归档；sinceDays 时间窗口；返回轻量行+窗口外剩余数） */
+    list: (
+      feedId: number | null,
+      view: import('../src/shared/types').FeedView,
+      sinceDays: number
+    ): Promise<import('../src/shared/types').FeedListView> =>
+      ipcRenderer.invoke('articles:list', feedId, view, sinceDays),
     /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
     open: (id: number): Promise<import('../src/shared/types').ArticleRecord> => ipcRenderer.invoke('articles:open', id),
     /** 全部标已读（feedId=null 全部源） */

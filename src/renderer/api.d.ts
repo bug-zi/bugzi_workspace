@@ -138,6 +138,19 @@ export type BooksImportResult =
   | { path: string; status: 'duplicate'; title: string }
   | { path: string; status: 'failed'; error: string }
 
+/** 书架划词笔记（book_notes 表，DB v24）：note 空 = 纯高光；仅 epub */
+export interface BooksNote {
+  id: number
+  book_id: number
+  /** epub.js CFI 区间定位（划词范围） */
+  cfi_range: string
+  /** 划选原文摘录 */
+  quote: string
+  /** 批注内容；空字符串 = 纯高光 */
+  note: string
+  created_at: string
+}
+
 /** 信息源源（feeds 表，DB v20）：fetch_error 空=上次拉取成功 */
 export interface FeedRecord {
   id: number
@@ -178,6 +191,16 @@ export interface ArticleSummary {
   read_at: string | null
   has_summary: boolean
   preview: string
+}
+
+/** 文章列表视图（优化建议区第28轮）：unread=收件箱（只显未读，读完即消失）；archive=已归档（已读按时间翻） */
+export type FeedView = 'unread' | 'archive'
+
+/** 文章列表返回体（优化建议区第28轮）：窗口内轻量行 + 窗口外剩余计数（「加载更早」按钮展示） */
+export interface FeedListView {
+  articles: ArticleSummary[]
+  /** 同条件（视图 + 源筛选）去时间窗口的 COUNT——窗口外还有多少篇可加载 */
+  remaining: number
 }
 
 /** 拉取结果（fetchAll 逐源返回；单源失败不阻断） */
@@ -741,8 +764,16 @@ export interface Api {
     readFile(id: number): Promise<Uint8Array>
     /** 进度保存（前端节流 3 秒 + 退出阅读 flush） */
     saveProgress(id: number, p: { cfi?: string | null; page?: number | null; percent: number }): Promise<boolean>
-    /** 彻底删除（前端二次确认后调用，连物理文件） */
+    /** 彻底删除（前端二次确认后调用，连物理文件与笔记） */
     delete(id: number): Promise<boolean>
+    /** 划词笔记列表（created_at 倒序，仅 epub 有数据） */
+    notesList(bookId: number): Promise<BooksNote[]>
+    /** 新增笔记（note 缺省 '' = 纯高光） */
+    noteAdd(bookId: number, n: { cfiRange: string; quote: string; note?: string }): Promise<BooksNote>
+    /** 编辑批注内容 */
+    noteUpdate(noteId: number, note: string): Promise<boolean>
+    /** 彻底删除单条笔记（前端二次确认后调用） */
+    noteRemove(noteId: number): Promise<boolean>
   }
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -759,8 +790,8 @@ export interface Api {
     remove(id: number): Promise<boolean>
   }
   articles: {
-    /** 文章列表（feedId=null 全部；轻量行 + 预览） */
-    list(feedId: number | null): Promise<ArticleSummary[]>
+    /** 文章列表（feedId=null 全部；view=unread 收件箱/archive 已归档；sinceDays 时间窗口；返回轻量行+窗口外剩余数） */
+    list(feedId: number | null, view: FeedView, sinceDays: number): Promise<FeedListView>
     /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
     open(id: number): Promise<ArticleRecord>
     /** 全部标已读（feedId=null 全部源） */

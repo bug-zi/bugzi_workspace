@@ -43,7 +43,17 @@ import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { beginJob, endJob, cancelJob } from './ai/jobs'
 import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
-import { importBooks, listBooks, readBookFile, saveProgress, deleteBook } from './services/books'
+import {
+  importBooks,
+  listBooks,
+  readBookFile,
+  saveProgress,
+  deleteBook,
+  listNotes,
+  addNote,
+  updateNote,
+  removeNote
+} from './services/books'
 import {
   listFeeds,
   fetchAllFeeds,
@@ -54,8 +64,10 @@ import {
   listArticles,
   openArticle,
   markAllRead,
-  summarizeArticle
+  summarizeArticle,
+  cleanupOldArticleBodies
 } from './services/feed'
+import type { FeedView } from '../src/shared/types'
 import {
   listAccounts,
   saveAccount,
@@ -730,6 +742,21 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 书架划词笔记（优化第1轮 §8.5，DB v24）：高光/批注，仅 epub ----------
+  ipcMain.handle('books:notesList', (_e, bookId: number) => listNotes(bookId))
+  ipcMain.handle(
+    'books:noteAdd',
+    (_e, bookId: number, n: { cfiRange: string; quote: string; note?: string }) => addNote(bookId, n)
+  )
+  ipcMain.handle('books:noteUpdate', (_e, noteId: number, note: string) => {
+    updateNote(noteId, note)
+    return true
+  })
+  ipcMain.handle('books:noteRemove', (_e, noteId: number) => {
+    removeNote(noteId)
+    return true
+  })
+
   // ---------- 信息源（DB v20，信息源 specs §2/§3/§4）：RSS 聚合 + AI 总结按需缓存 ----------
   /** 源列表 + 未读数（首次幂等 seed 三源，probe 真名） */
   ipcMain.handle('feeds:list', async () => listFeeds())
@@ -748,7 +775,10 @@ export function registerIpc(): void {
     return true
   })
   /** 文章列表（feedId=null 全部；轻量行 + 剥标签预览） */
-  ipcMain.handle('articles:list', (_e, feedId: number | null) => listArticles(feedId))
+  ipcMain.handle(
+    'articles:list',
+    (_e, feedId: number | null, view: FeedView, sinceDays: number) => listArticles(feedId, view, sinceDays)
+  )
   /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
   ipcMain.handle('articles:open', (_e, id: number) => openArticle(id))
   /** 全部标已读（feedId=null 全部源） */

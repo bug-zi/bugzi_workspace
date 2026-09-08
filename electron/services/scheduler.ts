@@ -1,9 +1,10 @@
-// 定时任务（主进程）：格言定时生成 + 回收站每日零点清理
+// 定时任务（主进程）：格言定时生成 + 回收站每日零点清理 + 信息源老文章正文清理
 // 规则（总需求文档第 10 条）：App 未运行时错过即跳过，不补生成
 import { getSetting, setSetting } from '../db/settings'
 import { SettingsKeys } from '../../src/shared/types'
 import { generateMottos } from '../ai/services'
 import { cleanupExpired } from './recycle'
+import { cleanupOldArticleBodies } from './feed'
 
 let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
@@ -74,6 +75,8 @@ export function scheduleMidnightCleanup(): void {
     try {
       const n = cleanupExpired()
       if (n > 0) console.log(`[scheduler] 回收站零点清理 ${n} 条`)
+      const a = cleanupOldArticleBodies()
+      if (a > 0) console.log(`[scheduler] 信息源老文章正文清理 ${a} 条`)
     } catch (e) {
       console.warn(`[scheduler] 回收站清理失败：${(e as Error).message}`)
     }
@@ -87,6 +90,8 @@ export function startSchedulers(): void {
   try {
     const n = cleanupExpired()
     if (n > 0) console.log(`[scheduler] 启动清理回收站 ${n} 条`)
+    const a = cleanupOldArticleBodies()
+    if (a > 0) console.log(`[scheduler] 启动清理信息源老文章正文 ${a} 条`)
   } catch (e) {
     console.warn(`[scheduler] 启动清理失败：${(e as Error).message}`)
   }

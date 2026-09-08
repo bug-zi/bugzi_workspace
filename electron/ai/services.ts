@@ -568,27 +568,41 @@ function pickWinds(): string[] {
   return winds
 }
 
-/** 解析 LLM 返回的灵感数组（兼容 ```json 与 {"inspirations":[...]} 对象包裹，同 parseJsonArray 容错）；form 非必填，非法落「未分类」（优化建议区任务2） */
-function parseInspirationArray(raw: string): { title: string; summary: string; form: string }[] {
+/** 灵感点子统一形状（优化建议区第28轮）：发散阶段只有 summary；自评阶段产出完整 body 文档；降级路径（pickDiverseFive）无 body 走 summary 兜底 */
+interface InspirationIdea {
+  title: string
+  summary: string
+  form: string
+  /** 完整点子文档（引子段 + 这是什么/核心机制/最小版本三小节，300~400 字）；发散候选与降级批次无此字段 */
+  body?: string
+}
+
+/** 解析 LLM 返回的灵感数组（兼容 ```json 与 {"inspirations":[...]} 对象包裹，同 parseJsonArray 容错）；form 非必填，非法落「未分类」（优化建议区任务2）；body 非必填（第28轮：仅自评阶段输出），summary/body 至少其一非空 */
+function parseInspirationArray(raw: string): InspirationIdea[] {
   const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
   let parsed: unknown = JSON.parse(text)
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
     parsed = Object.values(parsed).find((v) => Array.isArray(v)) ?? parsed
   }
   if (!Array.isArray(parsed)) throw new Error('LLM 未返回 JSON 数组')
-  const out: { title: string; summary: string; form: string }[] = []
+  const out: InspirationIdea[] = []
   for (const item of parsed) {
-    // title/summary 任一缺失或空白即跳过（specs §6.2 解析容错）；form 只做归一不设卡
+    // title 必填；summary/body 至少其一非空（第28轮：自评阶段输出 body 可无 summary）；form 只做归一不设卡
     if (
       item &&
       typeof item.title === 'string' &&
-      typeof item.summary === 'string' &&
       item.title.trim() &&
-      item.summary.trim()
+      ((typeof item.summary === 'string' && item.summary.trim()) ||
+        (typeof item.body === 'string' && item.body.trim()))
     ) {
       const rawForm = typeof item.form === 'string' ? item.form.trim() : ''
       const form = (INSPIRATION_FORMS as readonly string[]).includes(rawForm) ? rawForm : '未分类'
-      out.push({ title: item.title.trim(), summary: item.summary.trim(), form })
+      out.push({
+        title: item.title.trim(),
+        summary: typeof item.summary === 'string' ? item.summary.trim() : '',
+        form,
+        body: typeof item.body === 'string' && item.body.trim() ? item.body.trim() : undefined
+      })
     }
   }
   if (out.length === 0) throw new Error('LLM 返回数组为空或字段缺失')
@@ -679,13 +693,10 @@ function inspirationTasteProfile(): string {
  * 降级路径的代码侧配额挑选（优化建议区任务2）：自评两趟均失败时按 form 多样性贪心取 5 条——
  * 同 form ≤2、每轮优先补出现次数最少的形态；候选全为「未分类」等配额不可满足场景按原顺序取前 5 条兜底。
  */
-function pickDiverseFive(
-  candidates: { title: string; summary: string; form: string }[]
-): { title: string; summary: string; form: string }[] {
-  const picked: { title: string; summary: string; form: string }[] = []
+function pickDiverseFive(candidates: InspirationIdea[]): InspirationIdea[] {
+  const picked: InspirationIdea[] = []
   const formCount = new Map<string, number>()
-  const isPicked = (c: { title: string; summary: string; form: string }): boolean =>
-    picked.some((p) => p === c)
+  const isPicked = (c: InspirationIdea): boolean => picked.some((p) => p === c)
   while (picked.length < 5) {
     let bestIdx = -1
     for (let i = 0; i < candidates.length; i++) {
@@ -715,8 +726,9 @@ export interface GenerateInspirationsResult {
 }
 
 /**
- * 「来5条灵感」（specs §6.2；第18轮两阶段重构 + 优化建议区任务2 规范 v2）：
- * 阶段一发散——12 条粗点子（形态分散、标题实体锚点、summary 两句白话、风向注入）；阶段二自评——五维评审按批内配额挑 5 条打磨。
+ * 「来5条灵感」（specs §6.2；第18轮两阶段 + 任务2规范 v2 + 第28轮完整点子文档）：
+ * 阶段一发散——12 条粗点子（形态分散、标题实体锚点、summary 两句白话、风向注入，不变）；
+ * 阶段二自评——五维评审按批内配额挑 5 条，并为每条写完整点子文档 body（引子 + 三小节）。
  * 口味注入：手动指引置顶 + 跨模块口味画像；AI 生成条只进避免清单。
  */
 export async function generateInspirations(signal?: AbortSignal): Promise<GenerateInspirationsResult> {
@@ -768,7 +780,7 @@ ${avoidList}
       jsonMode: true,
       signal
     })
-  let candidates: { title: string; summary: string; form: string }[]
+  let candidates: InspirationIdea[]
   try {
     candidates = parseInspirationArray((await callDiverge()).content)
   } catch (e) {
@@ -777,9 +789,9 @@ ${avoidList}
     candidates = parseInspirationArray((await callDiverge()).content)
   }
 
-  // 阶段二：自评筛选（temperature 低，评审收敛；批内 form 配额 + 标题可读性维度——优化建议区任务2）
-  const reviewPrompt = (list: { title: string; summary: string; form: string }[]): string =>
-    `你是同一位创意策展人，现在进行内部审稿：从下面 ${list.length} 条候选项目灵感中选出恰好 5 条最好的。
+  // 阶段二：自评筛选 + 完整点子文档（temperature 低，评审收敛；批内 form 配额 + body 骨架——优化建议区第28轮）
+  const reviewPrompt = (list: InspirationIdea[]): string =>
+    `你是同一位创意策展人，现在进行内部审稿：从下面 ${list.length} 条候选项目灵感中选出恰好 5 条最好的，并为每条写出完整点子文档。
 
 ${tasteWithGuide}
 
@@ -790,18 +802,23 @@ ${list.map((c, i) => `${i + 1}. [${c.form}] ${c.title}：${c.summary}`).join('\n
 1. 心中按五维给每条打分（1~5）：新颖度、契合口味、具体度、兴奋度、标题可读性（不看 summary 能否猜到要做什么）——分数不用输出，只用于取舍。
 2. 批内多样性硬配额：5 条至少覆盖 3 种不同 form，同一种 form 至多 2 条。
 3. 淘汰同质（多条同类只留最好一条）、平庸、空泛、与「不想要的方向」冲突的。
-4. 恰好选出 5 条；合格不足 5 条时从剩余中挑相对好的补足，并把 summary 打磨到位。
-5. 打磨每条 summary：≤100 字，两句结构——第一句大白话说清「这是什么 + 好玩/值得在哪」，第二句以「第一步：」开头给出最小可动手动作；禁止「先…」开头，禁止文艺化压缩。
+4. 恰好选出 5 条；合格不足 5 条时从剩余中挑相对好的补足。
+5. 为选中的每条写完整点子文档 body（Markdown 文本），结构固定：
+   - 开头一段引子（不带小节标题）：一句话说清「这是什么 + 好玩/值得在哪」，像跟朋友讲一个想拉他入伙的点子。
+   - 「## 这是什么」：做出来长什么样、给谁用、核心体验，一段说清。
+   - 「## 核心机制」：这个点子最有意思的部分——怎么转、为什么有趣。
+   - 「## 最小版本」：第一步做什么；一个周末能跑起来的最小版本长什么样。
+   - 全文 300~400 字；语言平实具体，每个名词落到看得见摸得着的动作或物件，禁止文艺化压缩；「第一步」的内容写进最小版本小节，不要在引子里挤一句口号。
 
-以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","summary":"...","form":"..."}]}，inspirations 数组内恰好 5 项，title 与 form 沿用候选原文，不要输出其他任何内容。`
-  const callReview = (list: { title: string; summary: string; form: string }[]) =>
+以 JSON 对象返回，最外层是对象，格式：{"inspirations":[{"title":"...","form":"...","body":"..."}]}，inspirations 数组内恰好 5 项，title 与 form 沿用候选原文，body 为完整 Markdown 文档字符串（段落与小节标题间用空行分隔），不要输出其他任何内容。`
+  const callReview = (list: InspirationIdea[]) =>
     chatCompletion({
       messages: [{ role: 'user', content: reviewPrompt(list) }],
       temperature: 0.4,
       jsonMode: true,
       signal
     })
-  let items: { title: string; summary: string; form: string }[]
+  let items: InspirationIdea[]
   try {
     items = parseInspirationArray((await callReview(candidates)).content)
   } catch (e) {
@@ -837,8 +854,8 @@ ${list.map((c, i) => `${i + 1}. [${c.form}] ${c.title}：${c.summary}`).join('\n
     const id = Number(r.lastInsertRowid)
     const mdPath = `md/inspirations/${id}.md`
     d.prepare('UPDATE inspirations SET md_path = ? WHERE id = ?').run(mdPath, id)
-    // 正文不写标题行（优化建议区第19轮）：标题由弹窗标题区展示，正文直接从简介开始
-    mdCreate(mdPath, `${it.summary}\n`)
+    // 正文写完整点子文档（第28轮）；降级批次无 body 退单行 summary；正文不写标题行（第19轮）
+    mdCreate(mdPath, it.body ? `${it.body}\n` : `${it.summary}\n`)
     inserted++
   }
   return { generated: items.length, inserted, winds }

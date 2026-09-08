@@ -6,7 +6,14 @@ import { parseHTML } from 'linkedom'
 import { getDb, nowIso } from '../db/db'
 import { chatCompletion } from '../ai/llm'
 import { ensureNotCancelled } from '../ai/jobs'
-import type { ArticleRecord, ArticleSummary, FeedFetchResult, FeedRecord } from '../../src/shared/types'
+import type {
+  ArticleRecord,
+  ArticleSummary,
+  FeedFetchResult,
+  FeedListView,
+  FeedRecord,
+  FeedView
+} from '../../src/shared/types'
 
 /** 常规浏览器 UA（部分站点对无 UA/非常规 UA 直接 403） */
 const UA =
@@ -245,33 +252,40 @@ export function removeFeed(id: number): void {
 
 // ---------- 文章 ----------
 
-/** 文章列表（null=全部源；倒序，轻量行 + 剥标签预览） */
-export function listArticles(feedId: number | null): ArticleSummary[] {
-  const rows = (
-    feedId == null
-      ? getDb()
-          .prepare(
-            `SELECT * FROM articles ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC`
-          )
-          .all()
-      : getDb()
-          .prepare(
-            `SELECT * FROM articles WHERE feed_id = ? ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC`
-          )
-          .all(feedId)
-  ) as unknown as ArticleRecord[]
-  return rows.map((r) => ({
-    id: r.id,
-    feed_id: r.feed_id,
-    title: r.title,
-    url: r.url,
-    author: r.author,
-    published_at: r.published_at,
-    fetched_at: r.fetched_at,
-    read_at: r.read_at,
-    has_summary: !!r.summary_text,
-    preview: stripTags(r.content_fetched_html || r.content_feed_html || '').slice(0, 120)
-  }))
+/** 文章列表（优化建议区第28轮）：view 分未读收件箱/已归档，30 天窗口起按 sinceDays 加载；
+ *  remaining = 同条件窗口外计数，「加载更早」按钮展示。轻量行 + 剥标签预览只算窗口内文章。 */
+export function listArticles(feedId: number | null, view: FeedView, sinceDays: number): FeedListView {
+  const d = getDb()
+  const readClause = view === 'unread' ? 'read_at IS NULL' : 'read_at IS NOT NULL'
+  const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
+  const feedClause = feedId == null ? '' : ' AND feed_id = ?'
+  const params: (string | number)[] = [sinceIso, ...(feedId == null ? [] : [feedId])]
+  const rows = d
+    .prepare(
+      `SELECT * FROM articles WHERE ${readClause} AND COALESCE(published_at, fetched_at) >= ?${feedClause}
+       ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC`
+    )
+    .all(...params) as unknown as ArticleRecord[]
+  const remainingRow = d
+    .prepare(
+      `SELECT COUNT(*) AS c FROM articles WHERE ${readClause} AND COALESCE(published_at, fetched_at) < ?${feedClause}`
+    )
+    .get(...params) as { c: number }
+  return {
+    articles: rows.map((r) => ({
+      id: r.id,
+      feed_id: r.feed_id,
+      title: r.title,
+      url: r.url,
+      author: r.author,
+      published_at: r.published_at,
+      fetched_at: r.fetched_at,
+      read_at: r.read_at,
+      has_summary: !!r.summary_text,
+      preview: stripTags(r.content_fetched_html || r.content_feed_html || '').slice(0, 120)
+    })),
+    remaining: remainingRow.c
+  }
 }
 
 /** 打开文章：标已读 + 全量返回 + 懒抓正文（feed 全文不足且未抓过时，失败静默兜底摘要） */
@@ -353,4 +367,19 @@ export async function summarizeArticle(articleId: number, signal?: AbortSignal):
   })
   d.prepare('UPDATE articles SET summary_text = ?, summary_at = ? WHERE id = ?').run(r.content, nowIso(), articleId)
   return r.content
+}
+
+/** 老文章正文清理（优化建议区第28轮）：180 天前文章置空正文/总结（最占空间的字段），保留标题/链接/已读状态——
+ *  归档区仍可翻到、可「去原文」；被点开时 extractArticle 懒抓兜底（正文空+有 url 会重新抓网页）。
+ *  启动 + 每日零点调用（scheduler.ts），静默，返回清理条数。 */
+export function cleanupOldArticleBodies(): number {
+  const cutoff = new Date(Date.now() - 180 * 86_400_000).toISOString()
+  const r = getDb()
+    .prepare(
+      `UPDATE articles SET content_feed_html = NULL, content_fetched_html = NULL, summary_text = NULL, summary_at = NULL
+       WHERE COALESCE(published_at, fetched_at) < ?
+         AND (content_feed_html IS NOT NULL OR content_fetched_html IS NOT NULL OR summary_text IS NOT NULL)`
+    )
+    .run(cutoff)
+  return Number(r.changes)
 }

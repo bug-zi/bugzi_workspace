@@ -1,14 +1,17 @@
 // 万象库模块（万象库 specs 全量）：总览/板块页/板块管理/卡片生成/划词/笔记本
+// 260908 辩真阁并入：双板块「百科 | 辩真」（推理角同款 keep-alive 隐藏切换，验证中任务切板块不中断）
 import { useCallback, useEffect, useState } from 'react'
 import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion } from '../../renderer/api'
+import type { AiChannel } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import VerifyPanel from './VerifyPanel'
 
 export interface WikiModuleProps {
-  onOpenAi: (prefill?: string) => void
+  onOpenAi: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
   bumpAi: () => void
 }
 
@@ -32,6 +35,8 @@ function termExampleOf(sectionName: string): string {
 export default function WikiModule(props: WikiModuleProps) {
   const { toast } = useToast()
   const [view, setView] = useState<View>({ kind: 'overview' })
+  // 双板块 tab（260908 辩真阁并入；默认百科，选择不持久化——推理角同款）
+  const [tab, setTab] = useState<'wiki' | 'verify'>('wiki')
   const [sections, setSections] = useState<WikiSection[]>([])
   const [entries, setEntries] = useState<WikiEntry[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
@@ -294,13 +299,26 @@ export default function WikiModule(props: WikiModuleProps) {
       <div className="module-header">
         <span className="material-symbols-outlined">public</span>
         <span className="module-title">万象库</span>
-        {view.kind !== 'overview' && (
+        {view.kind !== 'overview' && tab === 'wiki' && (
           <button className="btn btn-ghost" onClick={() => setView({ kind: 'overview' })}>
             <span className="material-symbols-outlined">arrow_back</span>
             总览
           </button>
         )}
       </div>
+
+      {/* 双板块 tab（260908 辩真阁并入万象库）：百科 = 原有内容；辩真 = 原辩真阁面板 */}
+      <div className="recycle-tabs">
+        <button className={`recycle-tab${tab === 'wiki' ? ' active' : ''}`} onClick={() => setTab('wiki')}>
+          百科
+        </button>
+        <button className={`recycle-tab${tab === 'verify' ? ' active' : ''}`} onClick={() => setTab('verify')}>
+          辩真
+        </button>
+      </div>
+
+      {/* 百科板块（照推理角 keep-alive 模式：常驻挂载仅隐藏，切板块不打断生成中任务） */}
+      <div className={tab === 'wiki' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'wiki'}>
 
       {/* 总览页 */}
       {view.kind === 'overview' && (
@@ -893,6 +911,12 @@ export default function WikiModule(props: WikiModuleProps) {
           </div>
         </div>
       )}
+      </div>
+
+      {/* 辩真板块（原辩真阁整面板迁入，数据层零改动；onOpenAi 包装直连「辩真·核查」频道） */}
+      <div className={tab === 'verify' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'verify'}>
+        <VerifyPanel onOpenAi={(p) => props.onOpenAi(p, { channel: 'verify' })} bumpAi={props.bumpAi} />
+      </div>
     </div>
   )
 }

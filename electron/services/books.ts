@@ -1,10 +1,10 @@
-// 书架服务（书架 specs §2）：导入（复制 + epub 元数据/封面解析 + 查重回滚）/ 删除 / 读取 / 进度
+// 书架服务（书架 specs §2 + 优化第1轮 §8.5）：导入（复制 + epub 元数据/封面解析 + 查重回滚）/ 删除 / 读取 / 进度 / 划词笔记
 import { copyFileSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import { getDb, nowIso, userDataDir } from '../db/db'
-import type { BooksImportResult, BooksRecord } from '../../src/shared/types'
+import type { BooksImportResult, BooksNote, BooksRecord } from '../../src/shared/types'
 
 /** XML 解析器（OPF/container.xml；属性带 @_ 前缀） */
 const xml = new XMLParser({ ignoreAttributes: false })
@@ -210,12 +210,13 @@ export function saveProgress(
     .run(p.cfi ?? null, p.page ?? null, p.percent, nowIso(), id)
 }
 
-/** 彻底删除：删行 + 清理书籍/封面物理文件（渲染层已二次确认） */
+/** 彻底删除：删行 + 级联清笔记 + 清理书籍/封面物理文件（渲染层已二次确认） */
 export function deleteBook(id: number): void {
   const row = getDb().prepare('SELECT file_path, cover_path FROM books WHERE id = ?').get(id) as
     | { file_path: string; cover_path: string | null }
     | undefined
   getDb().prepare('DELETE FROM books WHERE id = ?').run(id)
+  getDb().prepare('DELETE FROM book_notes WHERE book_id = ?').run(id)
   if (!row) return
   for (const p of [row.file_path, row.cover_path]) {
     if (p) {
@@ -226,4 +227,36 @@ export function deleteBook(id: number): void {
       }
     }
   }
+}
+
+// ---------- 划词笔记（优化第1轮 §8.5，仅 epub） ----------
+
+/** 某书全部笔记（created_at 倒序，最新在前） */
+export function listNotes(bookId: number): BooksNote[] {
+  return getDb()
+    .prepare('SELECT * FROM book_notes WHERE book_id = ? ORDER BY created_at DESC, id DESC')
+    .all(bookId) as unknown as BooksNote[]
+}
+
+/** 新增笔记（note 缺省 '' = 纯高光；quote 截断 500 字防超长） */
+export function addNote(
+  bookId: number,
+  n: { cfiRange: string; quote: string; note?: string }
+): BooksNote {
+  const r = getDb()
+    .prepare('INSERT INTO book_notes (book_id, cfi_range, quote, note, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(bookId, n.cfiRange, n.quote.slice(0, 500), n.note ?? '', nowIso())
+  return getDb()
+    .prepare('SELECT * FROM book_notes WHERE id = ?')
+    .get(Number(r.lastInsertRowid)) as unknown as BooksNote
+}
+
+/** 编辑批注内容（渲染层笔记气泡/列表调用） */
+export function updateNote(id: number, note: string): void {
+  getDb().prepare('UPDATE book_notes SET note = ? WHERE id = ?').run(note, id)
+}
+
+/** 彻底删除单条笔记（渲染层二次确认后调用） */
+export function removeNote(id: number): void {
+  getDb().prepare('DELETE FROM book_notes WHERE id = ?').run(id)
 }

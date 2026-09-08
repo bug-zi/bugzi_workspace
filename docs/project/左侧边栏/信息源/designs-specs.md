@@ -1,12 +1,15 @@
 # 信息源 designs-specs.md
 
+>
+> 260909 增量注记（第28轮）：主列表改**收件箱模式**（只显未读、读完即消失；「已归档」视图翻已读）+ **30 天时间窗口**加载（窗口外「加载更早 30 天 · 还剩 N 篇」触达，切视图/切源窗口重置）+ **180 天老文章清正文保轻行**（启动+零点定时置空正文/总结，保留标题轻行可跳原文，点开懒抓兜底）。详见 §2.4 与 `2026-09-09-信息源收件箱与时间窗口-design.md`（实施后随计划归档 archive/）。
+
 > 本文档由 AI 基于 `docs/project/左侧边栏/信息源/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（七项决策与被否方案）见同目录 `archive/2026-09-08-信息源-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / GoConfigDialog / Toast 与主题色系、Material Symbols 用法）、个人中心/designs-specs.md（LLM 配置与 GoConfigDialog kind='llm' 惯例）、**AI 生成全局取消机制（260908 落地）**——本模块 `articles:summarize` 为 AI 通道，按「jobId 首参 + beginJob → ac.signal → finally endJob」模式接入（electron/ai/jobs.ts）。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）。
 
 ## 0. 命名与常量
 
-- `ModuleId` 增 `'feed'`；App.tsx `MODULES` 注册 `{ id: 'feed', label: '信息源', icon: 'rss_feed' }`，位置在书架与回收站之间（wenbi → bookshelf → **feed** → recycle → profile）。
+- `ModuleId` 增 `'feed'`；App.tsx `MODULES` 注册 `{ id: 'feed', label: '信息源', icon: 'rss_feed' }`，位置（260908 重排后）在藏书架与文笔坊之间（mottos → wiki → bookshelf → **feed** → wenbi → … → recycle → profile）。
 - **不新增 AiChannel**（总结走主进程后台 LLM，无边栏联动）；`CHANNEL_BY_MODULE` 不列 → 默认 'assistant'。
-- 新依赖：`fast-xml-parser`（RSS 2.0/Atom 解析，与书架模块共用）、`@mozilla/readability` + `linkedom`（主进程抓网页正文）。
+- 新依赖：`fast-xml-parser`（RSS 2.0/Atom 解析，与藏书架模块共用）、`@mozilla/readability` + `linkedom`（主进程抓网页正文）。
 - **CSP**（src/index.html:8）：`img-src` 增 `https:`（文章远程图片）；`connect-src` 不动（一切网络请求在主进程，渲染层不发外部 fetch）。
 - 「去原文」复用现有 `shell:openExternal` 通道（ipc.ts:1384，preload.ts:440 `window.api.openExternal(url)`——仅放行 http/https）。
 - 预置三源常量（seed 用）：`https://weekly.tw93.fun/rss.xml`、`https://aiznb.com/weekly/atom.xml`、`https://ursb.me/blog/feed.xml`。
@@ -43,7 +46,7 @@ CREATE TABLE articles (
 CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 ```
 
-- **版本号实况（260908 实施落定）**：设计写 v19，被并行会话海龟汤计时的 v18 顺延挤占，信息源迁移实际占 **v20**（书架占 v19）。
+- **版本号实况（260908 实施落定）**：设计写 v19，被并行会话海龟汤计时的 v18 顺延挤占，信息源迁移实际占 **v20**（藏书架占 v19）。
 - **不依赖外键级联**（稳妥起见不依赖 PRAGMA）：`feeds:remove` 显式两步 `DELETE FROM articles WHERE feed_id = ?` → `DELETE FROM feeds WHERE id = ?`。
 - `FeedRecord` / `ArticleRecord`（全量）/ `ArticleSummary`（列表轻量：无 content 两字段，摘要截 120 字）补 `src/shared/types.ts` + `src/renderer/api.d.ts`。
 
@@ -71,13 +74,18 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
   - user：文章标题 + 全文文本。
 - 成功回写 `summary_text` / `summary_at`；LLM 未配置上抛 `LlmNotConfiguredError`（渲染层转 GoConfigDialog）。
 
+### 2.4 收件箱查询与老数据清理（第28轮）
+
+- `listArticles(feedId, view, sinceDays)`：`view='unread'`（收件箱，`read_at IS NULL`）| `'archive'`（已归档，`read_at IS NOT NULL`）；时间条件 `COALESCE(published_at, fetched_at) >= now - sinceDays 天`；返回 `FeedListView { articles, remaining }`，remaining 为同条件去时间窗口 COUNT。
+- `cleanupOldArticleBodies()`：`UPDATE` 置空 180 天前文章的 `content_feed_html`/`content_fetched_html`/`summary_text`/`summary_at`（仅清理仍有内容者），保留标题/链接/已读轻行；挂 scheduler 启动 + 每日零点；老文章点开时 §2.2 懒抓兜底。
+
 ## 3. 渲染层（`src/modules/feed/`）
 
 ### 3.1 FeedModule.tsx（三段式壳 + 源列表 + 文章列表）
 
 - 布局：左窄栏源列表（约 200px）+ 右侧文章区；文章区再分列表态/阅读态（`selectedArticleId: number | null` 主栏内切换，写作台页面化同款语义）。
 - 源列表：「全部文章」聚合项（总未读数）+ 各源行（源名 + 未读数徽标 + `fetch_error` 红点 title 显错）+ `more_horiz` 菜单（重命名 / 删除）+ 底部「添加订阅」按钮（icon `add`）。
-- 文章列表：行 = 标题（未读 `font-weight` 加粗）+ 源名（全部视图时显示）+ 相对时间 + 摘要前 50 字；`ORDER BY COALESCE(published_at, fetched_at) DESC`；顶栏「刷新」（icon `refresh`，拉取中转圈）与「全部标已读」。
+- 文章列表：行 = 标题（未读 `font-weight` 加粗）+ 源名（全部视图时显示）+ 相对时间 + 摘要前 50 字；`ORDER BY COALESCE(published_at, fetched_at) DESC`；顶部「收件箱 | 已归档」切换（recycle-tab 同款，第28轮）——收件箱只显未读、读完即消失，已归档显已读；默认 30 天窗口，底部「加载更早 30 天 · 还剩 N 篇」按钮连续前移，切视图/切源重置；顶栏「刷新」（icon `refresh`，拉取中转圈）与「全部标已读」（不带时间过滤，天然清空全部未读）。
 - `useModuleActivated('feed', …)`：切回模块触发 `feeds:fetchAll` + 双列表刷新（进模块自动拉取）。
 - 添加订阅弹窗：URL input → 「验证」`feeds:probe` 显源名 → 「订阅」`feeds:add`（入库并立即拉一次）；probe 失败 toast 原因（网络/非 RSS）。
 - 删除源：ConfirmDialog「删除源及其 N 篇文章，不可恢复」→ `feeds:remove` → 回「全部文章」。
@@ -104,7 +112,7 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 | `feeds:add` | `(url: string) => Promise<FeedRecord>` | probe 结果入库 + 立即 fetchFeed 一次 |
 | `feeds:rename` | `(id, title: string) => Promise<void>` | 改源显示名 |
 | `feeds:remove` | `(id) => Promise<void>` | 两步删文章与源（§1），彻底删除 |
-| `articles:list` | `(feedId: number \| null) => Promise<ArticleSummary[]>` | null=全部；倒序，轻量字段 |
+| `articles:list` | `(feedId: number \| null, view: 'unread' \| 'archive', sinceDays: number) => Promise<FeedListView>` | null=全部；view 分收件箱/已归档；30 天窗口起 + remaining 窗口外计数 |
 | `articles:open` | `(id) => Promise<ArticleRecord>` | 全量（含正文与总结缓存）+ 标已读 + 懒抓正文（feed 全文不足且未抓过时顺手 extract，§2.2） |
 | `articles:summarize` | `(jobId: string, id) => Promise<string>` | **AI 通道**：beginJob → summarizeArticle(ac.signal) → finally endJob；未配置抛 `LLM_NOT_CONFIGURED` |
 
@@ -119,6 +127,7 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 
 - 收藏/稍后读、定时自动拉取、单篇文章手动删除、全文搜索、OPML、列表虚拟滚动（v2 备选）。
 - 不入回收站（八块与 RecycleSource 零改动）；不新增 AI 边栏频道（五频道不动）。
+- 已读不进回收站（第28轮维持现口径）；无「标未读」回退操作（第28轮明确不做）。
 
 ## 7. 验收清单
 
@@ -127,6 +136,8 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 - [ ]  拉取：进模块自动拉 + 手动刷新；单源断网/超时只标红不阻断其他源；guid 去重不重插
 - [ ]  订阅管理：添加（probe 验证 → 确认入库 → 立即拉取）；重命名；删除连文章彻底清
 - [ ]  已读：点开标已读、未读加粗、全部标已读；未读数徽标准确
+- [ ]  收件箱模式（第28轮）：读完消失、已归档可翻、加载更早触达窗口外、全部标已读清空收件箱（含窗口外未读）
+- [ ]  老数据清理（第28轮）：180 天前文章正文/总结置空、标题轻行保留、点开懒抓兜底
 - [ ]  正文两级：全文源直接渲染；摘要源自动抓正文（一次抓两用）；双失败摘要 + 去原文外链
 - [ ]  AI 总结：首次打开生成（jobId 取消接线：停止即中断、toast「已取消」、可重试）+ 缓存秒开；失败重试；LLM 未配置弹「去配置」
 - [ ]  安全：正文过 DOMPurify；远程图片显示（CSP 放行 https:）；「去原文」跳系统浏览器
