@@ -320,10 +320,10 @@ const api = {
     ): Promise<{ streak: number; correct: number; wrong: number; days: unknown[] }> =>
       ipcRenderer.invoke('wall:month', year, month),
     recordPath: (date: string): Promise<string | null> => ipcRenderer.invoke('wall:recordPath', date),
-    /** 练习场：随时出一道（pref: random|easy|medium|hard；typePref: 题型可选；不计入墙与连胜） */
+    /** 练习场：随时出一道（pref: random|easy|medium|hard；typePref: 题型可选；不计入墙与连胜；生成即入题库 todo 态） */
     practiceNew: (jobId: string, pref: string, typePref?: string): Promise<unknown> =>
       ipcRenderer.invoke('wall:practiceNew', jobId, pref, typePref),
-    /** 练习场判答（一题一命，判答即终局；无 md 落盘） */
+    /** 练习场判答（一题一命，判答即终局；回写题库终态与详情 md） */
     practiceAnswer: (
       jobId: string,
       practiceId: number,
@@ -333,18 +333,18 @@ const api = {
     /** 练习场取下一级提示（内存直取不调 LLM）；用尽返回 null */
     practiceHint: (practiceId: number): Promise<{ level: number; text: string } | null> =>
       ipcRenderer.invoke('wall:practiceHint', practiceId),
-    /** 精选题库：列表（不泄答案与论证） */
+    /** 题库：列表（不泄答案与论证） */
     bankList: (): Promise<unknown[]> => ipcRenderer.invoke('wall:bankList'),
-    /** 精选题库：打开一题（不泄答案与论证） */
+    /** 题库：打开一题（不泄答案与论证） */
     bankOpen: (bankId: number): Promise<unknown> => ipcRenderer.invoke('wall:bankOpen', bankId),
-    /** 精选题库：提交作答（终态；判答 + 写详情 md） */
+    /** 题库：提交作答（终态；判答 + 写详情 md） */
     bankAnswer: (
       jobId: string,
       bankId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }> =>
       ipcRenderer.invoke('wall:bankAnswer', jobId, bankId, myAnswer),
-    /** 精选题库：看解答（终态，不判答直接揭示；写详情 md） */
+    /** 题库：看解答（终态，不判答直接揭示；写详情 md） */
     bankReveal: (
       bankId: number
     ): Promise<{ standardAnswer: string; solution: string; mdPath: string }> =>

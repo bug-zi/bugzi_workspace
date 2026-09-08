@@ -1,6 +1,7 @@
 // 思维墙·练习场（design v2 备选提前落地 v1.1）：随时刷题、自选难度，不计入打卡墙/连胜。
-// 练习题是会话级的——主进程内存暂存（wall:practiceNew / practiceHint / practiceAnswer），
-// 不落库、不写 md；判答即终局，答案与讲解内联渲染（MdView，无复盘文档）。换题直接再点「来一道」。
+// 题目生成即入题库 wall_bank（260909 优化，todo 态）；作答态会话级暂存主进程内存
+// （wall:practiceNew / practiceHint / practiceAnswer），判答即终局并回写题库终态与详情 md；
+// 弃做的题留在题库（todo）可回补。答案与讲解内联渲染（MdView）。
 import { useState } from 'react'
 import type { WallPracticeInfo } from '../../renderer/api'
 import MdView from '../../components/MdView'
@@ -55,7 +56,7 @@ export default function PracticePanel() {
     else setFailMsg(msg)
   }
 
-  /** 来一道：出一道新题即弃当前题（旧题主进程侧随容量清理，不占资源） */
+  /** 来一道：出一道新题即弃当前题（会话态随容量清理；题库侧留 todo 可回补作答） */
   const newPuzzle = async (): Promise<void> => {
     if (newJob) return
     const jobId = crypto.randomUUID()
@@ -127,7 +128,7 @@ export default function PracticePanel() {
           <span className="material-symbols-outlined">fitness_center</span>
           <span>练习场</span>
           <span className="module-sub" style={{ marginLeft: 'auto' }}>
-            随时刷题 · 自选难度 · 不计入打卡墙与连胜
+            随时刷题 · 自选难度 · 不计入打卡墙与连胜 · 生成题自动入题库
           </span>
         </div>
         <div className="zone-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -169,7 +170,7 @@ export default function PracticePanel() {
                 取消
               </button>
             )}
-            {practice && !result && <span className="module-sub">不想做了？直接「来一道」换题</span>}
+            {practice && !result && <span className="module-sub">不想做了？换题后本题留「题库」待作答</span>}
           </div>
 
           {/* 作答卡（照每日一题 quiz-card；提示累积展示、用尽禁用） */}
@@ -179,9 +180,7 @@ export default function PracticePanel() {
                 {practice.typeZh} · {practice.diffZh}难度
                 {hintsShown.length > 0 && ` · 已用提示 ${hintsShown.length}/${practice.hintsTotal}`}
               </div>
-              <div className="quiz-question" style={{ whiteSpace: 'pre-wrap' }}>
-                {practice.puzzle}
-              </div>
+              <MdView md={practice.puzzle} className="quiz-question" />
               {hintsShown.length > 0 && (
                 <div className="rs-hints">
                   {hintsShown.map((h) => (

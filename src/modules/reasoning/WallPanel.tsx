@@ -1,9 +1,11 @@
 // 思维墙板块（推理角 specs §2）：每日一题（打开现出，无定时器）+ 打卡月历
-// + 精选题库（v1.2 双层题源第二层）+ 练习场（v1.1）。
+// + 题库（v1.2 双层题源第二层，260909 由「精选题库」改名并收入练习场生成题）
+// + 练习场（v1.1，生成题自动入题库）。
 // keep-alive 常驻挂载：出题以 active（真正进入思维墙板块）为准，挂载≠进入。
 import { useCallback, useEffect, useState } from 'react'
 import type { WallDayCell, WallMonthInfo, WallTodayInfo } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
+import MdView from '../../components/MdView'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
@@ -207,9 +209,7 @@ export default function WallPanel(props: WallPanelProps) {
                 {today.typeZh} · {today.diffZh}难度
                 {today.hintsUsed > 0 && ` · 已用提示 ${today.hintsUsed}/${today.hintsTotal}`}
               </div>
-              <div className="quiz-question" style={{ whiteSpace: 'pre-wrap' }}>
-                {today.puzzle}
-              </div>
+              <MdView md={today.puzzle} className="quiz-question" />
               {hintsShown.length > 0 && (
                 <div className="rs-hints">
                   {hintsShown.map((h) => (
@@ -379,7 +379,7 @@ export default function WallPanel(props: WallPanelProps) {
         </div>
       </div>
 
-      {/* 精选题库（v1.2）：人工策展难题，AI 只判答不出题；独立组件自带状态与弹窗 */}
+      {/* 题库（v1.2）：策展难题 + 练习场生成题，AI 只判答不出题；独立组件自带状态与弹窗 */}
       <BankPanel />
 
       {/* 练习场（v1.1）：随时刷题不计入墙；独立组件自带状态与弹窗，进入思维墙即可见 */}

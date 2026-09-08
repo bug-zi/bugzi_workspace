@@ -431,7 +431,7 @@ export interface WallMonthInfo {
   days: WallDayCell[]
 }
 
-/** 练习场当前题（wall.practiceNew 返回；会话级主进程内存暂存，不入库不写 md） */
+/** 练习场当前题（wall.practiceNew 返回；题目本体已随生成入题库 todo 态，作答态会话级内存暂存） */
 export interface WallPracticeInfo {
   id: number
   puzzle: string
@@ -440,7 +440,7 @@ export interface WallPracticeInfo {
   hintsTotal: number
 }
 
-/** 精选题库列表行（wall.bankList 返回；不泄答案与标准论证） */
+/** 题库列表行（wall.bankList 返回；不泄答案与标准论证） */
 export interface WallBankRow {
   id: number
   title: string
@@ -452,7 +452,7 @@ export interface WallBankRow {
   mdPath: string | null
 }
 
-/** 精选题库单题（wall.bankOpen 返回；不泄答案与标准论证） */
+/** 题库单题（wall.bankOpen 返回；不泄答案与标准论证） */
 export interface WallBankInfo {
   id: number
   title: string
@@ -672,13 +672,13 @@ export interface Api {
     month(year: number, month: number): Promise<WallMonthInfo>
     /** 当日详情 md 路径（无记录 null） */
     recordPath(date: string): Promise<string | null>
-    /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选 v1.6 四类；不计入墙与连胜） */
+    /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选 v1.6 四类；不计入墙与连胜；生成即入题库 todo 态） */
     practiceNew(
       jobId: string,
       pref: 'random' | 'easy' | 'medium' | 'hard',
       typePref?: 'random' | 'detective_case' | 'lateral_puzzle' | 'word_logic' | 'life_logic'
     ): Promise<WallPracticeInfo>
-    /** 练习场判答：宽松等价 + 完整讲解（无 md 落盘；一题一命，判答即终局；失效抛 PRACTICE_GONE） */
+    /** 练习场判答：宽松等价 + 完整讲解（回写题库终态与详情 md；一题一命，判答即终局；失效抛 PRACTICE_GONE） */
     practiceAnswer(
       jobId: string,
       practiceId: number,
@@ -686,17 +686,17 @@ export interface Api {
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string }>
     /** 练习场取下一级提示（内存直取不调 LLM）；用尽或题已失效返回 null */
     practiceHint(practiceId: number): Promise<{ level: number; text: string } | null>
-    /** 精选题库：列表（不泄答案与论证） */
+    /** 题库：列表（不泄答案与论证） */
     bankList(): Promise<WallBankRow[]>
-    /** 精选题库：打开一题（不泄答案与论证） */
+    /** 题库：打开一题（不泄答案与论证） */
     bankOpen(bankId: number): Promise<WallBankInfo>
-    /** 精选题库：提交作答（终态；判答 + 写详情 md；已答抛 ALREADY_ANSWERED） */
+    /** 题库：提交作答（终态；判答 + 写详情 md；已答抛 ALREADY_ANSWERED） */
     bankAnswer(
       jobId: string,
       bankId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }>
-    /** 精选题库：看解答（终态，不判答直接揭示 + 写详情 md） */
+    /** 题库：看解答（终态，不判答直接揭示 + 写详情 md） */
     bankReveal(bankId: number): Promise<{ standardAnswer: string; solution: string; mdPath: string }>
   }
   profile: {

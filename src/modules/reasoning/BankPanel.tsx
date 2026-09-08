@@ -1,5 +1,6 @@
-// 思维墙·精选题库（v1.2 双层题源第二层）：人工策展的存量难题，AI 只判答不出题。
-// 题面随 DB v13 种子入库；作答 / 看解答均为终态（todo → solved / failed，不可重做）；
+// 思维墙·题库（v1.2 双层题源第二层；260909 由「精选题库」改名并收入练习场生成题）：
+// 人工策展存量难题 + 练习场 AI 生成题同表（source 区分），AI 只判答不出题。
+// 策展题面随 DB v13 种子入库；作答 / 看解答均为终态（todo → solved / failed，不可重做）；
 // 局终写详情 md（题面/作答/判定/标准答案/讲解/标准论证），点行回看。
 import { useCallback, useEffect, useState } from 'react'
 import type { WallBankInfo, WallBankRow } from '../../renderer/api'
@@ -112,12 +113,12 @@ export default function BankPanel() {
       <div className="zone">
         <div className="zone-header" style={{ cursor: 'default' }}>
           <span className="material-symbols-outlined">workspace_premium</span>
-          <span>精选题库</span>
+          <span>题库</span>
           <span className="zone-count">
             已破 {solved} / {rows.length}
           </span>
           <span className="module-sub" style={{ marginLeft: 'auto' }}>
-            人工策展 · 存量难题 · AI 只判答不出题
+            策展难题 · 练习场生成题自动入库 · 一题一命
           </span>
         </div>
         <div className="zone-body">
@@ -149,9 +150,7 @@ export default function BankPanel() {
               <div className="quiz-meta">
                 {current.title} · {current.tag} · {current.diffZh}难度 · {current.status === 'todo' ? '作答中' : STATUS_ZH[current.status]}
               </div>
-              <div className="quiz-question" style={{ whiteSpace: 'pre-wrap' }}>
-                {current.puzzle}
-              </div>
+              <MdView md={current.puzzle} className="quiz-question" />
               {current.status === 'todo' && !reveal && (
                 <>
                   <textarea

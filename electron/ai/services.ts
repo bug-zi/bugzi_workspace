@@ -1762,6 +1762,8 @@ ${transcript || '（本局无提问）'}
 
 export interface WallPuzzleDraft {
   type: 'detective_case' | 'lateral_puzzle' | 'word_logic' | 'life_logic'
+  /** 题目短标题（练习场生成题入题库用；LLM 未给时为 undefined，调用方兜底截题面首行） */
+  title?: string
   puzzle: string
   answer: string
   /** 标准论证全文（两阶段审题与判答讲解共用，随题落库） */
@@ -1829,7 +1831,7 @@ ${avoidBlock}
 6. reasoning 为标准论证全文（可分步，200~500 字），完整闭合、无跳步
 7. puzzle 用 Markdown 纯文本（可分行、可列表），不要用表格；本次目标难度：${DIFF_ZH[difficulty]}
 
-只输出 JSON：{"puzzle":"题面全文","answer":"标准结论（简短明确）","reasoning":"标准论证全文","hints":["提示1","提示2","提示3"]}，不要输出其他任何内容。`
+只输出 JSON：{"title":"题目短标题（10 字以内，点出题材，不得剧透答案）","puzzle":"题面全文","answer":"标准结论（简短明确）","reasoning":"标准论证全文","hints":["提示1","提示2","提示3"]}，不要输出其他任何内容。`
 
   let draft = await composeWallPuzzle(type, difficulty, basePrompt, signal)
   // 阶段二：审题人独立验证，不过打回重出一次（问题清单回注 prompt），仍不过抛错
@@ -1864,6 +1866,7 @@ async function composeWallPuzzle(
     signal
   })
   const parsed = parseJsonObject(res.content)
+  const title = typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 20) : ''
   const puzzle = typeof parsed.puzzle === 'string' ? parsed.puzzle.trim() : ''
   const answer = typeof parsed.answer === 'string' ? parsed.answer.trim() : ''
   const reasoning =
@@ -1874,7 +1877,7 @@ async function composeWallPuzzle(
   if (!puzzle || !answer || !reasoning || hints.length === 0) {
     throw new Error('LLM 返回题目字段缺失')
   }
-  return { type, puzzle, answer, reasoning, hints: hints.map((h) => h.trim()), difficulty }
+  return { type, title: title || undefined, puzzle, answer, reasoning, hints: hints.map((h) => h.trim()), difficulty }
 }
 
 /**

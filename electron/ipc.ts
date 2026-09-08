@@ -38,7 +38,7 @@ import {
   localDateStr,
   WALL_TYPE_LIST
 } from './ai/services'
-import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
+import type { TurtleSoupMaterial, WallPuzzleDraft, WallPuzzleType } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { beginJob, endJob, cancelJob } from './ai/jobs'
 import { getEnabledMcps } from './ai/mcp'
@@ -1373,7 +1373,8 @@ export function registerIpc(): void {
   })
 
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
-  // 会话级暂存主进程内存（practiceBank）：不落库、不写 md，应用重启即清——练习无存档语义。
+  // 会话级作答态暂存主进程内存（practiceBank）；题目本体生成即入题库 wall_bank（todo 态，
+  // 260909 优化：练习题不再用完即弃）——练习场判答回写终态与详情 md，弃做的题留在题库可回补。
   ipcMain.handle('wall:practiceNew', async (_e, jobId: string, pref: string, typePref?: string) => {
     const ac = beginJob(jobId)
     try {
@@ -1381,17 +1382,38 @@ export function registerIpc(): void {
         pref === 'easy' || pref === 'medium' || pref === 'hard'
           ? pref
           : (['easy', 'medium', 'hard'] as const)[Math.floor(Math.random() * 3)] // 随机
-      // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落库，无历史可避）
+      // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落 wall_puzzles，无历史可避）
       const type: WallPuzzleType | undefined = WALL_TYPE_LIST.find((t) => t === typePref)
       const draft = await generateWallPuzzle(difficulty, { type: type ?? undefined }, ac.signal)
+      const typeZh = WALL_TYPE_ZH[draft.type] ?? draft.type
+      // 生成即入题库（260909）：todo 态起步，与人工策展种子同表同规则（一题一命、不进回收站）
+      const now = nowIso()
+      const r = getDb()
+        .prepare(
+          'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(
+          practiceBankTitle(draft),
+          typeZh,
+          draft.difficulty,
+          draft.puzzle,
+          draft.answer,
+          draft.reasoning,
+          `AI 练习场生成（${now.slice(0, 10)}）`,
+          'todo',
+          now,
+          now
+        )
+      const bankId = Number(r.lastInsertRowid)
       const id = ++practiceSeq
       practiceBank.set(id, {
+        bankId,
         puzzle: draft.puzzle,
         answer: draft.answer,
         reasoning: draft.reasoning,
         hints: draft.hints,
         hintsUsed: 0,
-        typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+        typeZh,
         diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty
       })
       // 长会话防累积：只留最近 10 条。Map 按插入序遍历，删最旧不伤当前题（当前题必是最新插入）
@@ -1402,7 +1424,7 @@ export function registerIpc(): void {
       return {
         id,
         puzzle: draft.puzzle,
-        typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+        typeZh,
         diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty,
         hintsTotal: draft.hints.length
       }
@@ -1427,6 +1449,28 @@ export function registerIpc(): void {
         ac.signal
       )
       practiceBank.delete(practiceId) // 一题一命：判答即终局，对错都揭示答案与讲解
+      // 回写题库终态 + 详情 md（生成即入库的行；若该题已在题库侧作答/看解答过则跳过）
+      const bankRow = getDb()
+        .prepare('SELECT * FROM wall_bank WHERE id = ?')
+        .get(entry.bankId) as
+        | {
+            id: number
+            title: string
+            tag: string
+            difficulty: string
+            puzzle_text: string
+            answer_standard: string
+            solution: string
+            source: string
+            status: string
+          }
+        | undefined
+      if (bankRow && bankRow.status === 'todo') {
+        const mdPath = writeBankMd(bankRow, a, verdict.correct, verdict.explanation)
+        getDb()
+          .prepare('UPDATE wall_bank SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?')
+          .run(verdict.correct ? 'solved' : 'failed', a, mdPath, nowIso(), entry.bankId)
+      }
       return {
         correct: verdict.correct,
         standardAnswer: entry.answer,
@@ -1445,8 +1489,9 @@ export function registerIpc(): void {
     return { level, text }
   })
 
-  // ---------- 思维墙·精选题库（v1.2 双层题源第二层）：人工策展存量难题，AI 只判答不出题 ----------
-  // 题面/答案/标准论证随 DB v13 种子迁移入库；作答/看解答均为终态（墙是真实历史，不可重做）。
+  // ---------- 思维墙·题库（v1.2 精选题库，260909 改名并收入练习场生成题）----------
+  // 人工策展存量难题 + 练习场 AI 生成题同表（source 区分）；AI 只判答不出题；
+  // 作答/看解答均为终态（墙是真实历史，不可重做）。
   ipcMain.handle('wall:bankList', () => {
     const rows = getDb()
       .prepare(
@@ -1903,9 +1948,11 @@ function wallPayload(row: unknown) {
   }
 }
 
-// ---------- 思维墙·练习场（会话级暂存；不计入墙/连胜/月历，重启即清） ----------
+// ---------- 思维墙·练习场（作答态会话级暂存；题目本体在 wall_bank，不计入墙/连胜/月历） ----------
 
 interface PracticeEntry {
+  /** 生成即入库的 wall_bank 行 id（判答回写终态与 md 用） */
+  bankId: number
   puzzle: string
   answer: string
   /** 标准论证（判答讲解注入用，会话级） */
@@ -1919,7 +1966,18 @@ interface PracticeEntry {
 const practiceBank = new Map<number, PracticeEntry>()
 let practiceSeq = 0
 
-/** 精选题库详情 md（作答终局 / 看解答共用，局终一次写入 md/wall/bank/{id}.md） */
+/** 练习题入题库标题：LLM 短标题优先，未给时兜底取题面首行（去 md 记号截 16 字） */
+function practiceBankTitle(draft: WallPuzzleDraft): string {
+  const t = (draft.title ?? '').trim()
+  if (t) return t
+  const firstLine = draft.puzzle
+    .split('\n')
+    .map((s) => s.trim())
+    .find((s) => s !== '')
+  return (firstLine ?? '练习题').replace(/[*_`>#]/g, '').slice(0, 16)
+}
+
+/** 题库详情 md（作答终局 / 看解答 / 练习场判答回写共用，局终一次写入 md/wall/bank/{id}.md） */
 function writeBankMd(
   row: {
     id: number
