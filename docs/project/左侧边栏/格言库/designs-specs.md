@@ -2,6 +2,8 @@
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/格言库/design.md` 与《总需求文档.md》第 1、5、6、8、10 条生成，是开发的直接依据。依赖：样式/designs-specs.md 的 MdDialog 组件与主题系统、回收站/designs-specs.md 的回收站接入约定。
 
+> **第23/24轮补记与第27轮（260908）编撰文风修订**：①（23轮补记）编撰条 7 类句式禁令写入生成 prompt + 代码侧 `COMPOSED_BANNED_PATTERNS` 8 正则兜底（仅编撰条，命中剔除计 patternRejected，toast「N 条因句式违规未入库」）；②（24轮补记）物理删除写 `motto_tombstones` 墓碑（DB v16），生成查重含全量墓碑，不足按 5/5 配比统一补一轮（计 tombstoneRejected/supplemented）；③（27轮）编撰条五条文风标准（凝练≤20字/断言/普遍/可诵/画面是载体）+ 三则正反例写入 prompt，代码侧 `COLLOQUIAL_PATTERNS` 口语化兜底（句尾语气词/口语虚词/句首叮嘱式/限长22字，仅编撰条，计 colloquialRejected，toast「N 条因口语化未入库」，正反行为验证 12 命中/8 放行 ALL PASS），摘录条均豁免。§3.1/§7.4 返回值口径以 `GenerateMottosResult` 八字段为准。设计文档：`docs/project/左侧边栏/格言库/2026-09-08-格言编撰文风修订-design.md`。
+
 ## 1. 数据表
 
 ```sql

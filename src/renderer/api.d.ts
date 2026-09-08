@@ -9,6 +9,7 @@ export type ModuleId =
   | 'wenbi'
   | 'bookshelf'
   | 'feed'
+  | 'ledger'
   | 'recycle'
   | 'profile'
 
@@ -187,6 +188,60 @@ export interface FeedFetchResult {
   added: number
 }
 
+// ===== 账本（DB v21）=====
+
+/** 账户（含实时余额） */
+export interface LedgerAccountView {
+  id: number
+  name: string
+  /** 期初余额（分） */
+  initial_balance_cents: number
+  sort: number
+  created_at: string
+  /** 当前余额（分）= 期初 + 未删收支滚存 */
+  balance_cents: number
+}
+
+/** 分类 */
+export interface LedgerCategory {
+  id: number
+  name: string
+  kind: 'expense' | 'income'
+  sort: number
+  created_at: string
+}
+
+/** 流水保存入参 */
+export interface LedgerTxInput {
+  date: string
+  type: 'expense' | 'income'
+  amountCents: number
+  categoryId: number | null
+  accountId: number
+  note: string
+}
+
+/** 流水列表行（显示名联表，断链为「未分类」由查询侧兜底） */
+export interface LedgerTxView {
+  id: number
+  date: string
+  type: 'expense' | 'income'
+  amount_cents: number
+  category_id: number | null
+  account_id: number
+  note: string
+  created_at: string
+  category_name: string | null
+  account_name: string | null
+}
+
+/** 月度统计 */
+export interface LedgerStats {
+  incomeCents: number
+  expenseCents: number
+  breakdown: { categoryId: number | null; name: string; cents: number; pct: number }[]
+}
+
 /** 写作台文章（wenbi_articles 表，文笔坊 specs §1）：zone 四区流转 */
 export interface WenbiArticleRecord {
   id: number
@@ -223,6 +278,9 @@ export interface RecycleRow {
     | 'drafts'
     | 'wenbi_journal'
     | 'wenbi_article'
+    | 'ledger_tx'
+    | 'ledger_account'
+    | 'ledger_category'
   item_id: number
   payload: string
   created_at: string
@@ -591,11 +649,11 @@ export interface Api {
     month(year: number, month: number): Promise<WallMonthInfo>
     /** 当日详情 md 路径（无记录 null） */
     recordPath(date: string): Promise<string | null>
-    /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选；不计入墙与连胜） */
+    /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选 v1.6 四类；不计入墙与连胜） */
     practiceNew(
       jobId: string,
       pref: 'random' | 'easy' | 'medium' | 'hard',
-      typePref?: 'random' | 'insight_invariant' | 'strategy_protocol' | 'counter_probability'
+      typePref?: 'random' | 'detective_case' | 'lateral_puzzle' | 'word_logic' | 'life_logic'
     ): Promise<WallPracticeInfo>
     /** 练习场判答：宽松等价 + 完整讲解（无 md 落盘；一题一命，判答即终局；失效抛 PRACTICE_GONE） */
     practiceAnswer(
@@ -710,6 +768,28 @@ export interface Api {
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
     summarize(jobId: string, id: number): Promise<string>
   }
+  ledger: {
+    /** 账户列表（含实时余额） */
+    listAccounts(): Promise<LedgerAccountView[]>
+    /** 新建/更新账户（名称 + 期初余额；重名抛带 message Error） */
+    saveAccount(id: number | null, name: string, initialBalanceCents: number): Promise<boolean>
+    /** 删账户（入回收站 + 级联软删名下流水；返回级联笔数） */
+    removeAccount(id: number): Promise<{ cascaded: number }>
+    /** 分类列表（未删全量，前端分支出/收入两组） */
+    listCategories(): Promise<LedgerCategory[]>
+    /** 新建/更新分类（同 kind 查重） */
+    saveCategory(id: number | null, name: string, kind: 'expense' | 'income'): Promise<boolean>
+    /** 删分类（在用流水断链为未分类；返回断链笔数） */
+    removeCategory(id: number): Promise<{ detached: number }>
+    /** 流水列表（month='YYYY-MM'；categoryId 筛选占比条下钻） */
+    listTx(month: string, categoryId: number | null): Promise<LedgerTxView[]>
+    /** 新建/更新流水（校验失败抛带 message Error） */
+    saveTx(id: number | null, tx: LedgerTxInput): Promise<boolean>
+    /** 删流水（入回收站） */
+    removeTx(id: number): Promise<boolean>
+    /** 月度统计：收支合计 + 支出分类排行 */
+    stats(month: string): Promise<LedgerStats>
+  }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
     create(content: string, source: string, status: string, tags?: string[]): Promise<number>
@@ -730,6 +810,8 @@ export interface Api {
       tombstoneRejected: number
       /** 补足轮最终入库条数（优化建议区第24轮） */
       supplemented: number
+      /** 因口语化被剔除的编撰条数（优化建议区第27轮） */
+      colloquialRejected: number
     }>
     normalize(s: string): Promise<string>
     /** 未删除区内判重（v2.0：规范化一致或包含关系） */

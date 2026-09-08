@@ -56,6 +56,19 @@ import {
   markAllRead,
   summarizeArticle
 } from './services/feed'
+import {
+  listAccounts,
+  saveAccount,
+  removeAccount,
+  listCategories,
+  saveCategory,
+  removeCategory,
+  listTx,
+  saveTx,
+  removeTx,
+  stats
+} from './services/ledger'
+import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -753,6 +766,57 @@ export function registerIpc(): void {
     }
   })
 
+  // ---------- 账本（DB v21，账本 specs §2-§4）：纯本地零 AI ----------
+  /** 账户列表（含实时余额） */
+  ipcMain.handle('ledger:accounts:list', () => listAccounts())
+  /** 新建/更新账户（名称 + 期初余额；重名抛错） */
+  ipcMain.handle(
+    'ledger:accounts:save',
+    (_e, id: number | null, name: string, initialBalanceCents: number) => {
+      saveAccount(id, name, initialBalanceCents)
+      return true
+    }
+  )
+  /** 删账户：入回收站 + 级联软删名下流水（cascaded 供确认文案/toast） */
+  ipcMain.handle('ledger:accounts:remove', (_e, id: number) => {
+    const r = removeAccount(id)
+    win()?.webContents.send('recycle:changed')
+    return r
+  })
+  /** 分类列表（未删全量，前端分支出/收入两组） */
+  ipcMain.handle('ledger:categories:list', () => listCategories())
+  /** 新建/更新分类（同 kind 查重） */
+  ipcMain.handle(
+    'ledger:categories:save',
+    (_e, id: number | null, name: string, kind: 'expense' | 'income') => {
+      saveCategory(id, name, kind)
+      return true
+    }
+  )
+  /** 删分类：在用流水断链为未分类（detached 供确认文案）+ 入回收站 */
+  ipcMain.handle('ledger:categories:remove', (_e, id: number) => {
+    const r = removeCategory(id)
+    win()?.webContents.send('recycle:changed')
+    return r
+  })
+  /** 流水列表（month='YYYY-MM'；categoryId 筛选占比条下钻） */
+  ipcMain.handle('ledger:tx:list', (_e, month: string, categoryId: number | null) =>
+    listTx(month, categoryId)
+  )
+  /** 新建/更新流水（校验失败抛带 message Error） */
+  ipcMain.handle('ledger:tx:save', (_e, id: number | null, tx: LedgerTxInput) => {
+    saveTx(id, tx)
+    return true
+  })
+  /** 删流水：入站快照冗余分类/账户显示名（specs §5） */
+  ipcMain.handle('ledger:tx:remove', (_e, id: number) => {
+    removeTx(id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+  /** 月度统计：收支合计 + 支出分类排行 */
+  ipcMain.handle('ledger:stats', (_e, month: string) => stats(month))
+
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
     getDb().prepare('SELECT * FROM verify_records WHERE deleted_at IS NULL ORDER BY id DESC').all()
@@ -1199,6 +1263,7 @@ export function registerIpc(): void {
         row.answer_standard,
         row.standard_reasoning ?? '',
         a,
+        WALL_TYPE_ZH[row.puzzle_type] ?? row.puzzle_type,
         ac.signal
       )
       const hintsTotal = parseWallHints(row.hints).length
@@ -1323,7 +1388,14 @@ export function registerIpc(): void {
       const entry = practiceBank.get(practiceId)
       if (!entry) throw new Error('PRACTICE_GONE')
       // 取消 → 判答未完成，entry 未删，可重新提交
-      const verdict = await judgeWallAnswer(entry.puzzle, entry.answer, entry.reasoning, a, ac.signal)
+      const verdict = await judgeWallAnswer(
+        entry.puzzle,
+        entry.answer,
+        entry.reasoning,
+        a,
+        entry.typeZh,
+        ac.signal
+      )
       practiceBank.delete(practiceId) // 一题一命：判答即终局，对错都揭示答案与讲解
       return {
         correct: verdict.correct,
@@ -1423,7 +1495,15 @@ export function registerIpc(): void {
         | undefined
       if (!row) throw new Error('NOT_FOUND')
       if (row.status !== 'todo') throw new Error('ALREADY_ANSWERED')
-      const verdict = await judgeWallAnswer(row.puzzle_text, row.answer_standard, row.solution, a, ac.signal)
+      // wall_bank 无 puzzle_type，tag 即题型/内容标签（v1.6 新种子 tag=四题型中文名）
+      const verdict = await judgeWallAnswer(
+        row.puzzle_text,
+        row.answer_standard,
+        row.solution,
+        a,
+        row.tag,
+        ac.signal
+      )
       const mdPath = writeBankMd(row, a, verdict.correct, verdict.explanation)
       d.prepare(
         'UPDATE wall_bank SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
@@ -1585,10 +1665,15 @@ const WALL_TYPE_ZH: Record<string, string> = {
   truth_lie: '真假话推理',
   sequence: '序列推理',
   verbal_trap: '文字逻辑陷阱',
-  // v1.2 洞察题型池（旧四类仅历史行显示用，不再生成）
+  // v1.2 洞察题型池（仅历史行显示用，不再生成）
   insight_invariant: '不变量与构造',
   strategy_protocol: '策略协议设计',
-  counter_probability: '反直觉概率'
+  counter_probability: '反直觉概率',
+  // v1.6 思维游戏题型池（现行）
+  detective_case: '侦探断案',
+  lateral_puzzle: '情境谜题',
+  word_logic: '文字谜题',
+  life_logic: '生活逻辑'
 }
 
 /** wall_puzzles.hints（JSON 列）→ string[]，容错解析 */

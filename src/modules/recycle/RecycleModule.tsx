@@ -15,13 +15,15 @@ const TABS: { key: string; label: string }[] = [
   { key: 'zhijiji', label: '致知己' },
   { key: 'reasoning', label: '推理角' },
   { key: 'drafts', label: '草稿本' },
-  { key: 'wenbi', label: '文笔坊' }
+  { key: 'wenbi', label: '文笔坊' },
+  { key: 'ledger', label: '账本' }
 ]
 
-/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组） */
+/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；账本三来源同组） */
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
   if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
+  if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   return source
 }
 
@@ -46,15 +48,24 @@ function backToOf(source: RecycleRow['source']): string {
       return '浮生记时间线'
     case 'wenbi_article':
       return '写作台构思区'
+    case 'ledger_tx':
+      return '账本月度列表'
+    case 'ledger_account':
+      return '账本账户列表'
+    case 'ledger_category':
+      return '账本分类列表'
     default:
       return '推理角对局记录列表'
   }
 }
 
-/** 来源板块小字（文笔坊页签内区分两板块） */
+/** 来源板块小字（文笔坊页签内区分两板块；账本页签内区分流水/账户/分类） */
 function srcTag(source: RecycleRow['source']): string {
   if (source === 'wenbi_journal') return '浮生记 · '
   if (source === 'wenbi_article') return '文章 · '
+  if (source === 'ledger_tx') return '流水 · '
+  if (source === 'ledger_account') return '账户 · '
+  if (source === 'ledger_category') return '分类 · '
   return ''
 }
 
@@ -81,6 +92,16 @@ function summaryOf(row: RecycleRow): string {
       return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} 的记录`
     }
     if (row.source === 'wenbi_article') return String(p.title ?? '')
+    if (row.source === 'ledger_tx') {
+      // 快照冗余显示名（账本 specs §5：入站前联表写入 payload）
+      const cents = Number(p.amount_cents ?? 0) / 100
+      const sign = p.type === 'expense' ? '-' : '+'
+      return `${String(p.date ?? '')} ${String(p.category_name ?? '未分类')} ${sign}¥${cents.toFixed(2)}`
+    }
+    if (row.source === 'ledger_account') return `账户：${String(p.name ?? '')}`
+    if (row.source === 'ledger_category') {
+      return `${p.kind === 'expense' ? '支出' : '收入'}分类：${String(p.name ?? '')}`
+    }
     return String(p.claim ?? '')
   } catch {
     return `#${row.item_id}`

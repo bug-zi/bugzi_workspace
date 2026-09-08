@@ -54,6 +54,9 @@ const api = {
           | 'drafts'
           | 'wenbi_journal'
           | 'wenbi_article'
+          | 'ledger_tx'
+          | 'ledger_account'
+          | 'ledger_category'
         item_id: number
         payload: string
         created_at: string
@@ -153,6 +156,8 @@ const api = {
       tombstoneRejected: number
       /** 补足轮最终入库条数（优化建议区第24轮） */
       supplemented: number
+      /** 因口语化被剔除的编撰条数（优化建议区第27轮） */
+      colloquialRejected: number
     }> => ipcRenderer.invoke('mottos:generate', jobId),
     normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s),
     /** 未删除区内判重（v2.0 §7.4：规范化一致或包含关系） */
@@ -449,6 +454,46 @@ const api = {
     markAllRead: (feedId: number | null): Promise<boolean> => ipcRenderer.invoke('articles:markAllRead', feedId),
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
     summarize: (jobId: string, id: number): Promise<string> => ipcRenderer.invoke('articles:summarize', jobId, id)
+  },
+  ledger: {
+    /** 账户列表（含实时余额） */
+    listAccounts: (): Promise<import('../src/shared/types').LedgerAccountView[]> =>
+      ipcRenderer.invoke('ledger:accounts:list'),
+    /** 新建/更新账户（名称 + 期初余额；重名抛带 message Error） */
+    saveAccount: (
+      id: number | null,
+      name: string,
+      initialBalanceCents: number
+    ): Promise<boolean> => ipcRenderer.invoke('ledger:accounts:save', id, name, initialBalanceCents),
+    /** 删账户（入回收站 + 级联软删名下流水；返回级联笔数） */
+    removeAccount: (id: number): Promise<{ cascaded: number }> =>
+      ipcRenderer.invoke('ledger:accounts:remove', id),
+    /** 分类列表（未删全量，前端分组） */
+    listCategories: (): Promise<import('../src/shared/types').LedgerCategory[]> =>
+      ipcRenderer.invoke('ledger:categories:list'),
+    /** 新建/更新分类（同 kind 查重） */
+    saveCategory: (
+      id: number | null,
+      name: string,
+      kind: 'expense' | 'income'
+    ): Promise<boolean> => ipcRenderer.invoke('ledger:categories:save', id, name, kind),
+    /** 删分类（在用流水断链为未分类；返回断链笔数） */
+    removeCategory: (id: number): Promise<{ detached: number }> =>
+      ipcRenderer.invoke('ledger:categories:remove', id),
+    /** 流水列表（month='YYYY-MM'；categoryId 筛选） */
+    listTx: (
+      month: string,
+      categoryId: number | null
+    ): Promise<import('../src/shared/types').LedgerTxView[]> =>
+      ipcRenderer.invoke('ledger:tx:list', month, categoryId),
+    /** 新建/更新流水（校验失败抛带 message Error） */
+    saveTx: (id: number | null, tx: import('../src/shared/types').LedgerTxInput): Promise<boolean> =>
+      ipcRenderer.invoke('ledger:tx:save', id, tx),
+    /** 删流水（入回收站） */
+    removeTx: (id: number): Promise<boolean> => ipcRenderer.invoke('ledger:tx:remove', id),
+    /** 月度统计：收支合计 + 支出分类排行 */
+    stats: (month: string): Promise<import('../src/shared/types').LedgerStats> =>
+      ipcRenderer.invoke('ledger:stats', month)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),

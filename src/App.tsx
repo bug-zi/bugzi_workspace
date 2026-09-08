@@ -13,6 +13,7 @@ import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
 import BookshelfModule from './modules/bookshelf/BookshelfModule'
 import FeedModule from './modules/feed/FeedModule'
+import LedgerModule from './modules/ledger/LedgerModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
@@ -30,6 +31,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
   { id: 'bookshelf', label: '书架', icon: 'auto_stories' },
   { id: 'feed', label: '信息源', icon: 'rss_feed' },
+  { id: 'ledger', label: '账本', icon: 'account_balance_wallet' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
   { id: 'profile', label: '个人中心', icon: 'person' }
 ]
@@ -173,6 +175,7 @@ function Shell() {
               {m.id === 'wenbi' && <WenbiModule />}
               {m.id === 'bookshelf' && <BookshelfModule />}
               {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
+              {m.id === 'ledger' && <LedgerModule />}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}
             </div>

@@ -1,0 +1,233 @@
+/* 账本（账本 specs §3.4）：全部走主题色 CSS 变量（浅樱粉/深宝蓝），禁彩亮色 */
+
+/* 卡片区 */
+.ledger-cards {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.ledger-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  min-width: 150px;
+}
+.ledger-card.asset .ledger-card-num {
+  font-size: 24px;
+}
+.ledger-card-label {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.ledger-card-num {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.ledger-month-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  margin: 0 6px;
+}
+.ledger-month-label {
+  font-size: 15px;
+  min-width: 92px;
+  text-align: center;
+  color: var(--color-text);
+}
+
+/* 占比条 */
+.ledger-breakdown {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+.ledger-bar-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 96px 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ledger-bar-row:hover {
+  background: var(--color-selection);
+}
+.ledger-bar-row.active {
+  outline: 1.5px solid var(--color-primary-deep);
+}
+.ledger-bar-row.dim .ledger-bar-fill {
+  opacity: 0.35;
+}
+.ledger-bar-name {
+  font-size: 13px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ledger-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.ledger-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 4px;
+  transition: width 0.2s;
+}
+.ledger-bar-amount {
+  font-size: 13px;
+  text-align: right;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.ledger-bar-pct {
+  font-size: 12px;
+  text-align: right;
+  color: var(--color-text-secondary);
+}
+
+/* 流水列表（按日分组） */
+.ledger-list {
+  flex: 1;
+  min-height: 0;
+}
+.ledger-day {
+  margin-bottom: 6px;
+}
+.ledger-day-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.ledger-day-sum {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.ledger-tx-row {
+  cursor: pointer;
+}
+.ledger-tx-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.ledger-filter-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 8px 10px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+/* 弹窗内：收支切换 / 宫格点选 / 金额输入 */
+.ledger-type-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.ledger-type-btn {
+  padding: 6px 18px;
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+.ledger-type-btn.active {
+  background: var(--color-primary);
+  font-weight: 600;
+}
+.ledger-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.ledger-chip {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ledger-chip.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary-deep);
+  font-weight: 600;
+}
+.ledger-account-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ledger-account-row .ledger-chip {
+  flex: 0 0 auto;
+}
+.ledger-field-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 12px 0 6px;
+}
+.ledger-amount-input {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 管理弹窗 */
+.ledger-manage-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ledger-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+.ledger-manage-row:hover {
+  background: var(--color-selection);
+}
+.ledger-manage-name {
+  font-weight: 500;
+  color: var(--color-text);
+}
+.ledger-manage-sub {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.ledger-group-title {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}

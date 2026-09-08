@@ -196,7 +196,8 @@ export default function MottosModule(props: MottosModuleProps) {
         `本次生成 ${r.generated} 条（摘录 ${r.excerptInserted} + 编撰 ${r.composedInserted}），去重后入库 ${r.inserted} 条` +
           (r.supplemented > 0 ? `，其中 ${r.supplemented} 条为补足生成` : '') +
           (r.tombstoneRejected > 0 ? `，${r.tombstoneRejected} 条与已删除格言重复已剔除` : '') +
-          (r.patternRejected > 0 ? `，${r.patternRejected} 条因句式违规未入库` : '')
+          (r.patternRejected > 0 ? `，${r.patternRejected} 条因句式违规未入库` : '') +
+          (r.colloquialRejected > 0 ? `，${r.colloquialRejected} 条因口语化未入库` : '')
       )
       await load()
     } catch (e) {

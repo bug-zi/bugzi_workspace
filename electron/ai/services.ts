@@ -349,6 +349,8 @@ export interface GenerateMottosResult {
   tombstoneRejected: number
   /** 补足轮最终入库条数（优化建议区第24轮） */
   supplemented: number
+  /** 因口语化被剔除的编撰条数（优化建议区第27轮，两轮合计） */
+  colloquialRejected: number
 }
 
 /** LLM 生成返回的格言条目（kind 缺省/非法由 mottoKind 容错推断） */
@@ -374,6 +376,16 @@ const COMPOSED_BANNED_PATTERNS: RegExp[] = [
   /唯有[^，,。；;！？\n]{1,16}[，,](?:才|方可)/, // 5b 唯有A，才/方可B
   /(?:所有|一切)[^，,。；;！？\n]{1,20}[，,]都/, // 6 所有/一切A，都B（全称断言）
   /愿你/ // 7 愿你祝福腔（中文格言出现即祝福腔，误伤率极低，从宽抓）
+]
+
+/** 口语化兜底（优化建议区第27轮）：仅约束编撰条，摘录条豁免（真实名言不受限）。
+ * 四维——句尾语气词 / 口语虚词 / 句首叮嘱式 / 编撰条限长 22 字（标点计入）。
+ * 正反行为验证 12 命中 / 8 放行 ALL PASS（2026-09-08）。 */
+const COLLOQUIAL_PATTERNS: RegExp[] = [
+  /(?:呢|吧|啊|嘛|啦|呗|了)[。！？…"」]?\s*$/, // 1 句尾语气词（句尾「了」为口语完成体；句中「了解」不误杀）
+  /其实|真的|确实|反正/, // 2 口语虚词填充
+  /^(?:你要|你应该|你们|别再|记得|赶紧|千万)/, // 3 句首叮嘱式
+  /^.{23,}/s // 4 编撰条限长
 ]
 
 /** 「来10条格言」（v2.0：5 摘录 + 5 编撰）：正式区风格样本 → LLM 生成 → 增强查重入库草稿区 */
@@ -406,7 +418,7 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
     : ''
   /** 生成 prompt：第一轮 (5, 5, '')；补足轮传缺口配比与本批已入库清单（extraAvoid） */
   const buildPrompt = (nExcerpt: number, nComposed: number, extraAvoid: string): string =>
-    `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 ${nExcerpt + nComposed} 条新格言：恰好 ${nExcerpt} 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 ${nComposed} 条由你自行编撰（kind 为 "composed"，source 标「debugzi」）。\n\n你自行编撰的 ${nComposed} 条额外遵守句式禁令——以下 7 类对仗套话一律禁止：\n1. 「不是A，而是B」「并非A，而是B」\n2. 「与其A，不如B」「与其说A，不如说B」\n3. 「真正的A，是/从来不是B」\n4. 「所谓A，不过是B」\n5. 「……，才算……」「唯有A，才B」类排他强调\n6. 「所有/一切A，都B」全称断言\n7. 「愿你……」祝福腔\n编撰条请像正式区样本那样平实、具体、有画面，靠内容本身立住，不要靠句式端着。摘录条（kind 为 "excerpt"）不受此限，如实引用原文。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}${extraAvoid ? `\n${extraAvoid}` : ''}${tombstoneSection}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 ${nExcerpt + nComposed} 项（${nExcerpt} 条 excerpt + ${nComposed} 条 composed），不要输出其他任何内容。`
+    `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的格言库正式区已有的格言（风格样本）：\n${samples}\n\n请参考这些格言的风格与题材，生成 ${nExcerpt + nComposed} 条新格言：恰好 ${nExcerpt} 条摘录自现实书籍作品的名言（kind 为 "excerpt"，source 标真实出处，如书名/作者），恰好 ${nComposed} 条由你自行编撰（kind 为 "composed"，source 标「debugzi」）。\n\n你自行编撰的 ${nComposed} 条额外遵守句式禁令——以下 7 类对仗套话一律禁止：\n1. 「不是A，而是B」「并非A，而是B」\n2. 「与其A，不如B」「与其说A，不如说B」\n3. 「真正的A，是/从来不是B」\n4. 「所谓A，不过是B」\n5. 「……，才算……」「唯有A，才B」类排他强调\n6. 「所有/一切A，都B」全称断言\n7. 「愿你……」祝福腔\n你自行编撰的 ${nComposed} 条必须写出**格言的文体**，遵守五条标准——\n1. 凝练：一句成型，一般不超 20 字，删一字则伤；\n2. 断言：是一个判断或主张，不是描述、不是叮嘱——说出来就站住，无需论证；\n3. 普遍：脱离具体情境依然成立，面向一类人生状况；\n4. 可诵：有顿挫节奏，读出声不拗口（但禁止上述 7 类空洞对仗）；\n5. 画面是载体不是目的：可以用具体意象承载抽象道理，但意象必须为断言服务。\n\n正例（编撰应有的样子）：「刀刃上没有多余的话，锋利就是全部语言。」——意象承载断言，凝练立得住。\n反例一（大白话型，不合格）：「今天的事别拖到明天，拖着拖着就忘了。」——是叮嘱不是格言，缺断言力与普遍性。\n反例二（散文型，不合格）：「秋天的落叶铺满了小路，每一步都发出细碎的声响。」——有画面但无观点，画面成了目的。\n另有代码侧口语化检测，命中即剔除：句尾语气词（呢/吧/啊/嘛/啦/呗/了）、口语虚词（其实/真的/确实/反正）、句首叮嘱（你要/你应该/别再/记得/赶紧/千万）、超过 22 字——请自检规避。摘录条（kind 为 "excerpt"）不受以上文体约束，如实引用原文。\n\n以下是我已有的全部格言清单，你生成的内容不得与清单中任何一条重复，也不得仅对清单条目作微小改写：\n${avoidList}${extraAvoid ? `\n${extraAvoid}` : ''}${tombstoneSection}\n\n以 JSON 对象返回，最外层是对象，格式：{"mottos":[{"content":"格言正文","source":"出处","kind":"excerpt 或 composed"}]}，mottos 数组内恰好 ${nExcerpt + nComposed} 项（${nExcerpt} 条 excerpt + ${nComposed} 条 composed），不要输出其他任何内容。`
   /** 单趟调用 + 解析（解析失败自动重试一次，specs §3.1；两轮共用） */
   const callAndParse = async (prompt: string): Promise<GeneratedMotto[]> => {
     const call = () =>
@@ -444,6 +456,7 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
   let excerptInserted = 0
   let composedInserted = 0
   let patternRejected = 0
+  let colloquialRejected = 0
   let tombstoneRejected = 0
   const batchInsertedContents: string[] = []
   /** 一批候选过同一套过滤（墓碑 → 库内/批内 → 句式）后入库，计数累计到外层（两轮共用） */
@@ -461,6 +474,11 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
       // 句式禁令兜底（优化建议区第23轮）：仅编撰条，命中剔除；摘录条豁免（真实名言不受限）
       if (kind === 'composed' && COMPOSED_BANNED_PATTERNS.some((p) => p.test(it.content))) {
         patternRejected++
+        continue
+      }
+      // 口语化兜底（优化建议区第27轮）：仅编撰条，命中剔除；摘录条豁免
+      if (kind === 'composed' && COLLOQUIAL_PATTERNS.some((p) => p.test(it.content))) {
+        colloquialRejected++
         continue
       }
       allNorms.push(key)
@@ -503,7 +521,8 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
     composedInserted,
     patternRejected,
     tombstoneRejected,
-    supplemented
+    supplemented,
+    colloquialRejected
   }
 }
 
@@ -1193,9 +1212,10 @@ export interface TurtleSoupDraft {
 /**
  * 「来 3 碗汤」：原创出 3 碗海龟汤入库（specs §3；海龟汤修改反馈——出题标准 v2 + 逐碗审题）。
  * 出题注入画像摘要 + 已有汤避免清单 + 近 9 碗诡计摘要清单（防跨批同构）；
- * 出题后逐碗串行审题（260907 二调：串行适配中转通道并发限制；硬伤才打回——常识门槛/
- * 逻辑硬伤/同构/极端报菜名），不合格碗携问题清单重出一次，复审无硬伤即入碗（难度偏好
- * 仍不符时按审题人重评档如实落库，不弃碗）——弃碗不弃批，3 碗全灭才抛错；
+ * 出题后逐碗串行审题（260907 二调：串行适配中转通道并发限制；260908 三调：审题升级
+ * 五步推演式，硬伤才打回——常识门槛/现实逻辑硬伤/公平性硬伤/同构/极端报菜名），不合格
+ * 碗携问题清单重出（260908 严格优先：上限 2 次），复审无硬伤即入碗（难度偏好仍不符时
+ * 按审题人重评档如实落库，不弃碗）——弃碗不弃批，3 碗全灭才抛错；
  * 落库难度以最后一次通过审题的评定为准。
  */
 export async function generateSoups(
@@ -1232,56 +1252,51 @@ export async function generateSoups(
   /** 最终入碗：落库难度一律以最后一次通过审题的评定为准 */
   const finals: { soup: TurtleSoupDraft; difficulty: 'easy' | 'medium' | 'hard' }[] = []
 
-  // 逐碗串行：审题（重试一次兜通道抖动）→ 无硬伤即入碗；有硬伤/难度不符 → 重出一次再
-  // 审，复审无硬伤即入碗（难度按重评落库）。全程串行，与全仓 LLM 调用惯例同构（中转
+  // 逐碗串行：审题（重试一次兜通道抖动）→ 无硬伤即入碗；有硬伤/难度不符 → 携当次问题
+  // 清单重出再审，重出上限 2 次（260908 逻辑严密性优化：严格优先），次数用尽仍不过 →
+  // 弃碗不弃批。难度偏好不符只触发重出、不单独弃碗：重出过的碗（attempt≥1）复审无硬伤
+  // 即按重评档如实落库（260907 二调口径）。全程串行，与全仓 LLM 调用惯例同构（中转
   // 通道有账号并发上限，并行突发会触发 429 退避共振）
+  const MAX_REDO = 2
   for (const draft of drafts) {
     ensureNotCancelled(signal)
-    const r1 = await reviewSoupSafe(
-      draft,
-      {
-        recentTricks,
-        peerTricks: drafts.filter((o) => o !== draft).map((o) => o.trick_note),
-        requiredDifficulty
-      },
-      signal
-    )
-    if (!r1) continue // 审题通道两次故障 → 弃碗
-    if (r1.qualityOk && r1.difficultyOk) {
-      finals.push({ soup: draft, difficulty: r1.ratedDifficulty })
-      continue
-    }
-    // 打回重出一次：random 模式补位档 = 审题人重评档（维持批内错开）；指定模式 = 偏好档
-    const target = requiredDifficulty ?? r1.ratedDifficulty
-    try {
-      const [redone] = await composeSoups(
-        buildSoupPrompt({
-          count: 1,
-          difficultyText: `本碗按「${DIFF_ZH[target]}」难度出题`,
-          avoidList,
-          recentTrickList,
-          redoProblems: r1.problems,
-          keepTricks: finals.map((f) => f.soup.trick_note)
-        }),
-        1,
+    let current = draft
+    let peers = drafts.filter((o) => o !== draft).map((o) => o.trick_note)
+    for (let attempt = 0; ; attempt++) {
+      const review = await reviewSoupSafe(
+        current,
+        { recentTricks, peerTricks: peers, requiredDifficulty },
         signal
       )
-      const r2 = await reviewSoupSafe(
-        redone,
-        {
-          recentTricks,
-          peerTricks: finals.map((f) => f.soup.trick_note),
-          requiredDifficulty
-        },
-        signal
-      )
-      // 复审无硬伤即入碗（难度偏好仍不符时按重评档如实落库，260907 二调不再弃碗）；
-      // 复审仍有硬伤 → 弃碗不弃批
-      if (r2?.qualityOk) finals.push({ soup: redone, difficulty: r2.ratedDifficulty })
-    } catch (e) {
-      // 取消异常已在 composeSoups/reviewSoupSafe 内先抛「已取消」，此处如实上抛不被吞
-      if (signal?.aborted) throw e
-      // 重出失败 → 弃碗
+      if (!review) break // 审题通道两次故障 → 弃碗
+      if (review.qualityOk && (review.difficultyOk || attempt >= 1)) {
+        finals.push({ soup: current, difficulty: review.ratedDifficulty })
+        break
+      }
+      if (attempt >= MAX_REDO) break // 重出次数用尽仍不过 → 弃碗不弃批
+      // 重出：random 模式补位档 = 审题人重评档（维持批内错开）；指定模式 = 偏好档；
+      // 携当次问题清单与已保留碗 trick_note（批内互避），不给原碗内容（防锚定修补）
+      const target = requiredDifficulty ?? review.ratedDifficulty
+      try {
+        const [redone] = await composeSoups(
+          buildSoupPrompt({
+            count: 1,
+            difficultyText: `本碗按「${DIFF_ZH[target]}」难度出题`,
+            avoidList,
+            recentTrickList,
+            redoProblems: review.problems,
+            keepTricks: finals.map((f) => f.soup.trick_note)
+          }),
+          1,
+          signal
+        )
+        current = redone
+        peers = finals.map((f) => f.soup.trick_note)
+      } catch (e) {
+        // 取消异常已在 composeSoups 内先抛「已取消」，此处如实上抛不被吞
+        if (signal?.aborted) throw e
+        break // 重出失败 → 弃碗
+      }
     }
   }
 
@@ -1349,7 +1364,7 @@ function parseSoupArray(raw: string, expected = 3): TurtleSoupDraft[] {
   return out
 }
 
-/** 出题 prompt v2 组装（海龟汤修改反馈：四条新标准 + 巧思总纲 + trick_note 产出 + 摘要避免清单） */
+/** 出题 prompt v3 组装（海龟汤修改反馈2：质量标准重组为叙事层 4 + 现实逻辑层 7；巧思总纲、trick_note 产出、摘要避免清单沿用 v2） */
 function buildSoupPrompt(opts: {
   count: number
   /** 难度要求句（如「三碗均按『中等』难度出题」/「本碗按『困难』难度出题」） */
@@ -1395,12 +1410,19 @@ ${redoBlock}${keepBlock}
 - hard：多层反转或强误导，关键线索全部隐性，需玩家自己想到盘问方向
 
 ## 质量标准（输出前逐碗自检，不合格的碗重写替换后再输出）
+### 叙事层
 ① 常识可解：解题所需知识限于日常生活常识；专业知识可作佐证、不得作解题钥匙。自检：一个观察敏锐的普通人，不查任何资料，只凭盘问能否逼近汤底？
-② 对手不降智：若汤涉及对手/作案者的计划，破绽必须源于其固有盲区（信息差、无法预料的变量、成本权衡），不得是与其缜密程度不相称的低级疏忽。自检：对手再谨慎一点，这个诡计还会漏吗？若「多检查一步就不会漏」，不合格。
-③ 线索自然隐藏：汤面至少 3 个可供盘问的具体事实（日期、物件、身份、动作、位置等），以平常口吻织入叙事，不得集中罗列异常；其中至多一半呈现为显性异常，至少一条是隐性线索——表面完全平常，汤底揭示后含义才反转。自检：把汤面里的异常挑出来，如果一眼能挑出全部，就不合格。
-④ 汤底逐一回收：汤面出现的每个元素在汤底都有解释，无悬空元素。
-⑤ 本格自洽：无超自然、无巧合堆砌，因果链在现实逻辑内成立。
-⑥ 可判定性：事实链封闭，玩家的判断类问题都能明确答「是 / 否 / 与汤无关」。
+② 线索自然隐藏：汤面至少 3 个可供盘问的具体事实（日期、物件、身份、动作、位置等），以平常口吻织入叙事，不得集中罗列异常；其中至多一半呈现为显性异常，至少一条是隐性线索——表面完全平常，汤底揭示后含义才反转。自检：把汤面里的异常挑出来，如果一眼能挑出全部，就不合格。
+③ 汤底逐一回收：汤面出现的每个元素在汤底都有解释，无悬空元素。
+④ 可判定性：事实链封闭，玩家的判断类问题都能明确答「是 / 否 / 与汤无关」。
+### 现实逻辑层（海龟汤修改反馈2——每条都必须在脑内实际推演一遍，不是读一遍就过）
+⑤ 诡计现实可行：核心诡计在现实的物理、化学、机械、医学、空间与声学条件下逐步执行都成立，无超自然。自检：把诡计在现实里从头到尾走一遍——有没有一个环节根本行不通或概率极低（如毒物经不起烹饪高温、单颗零件让重型机械整体脱落、室内声音被隔墙听成另一方向传来）？
+⑥ 时间线自洽：汤面与汤底的全部事件在同一条时间轴上无矛盾。自检：把所有事件标上时刻排成一条轴——有没有两个事件塞不进同一条轴，或某段过程必须压缩到不可能的时长？
+⑦ 人物行为合理：不止对手，死者与证人的每个关键动作也要有符合其身份与处境的动机。自检：分别以死者、对手、证人的视角把各自动作链走一遍——一个正常人处在他的处境会这么做吗？
+⑧ 计划可控：对手的计划不得依赖不可控的随机事件才能命中，不得靠巧合堆砌推进。自检：复盘对手的计划——有没有一步是「碰巧才会成功」？
+⑨ 汤面断言有据：汤面中警方等权威的结论必须与汤底一致且有合理依据。自检：按汤底现场，警方真的会得出汤面写的那个结论吗？现场毫无他杀证据就不得写「确认是他杀」。
+⑩ 公平可推导：汤底中玩家必须得知才能破案的关键事实（路线、机关、身份、手法），从汤面已有信息出发经「是/否」盘问都能到达。自检：对每个关键事实找一条从汤面出发的提问路径——找不到的就是出题人脑补。
+⑪ 无伪线索：汤面每个细节在汤底要有因果上必要的解释。自检：有没有「汤底解释了但没有因果必要」的刻意误导细节（如强调某电器没开）？
 
 以 JSON 对象返回，最外层是对象，格式：{"soups":[{"title":"...","surface":"...","bottom":"...","analysis":"...","trick_note":"...","difficulty":"easy|medium|hard","theme":"..."}]}，soups 数组内恰好 ${opts.count} 项，不要输出其他任何内容。`
 }
@@ -1428,11 +1450,12 @@ export interface SoupReview {
 }
 
 /**
- * 审题（半盲验证，海龟汤修改反馈；260907 二调：硬伤才打回）：审题人先只读汤面以玩家视角
- * 记录一手证据，再读汤底审查——立场「默认放行，拿不准算过」：只有硬伤才打回
- * （常识门槛 / 逻辑硬伤含回收与可判定 / 同构 / 极端报菜名）；线索自然与难度属提示性
- * 意见不打回。指定难度偏好时重评档不符由代码硬校验计入打回一次，重出后仍不符由
- * 调用方按重评档落库。调用/解析失败由 reviewSoupSafe 重试一次兜底。
+ * 审题（半盲验证 + 五步推演，海龟汤修改反馈2）：第一步只读汤面记录玩家视角一手证据；
+ * 第二步读汤底后依次做五步推演（排时间轴/物理推演/行为链/计划可控性/公平性对照），
+ * 推演过程写入返回 JSON 的 steps 数组——必须先写完推演再下结论；第三步对照硬伤清单
+ * 判定。立场分两层：现实逻辑与公平类「推演中说不通就是硬伤」；主观质量（诡计巧思/
+ * 线索隐蔽/难度手感）默认放行。steps 仅约束 LLM 推演先行，代码不解析、缺失不影响
+ * 判定。难度口径沿用 260907 二调；调用/解析失败由 reviewSoupSafe 重试一次兜底。
  */
 async function reviewSoup(
   draft: TurtleSoupDraft,
@@ -1451,17 +1474,30 @@ async function reviewSoup(
     messages: [
       {
         role: 'user',
-        content: `你是海龟汤的审题人。下面这碗汤将发给一位喜欢推理的玩家。你的立场是：**默认放行，拿不准算过**——只有发现下述具体硬伤才打回；主观层面的不完美（诡计还能更巧妙、线索还能更隐蔽）不构成打回理由。
+        content: `你是海龟汤的审题人。下面这碗汤将发给一位喜欢推理的玩家。你的立场分两层：
+- 现实逻辑与公平性：**推演没做完不许下结论**。第二步的五步推演必须逐步实际执行、把过程写下来；推演中任何一步在现实里说不通就是硬伤，打回——不适用「拿不准算过」。
+- 主观质量（诡计还能不能更巧妙、线索还能不能更隐蔽）：默认放行，可写进 steps 但不进 problems。
 
 第一步：只读【汤面】，以玩家视角记下：第一直觉的猜测方向、最想盘问的 3 个问题、一眼注意到的异常。
-第二步：读【汤底】【裁判解析】与【出题人自评】，只查以下硬伤：
-
+第二步：读【汤底】【裁判解析】与【出题人自评】，依次完成五步推演：
+1. 排时间轴：把汤面与汤底的所有事件标上时刻排成一条轴；检查有无前后矛盾、塞不进同一条轴、或必须压缩到不可能时长的环节。
+2. 物理推演：把核心诡计在现实的物理/化学/机械/医学/空间声学条件下逐步执行，逐步写实际会发生什么；检查有无根本行不通或概率极低的环节。
+3. 行为链推演：分别以死者、对手（若有）、关键证人的视角把各自动作链走一遍，为每个关键动作找动机；检查有无「一个正常人处在他的处境不会这么做」的降智动作。
+4. 计划可控性：以对手视角复盘整个计划；检查有无「碰巧才会成功」的环节、有无巧合堆砌。
+5. 公平性对照：列出汤底中玩家必须得知才能破案的关键事实，逐条给出「从汤面哪句话出发、经什么样的是/否问题可以问到」；再把汤面细节逐个反向过一遍，找出汤底解释牵强或无因果必要的伪线索；最后核对汤面中警方等权威断言与汤底证据是否相符。
+第三步：对照硬伤清单下结论，只查以下硬伤：
 1. 常识门槛：解题的关键一环必须用到需查资料的专业知识（天文、地理、法医、化学、密码学等）——普通人只凭生活常识与盘问无法逼近汤底。
-2. 逻辑硬伤：因果链断裂或自相矛盾；汤面出现的元素在汤底没有交代（悬空）；靠巧合堆砌推进；存在无法用「是/否」判定的关键事实。
-3. 同构：核心诡计思路与「近期已用思路清单」或「同批其他汤」高度相同。
-4. 极端报菜名：汤面的异常一眼即可全部挑出、且没有任何一条表面平常的线索——线索完全不加遮掩。
+2. 现实逻辑硬伤（从五步推演中来）：物理或科学上不可行 / 时间线矛盾 / 人物降智 / 对手计划靠运气或巧合 / 汤面断言无据。
+3. 公平性硬伤：关键事实从汤面不可盘问可达（出题人脑补）/ 存在伪线索。
+4. 同构：核心诡计思路与「近期已用思路清单」或「同批其他汤」高度相同。
+5. 极端报菜名：汤面的异常一眼即可全部挑出、且没有任何一条表面平常的线索。
 
-提示性意见（写进你的审查过程、但不影响 verdict）：线索呈现是否自然；难度按「easy=单层反转线索较显眼 / medium=双层反转或线索有伪装需排除误导 / hard=多层反转或强误导关键线索全隐性」独立重评。${targetLine}
+反面校准示例（真实漏网案例，帮你校准尺度）：
+- 毒药混入电饭煲保温中的米饭杀人：持续高温下毒物分解失效，且「延迟发作」与「吃到一半即死」矛盾——物理不可行 + 时间线矛盾。
+- 卸掉吊扇一颗螺母指望震动使吊扇整体坠落砸中人：机械上不成立，且坠落时机完全不可控——物理不可行 + 计划靠运气。
+- 手机藏浴室通风口放歌、邻居隔着楼板听成「歌声从地下室传来」，凶手经汤面从未提及的维修通道离开：声学不成立 + 关键事实不可达。
+
+提示性意见（写进 steps、不影响 verdict）：线索呈现是否自然；难度按「easy=单层反转线索较显眼 / medium=双层反转或线索有伪装需排除误导 / hard=多层反转或强误导关键线索全隐性」独立重评。${targetLine}
 
 【汤面】
 ${draft.surface}
@@ -1480,7 +1516,7 @@ ${ctx.recentTricks.length ? ctx.recentTricks.map((s, i) => `${i + 1}. ${s}`).joi
 ## 同批其他汤的核心思路
 ${ctx.peerTricks.length ? ctx.peerTricks.map((s) => `- ${s}`).join('\n') : '（无）'}
 
-只输出 JSON：{"verdict":"pass|fail","ratedDifficulty":"easy|medium|hard","problems":["硬伤1","硬伤2"]}。verdict 为 fail 当且仅当发现上述硬伤；problems 仅在 fail 时非空、只列硬伤不列主观意见。`
+只输出 JSON：{"steps":["玩家视角记录…","排时间轴…","物理推演…","行为链推演…","计划可控性…","公平性对照…"],"verdict":"pass|fail","ratedDifficulty":"easy|medium|hard","problems":["硬伤1","硬伤2"]}。steps 六项依次为第一步玩家视角记录与第二步五步推演的过程，必须先写完 steps 再给 verdict；verdict 为 fail 当且仅当发现上述硬伤；problems 仅在 fail 时非空、只列硬伤不列主观意见。`
       }
     ],
     temperature: 0.2,
@@ -1708,7 +1744,7 @@ ${transcript || '（本局无提问）'}
 }
 
 export interface WallPuzzleDraft {
-  type: 'insight_invariant' | 'strategy_protocol' | 'counter_probability'
+  type: 'detective_case' | 'lateral_puzzle' | 'word_logic' | 'life_logic'
   puzzle: string
   answer: string
   /** 标准论证全文（两阶段审题与判答讲解共用，随题落库） */
@@ -1719,24 +1755,27 @@ export interface WallPuzzleDraft {
 
 export type WallPuzzleType = WallPuzzleDraft['type']
 
-/** 洞察题型池（v1.2 题型池换血：旧四类模板题全部退池，真假话推理开发者明令删除） */
+/** 思维游戏题型池（v1.6 题型换血：三个数学题型全部退池，不出数学理论题） */
 export const WALL_TYPE_LIST: readonly WallPuzzleType[] = [
-  'insight_invariant',
-  'strategy_protocol',
-  'counter_probability'
+  'detective_case',
+  'lateral_puzzle',
+  'word_logic',
+  'life_logic'
 ]
 
 const WALL_TYPE_ZH_FULL: Record<WallPuzzleType, string> = {
-  insight_invariant: '不变量与构造',
-  strategy_protocol: '策略协议设计',
-  counter_probability: '反直觉概率'
+  detective_case: '侦探断案',
+  lateral_puzzle: '情境谜题',
+  word_logic: '文字谜题',
+  life_logic: '生活逻辑'
 }
 
 /**
- * 思维墙出题（specs §3，v1.2 洞察题重做）：三题型（不变量与构造 / 策略协议设计 /
- * 反直觉概率），难度按洞察链深度标定，「已知套路 + 更大计算量」的模板题明令禁止。
- * 两阶段管线：出题 → 审题（独立验证结论正确 / 唯一 / 可解 / 难度达标，不过打回重出
- * 一次，仍不过抛错不落库）。避免清单注入近期题面摘要防同构重复。出题注入画像摘要。
+ * 思维墙出题（specs §3，v1.6 思维游戏题型换血）：四题型（侦探断案 / 情境谜题 /
+ * 文字谜题 / 生活逻辑），难度按线索复杂度与误导强度标定，脑筋急转弯与模板套皮
+ * 题任何档位不合格。两阶段管线不变：出题 → 审题（独立验证结论正确 / 唯一 /
+ * 可解 / 难度达标，不过打回重出一次，仍不过抛错不落库）。避免清单注入近期题面
+ * 摘要防同构重复。出题注入画像摘要。
  */
 export async function generateWallPuzzle(
   difficulty: 'easy' | 'medium' | 'hard',
@@ -1751,24 +1790,25 @@ export async function generateWallPuzzle(
           .map((s, i) => `${i + 1}. ${s}`)
           .join('\n')}\n`
       : ''
-  const basePrompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是洞察级逻辑题命题人，为思维墙出一道「方法本身要被解题者发明出来」的推理题。核心禁令：不出「已知套路 + 更大计算量」的模板题——纯排除法、纯逻辑网格、纯逐轮剪枝、套公式即可解的题一律不合格。
+  const basePrompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}你是顶尖的思维游戏命题人，为思维墙出一道「答案需要被解题者推理出来」的思维游戏题。核心禁令：不出数学理论题（不变量/概率/数论/组合计算一律不合格），不出「套路 + 表面装饰」的题——纯真假话列表逐条排除、纯网格排除、看破套路后机械操作即解的题不合格。
 
 ## 题型（本次出：${WALL_TYPE_ZH_FULL[type]}）
-- insight_invariant 不变量与构造：可行 / 不可行 / 最值问题，答案藏在守恒量里（循环结构数、奇偶、染色、势函数、递推不变量……）；常故意放一层恰好「放行」的假守恒（如奇偶性恰好不排除）当诱饵
-- strategy_protocol 策略协议设计：要求设计一个必胜 / 必达 / 可验证的协议或策略，并论证无懈可击（必胜策略、信息编码、对抗性方案）
-- counter_probability 反直觉概率：贝叶斯 / 期望 / 组合概率，正确结论违反朴素直觉，需要严格论证而非套公式
+- detective_case 侦探断案：案情/场景叙述，破绽藏在细节里——证词矛盾、时间线不对、不可能知道的信息；任务是还原真相或指认说谎者。题面需给出多方证词与物证细节
+- lateral_puzzle 情境谜题：一个奇怪的现象问「为什么」，答案需要换掉一个默认假设才能想通；必须有唯一合理解（题面约束充分，独立推理可解，不是开放猜测）。与脑筋急转弯的区别：答案推得出来，不是靠冷知识
+- word_logic 文字谜题：字谜、密码、索引、藏字、语言逻辑、文字规律——纯语言文字游戏，零数学符号。解码方式必须可被题面唯一确定，索引无歧义
+- life_logic 生活逻辑：生活情境里的推理——谁先推断出什么、信息在人与人之间如何传递、沉默与行为本身携带信息；题面是故事不是符号。真假话列表换生活皮的模板题仍不合格
 
-## 难度标定（严格执行，难度来自洞察深度而非计算量）
-- 简单：单一洞察工具，但从题面到工具的映射不显然；找到即解，无需长计算
-- 中等：两层洞察链，或含一条「看似可行的错误路线」诱饵；可能需要自建辅助构造
-- 困难：三层以上洞察链，或需发明本题特有的不变量 / 协议；结论应当反直觉；即使解题者熟知各类工具，仍需组合创造力
+## 难度标定（严格执行，难度来自推理链深度与误导强度，而非信息量堆砌）
+- 简单：单一关键洞察，但伪装到位——题面有一个「顺理成章的错误解释」挡在真相前面，戳破它才能解题。说破就懂、没有推理过程的脑筋急转弯不合格
+- 中等：多条线索交织，至少一条主动埋设的误导；或需要连续两次转换默认假设；表面解释与真相要有真实的迷惑性竞争
+- 困难：完整推理链（需整合 4 处以上细节）+ 强误导；单条线索都不致命，合起来才能唯一锁定真相；或需要发明一个解释框架统一所有异常（侦探的「唯一假设」方法）
 ${avoidBlock}
 ## 硬性质量标准（输出前逐条自检，不合格重写）
-1. answer 结论唯一可判定（明确结论 / 数值），或方案可被验证正确性
-2. 题面自包含，无需外部知识；推演规模适度——需要大量簿记才能算完的题不合格
-3. 禁止可被「标准模板」直接套解（纯排除、纯网格、纯逐项枚举）
-4. 至少埋一条「看似可行的错误路线」，走进去会得到错误结论或死胡同
-5. hints 恰好 3 条递进：一级指方向 → 二级点工具 → 三级给关键构造，任何一级都不直接给出答案
+1. 答案唯一可判定（明确结论/指认/谜底），存在另一个同样说得通的答案即不合格
+2. 题面自包含，无需外部知识；所有关键线索都在题面中给出
+3. 禁止可被「标准模板」直接套解；禁止脑筋急转弯（答案靠冷知识而非推理）
+4. 至少一条「看似可行的错误解释/误导线索」，走进去会得到错误结论
+5. hints 恰好 3 条递进：一级指方向 → 二级点方法 → 三级给关键一步，任何一级都不直接给出答案
 6. reasoning 为标准论证全文（可分步，200~500 字），完整闭合、无跳步
 7. puzzle 用 Markdown 纯文本（可分行、可列表），不要用表格；本次目标难度：${DIFF_ZH[difficulty]}
 
@@ -1842,10 +1882,10 @@ ${draft.puzzle}
 ${draft.answer}
 
 审查四关：
-1. 结论正确：独立推演，标准结论是否真的成立
-2. 结论唯一：是否存在另一个同样成立的答案或实质不同的等价结论，使题面有歧义
+1. 结论正确：独立推演（文字题须逐字数、逐索引核对），标准结论是否真的成立
+2. 结论唯一：是否存在另一个同样说得通的答案或实质不同的等价结论；情境谜题重点审「题面约束是否足以排除其他合理解」，文字谜题重点审「解码方式是否唯一无歧义」
 3. 条件自洽完备：仅凭题面能否推出结论，有无缺条件或内部矛盾
-4. 难度达标：按「简单=单工具不显然映射 / 中等=两层链或含诱饵 / 困难=三层链或需发明构造」评估实际难度档；能否被「标准模板」直接套解（能则不合格）；难度来自洞察还是计算量（纯计算量不合格）
+4. 难度达标：按「简单=单一洞察+伪装到位（脑筋急转弯不合格）/ 中等=多线索交织或含主动误导 / 困难=完整推理链+强误导+唯一假设法」评估实际难度档；能否被「标准模板」直接套解（能则不合格）；是否数学理论题或冷知识题（是则不合格）
 
 只输出 JSON：{"verdict":"pass|fail","ratedDifficulty":"easy|medium|hard","problems":["问题1","问题2"]}。四关全过才 pass；目标难度档：${DIFF_ZH[target]}，ratedDifficulty 低于目标档即 fail；problems 仅在 fail 时非空。`
       }
@@ -1867,8 +1907,9 @@ export interface WallAnswerResult {
 }
 
 /**
- * 思维墙判答（specs §3，v1.2 验证式判答）：宽松等价——结论实质相同即算对
- * （同一数值 / 同一结论 / 同一策略或等价构造）；只给结论不论证也算对，
+ * 思维墙判答（specs §3，v1.6 题型语境版）：宽松等价——结论实质相同即算对
+ * （侦探断案=同一真相/说谎者指认；情境谜题=同一机制解释；文字谜题=同一谜底；
+ * 生活逻辑=同一结论或等价推理结果）；只给结论不论证也算对，
  * 附带论证时讲解中顺带点评但不因论证简陋判错。无论对错都输出完整讲解
  * （判定理由 + 标准论证）。判答不注入画像。
  */
@@ -1877,9 +1918,10 @@ export async function judgeWallAnswer(
   standardAnswer: string,
   standardReasoning: string,
   myAnswer: string,
+  typeZh: string,
   signal?: AbortSignal
 ): Promise<WallAnswerResult> {
-  const prompt = `你是思维墙的判答员，宽松等价判定：玩家答案与标准答案表述不同但实质等价（同一个数值 / 同一个结论 / 同一种策略或等价构造）即算对；仅当结论实质不同才判错。
+  const prompt = `你是思维墙的判答员，本题题型为「${typeZh}」。宽松等价判定：玩家答案与标准答案表述不同但实质等价（侦探断案=同一真相指认或同一说谎者指认 / 情境谜题=同一机制解释 / 文字谜题=同一谜底（谐音字酌情算对）/ 生活逻辑=同一结论或等价推理结果）即算对；仅当结论实质不同才判错。
 
 【题面】
 ${puzzleText}

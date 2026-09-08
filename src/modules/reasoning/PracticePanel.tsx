@@ -14,12 +14,13 @@ const PREFS = [
   { id: 'hard', label: '困难' }
 ] as const
 
-/** 题型自选（v1.2 洞察题型池；默认随机，单次有效不持久化） */
+/** 题型自选（v1.6 思维游戏题型池；默认随机，单次有效不持久化） */
 const TYPE_PREFS = [
   { id: 'random', label: '随机题型' },
-  { id: 'insight_invariant', label: '不变量与构造' },
-  { id: 'strategy_protocol', label: '策略协议设计' },
-  { id: 'counter_probability', label: '反直觉概率' }
+  { id: 'detective_case', label: '侦探断案' },
+  { id: 'lateral_puzzle', label: '情境谜题' },
+  { id: 'word_logic', label: '文字谜题' },
+  { id: 'life_logic', label: '生活逻辑' }
 ] as const
 
 type Pref = (typeof PREFS)[number]['id']

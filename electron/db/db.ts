@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
 import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { WALL_BANK_SEED } from './wallBankSeed'
+import { WALL_BANK_SEED, WALL_BANK_SEED_V22 } from './wallBankSeed'
 
 let db: DatabaseSync | null = null
 
@@ -584,6 +584,75 @@ function migrate(): void {
       CREATE INDEX IF NOT EXISTS idx_articles_feed ON articles(feed_id, published_at DESC);
     `)
     d.exec('PRAGMA user_version = 20')
+  }
+
+  if (version < 21) {
+    // v21：账本（账本 specs §1）——轻量记账。金额一律存「分」INTEGER（浮点累加脏数据），
+    // 余额不落字段实时聚合（期初 + 未删收支滚存）；流水日期精确到天；三表软删（deleted_at）
+    // 走回收站第九块。种子：预设四账户 + 支出/收入分类各一组。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS ledger_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        initial_balance_cents INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS ledger_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('expense','income')),
+        sort INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS ledger_tx (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('expense','income')),
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        category_id INTEGER,
+        account_id INTEGER NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_ledger_tx_date ON ledger_tx(date);
+      CREATE INDEX IF NOT EXISTS idx_ledger_tx_account ON ledger_tx(account_id);
+    `)
+    const now = nowIso()
+    const insAcc = d.prepare(
+      'INSERT INTO ledger_accounts (name, initial_balance_cents, sort, created_at) VALUES (?, 0, ?, ?)'
+    )
+    insAcc.run('现金', 0, now)
+    insAcc.run('微信', 1, now)
+    insAcc.run('支付宝', 2, now)
+    insAcc.run('银行卡', 3, now)
+    const insCat = d.prepare(
+      'INSERT INTO ledger_categories (name, kind, sort, created_at) VALUES (?, ?, ?, ?)'
+    )
+    const expenseSeeds = ['餐饮', '交通', '购物', '居住', '娱乐', '医疗', '学习', '其他']
+    const incomeSeeds = ['工资', '理财', '副业', '红包', '其他']
+    expenseSeeds.forEach((n, i) => insCat.run(n, 'expense', i, now))
+    incomeSeeds.forEach((n, i) => insCat.run(n, 'income', i + 100, now))
+    d.exec('PRAGMA user_version = 21')
+  }
+
+  if (version < 22) {
+    // v22：思维墙题型换血（v1.6）——精选题库追加 8 道思维游戏题
+    // （4 道经开发者例题校准 + 4 道待人工验证，source 标「AI 起草」），
+    // 只追加不动旧；WALL_BANK_SEED 保持 v13 原样防全新用户重复插入。
+    // （v1.3 规划的 wall_pool 题池未实施，无池存量旧题需清理——
+    // 每日一题/练习场均现场两阶段生成，换血后自动全走新 prompt。）
+    const now22 = new Date().toISOString()
+    const insBank22 = d.prepare(
+      'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    for (const b of WALL_BANK_SEED_V22) {
+      insBank22.run(b.title, b.tag, b.difficulty, b.puzzle, b.answer, b.solution, b.source, 'todo', now22, now22)
+    }
+    d.exec('PRAGMA user_version = 22')
   }
 }
 

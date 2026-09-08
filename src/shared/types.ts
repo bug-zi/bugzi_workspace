@@ -11,6 +11,7 @@ export type ModuleId =
   | 'wenbi'
   | 'bookshelf'
   | 'feed'
+  | 'ledger'
   | 'recycle'
   | 'profile'
 
@@ -312,6 +313,60 @@ export interface FeedFetchResult {
   added: number
 }
 
+// ===== 账本（DB v21，账本 specs §1）：金额一律存「分」，余额实时聚合 =====
+
+/** 账户（ledger_accounts 表；balanceCents 为实时聚合结果不落库） */
+export interface LedgerAccountView {
+  id: number
+  name: string
+  /** 期初余额（分），存量资金一次性录入 */
+  initial_balance_cents: number
+  sort: number
+  created_at: string
+  /** 当前余额（分）= 期初 + 未删收支滚存 */
+  balance_cents: number
+}
+
+/** 分类（ledger_categories 表） */
+export interface LedgerCategory {
+  id: number
+  name: string
+  kind: 'expense' | 'income'
+  sort: number
+  created_at: string
+}
+
+/** 流水保存入参（ledger:tx:save） */
+export interface LedgerTxInput {
+  date: string
+  type: 'expense' | 'income'
+  amountCents: number
+  categoryId: number | null
+  accountId: number
+  note: string
+}
+
+/** 流水列表行（ledger:tx:list；显示名联表，断链为「未分类」） */
+export interface LedgerTxView {
+  id: number
+  date: string
+  type: 'expense' | 'income'
+  amount_cents: number
+  category_id: number | null
+  account_id: number
+  note: string
+  created_at: string
+  category_name: string | null
+  account_name: string | null
+}
+
+/** 月度统计（ledger:stats）：收支合计 + 支出分类排行 */
+export interface LedgerStats {
+  incomeCents: number
+  expenseCents: number
+  breakdown: { categoryId: number | null; name: string; cents: number; pct: number }[]
+}
+
 export interface RecycleItem {
   id: number
   source:
@@ -325,6 +380,9 @@ export interface RecycleItem {
     | 'drafts'
     | 'wenbi_journal'
     | 'wenbi_article'
+    | 'ledger_tx'
+    | 'ledger_account'
+    | 'ledger_category'
   item_id: number
   payload: string
   created_at: string

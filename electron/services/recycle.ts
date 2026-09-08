@@ -15,6 +15,9 @@ export type RecycleSource =
   | 'drafts'
   | 'wenbi_journal'
   | 'wenbi_article'
+  | 'ledger_tx'
+  | 'ledger_account'
+  | 'ledger_category'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -26,7 +29,10 @@ const TABLES: Record<RecycleSource, string> = {
   reasoning_game: 'turtle_games',
   drafts: 'drafts',
   wenbi_journal: 'wenbi_journals',
-  wenbi_article: 'wenbi_articles'
+  wenbi_article: 'wenbi_articles',
+  ledger_tx: 'ledger_tx',
+  ledger_account: 'ledger_accounts',
+  ledger_category: 'ledger_categories'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -41,7 +47,10 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   reasoning_game: 'md_path',
   drafts: 'md_path',
   wenbi_journal: 'md_path',
-  wenbi_article: 'md_path'
+  wenbi_article: 'md_path',
+  ledger_tx: null,
+  ledger_account: null,
+  ledger_category: null
 }
 
 export interface RecycleRow {
@@ -130,6 +139,25 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
         )
       }
       break
+    case 'ledger_tx':
+      // 回账本月度列表：原日期/账户/分类不变（账本 specs §5）
+      d.prepare('UPDATE ledger_tx SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'ledger_category':
+      // 回分类列表：历史流水保持未分类，不自动回挂（账本 specs §5）
+      d.prepare('UPDATE ledger_categories SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'ledger_account':
+      // 回账本账户列表 + 级联拉回名下流水；有独立回收记录的在站流水不越权拉活
+      // （「先删流水后删账户」场景防幽灵恢复，账本 specs §5）
+      {
+        d.prepare('UPDATE ledger_accounts SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+        d.prepare(
+          `UPDATE ledger_tx SET deleted_at = NULL WHERE account_id = ?
+           AND id NOT IN (SELECT item_id FROM recycle_bin WHERE source = 'ledger_tx')`
+        ).run(rb.item_id)
+      }
+      break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
   return { source: rb.source, item_id: rb.item_id }
@@ -182,6 +210,14 @@ export function hardDelete(recycleId: number): void {
       | { content: string }
       | undefined
     if (row) recordMottoTombstone(row.content)
+  }
+  if (rb.source === 'ledger_account') {
+    // 删账户行 + 级联物理删名下流水；有独立回收记录的在站流水留给自己的回收流程处置
+    // （账本 specs §5，与 restore 的 NOT IN 守卫同口径）
+    d.prepare(
+      `DELETE FROM ledger_tx WHERE account_id = ?
+       AND id NOT IN (SELECT item_id FROM recycle_bin WHERE source = 'ledger_tx')`
+    ).run(rb.item_id)
   }
   // reasoning_soup 走默认路径：仅删汤行（汤无 md；对局记录是快照，不随汤删除——specs §5）
   d.prepare(`DELETE FROM ${table} WHERE id = ?`).run(rb.item_id)
