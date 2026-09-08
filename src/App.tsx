@@ -1,5 +1,5 @@
 // 三栏布局 + 模块路由（样式 specs §3）
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ThemeProvider, useAppSettings } from './theme/ThemeProvider'
 import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
@@ -11,6 +11,8 @@ import VerifyModule from './modules/verify/VerifyModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
 import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
+import BookshelfModule from './modules/bookshelf/BookshelfModule'
+import FeedModule from './modules/feed/FeedModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
@@ -26,6 +28,8 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
   { id: 'reasoning', label: '推理角', icon: 'psychology' },
   { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
+  { id: 'bookshelf', label: '书架', icon: 'auto_stories' },
+  { id: 'feed', label: '信息源', icon: 'rss_feed' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
   { id: 'profile', label: '个人中心', icon: 'person' }
 ]
@@ -50,10 +54,17 @@ export default function App() {
 
 // 模块激活自定义事件（keep-alive 下切回模块时通知其刷新数据——替代卸载重挂的隐式刷新）
 export const MODULE_ACTIVATED_EVENT = 'bugzi:module-activated'
+// 模块失活事件（优化建议区第26轮：海龟汤净用时——切走模块暂停计时）
+export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
 
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
   const [module, setModule] = useState<ModuleId>('mottos')
+  // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
+  const moduleRef = useRef<ModuleId>('mottos')
+  useEffect(() => {
+    moduleRef.current = module
+  }, [module])
   // 右缘双面板互斥展开（优化建议区第21轮）：'ai'=debugzi | 'draft'=草稿本 | null=都收起（右缘细条双图标入口）
   const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | null>('ai')
   const [aiPending, setAiPending] = useState<{ text: string; channel: AiChannel; auto: boolean } | null>(null)
@@ -85,9 +96,14 @@ function Shell() {
     void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')
   }, [])
 
-  // 切换模块 = 激活目标模块（常驻组件监听此事件自行刷新）
+  // 切换模块 = 激活目标模块（常驻组件监听此事件自行刷新/启停计时）
   const activateModule = useCallback((id: ModuleId) => {
+    const prev = moduleRef.current
     setModule(id)
+    moduleRef.current = id
+    if (prev !== id) {
+      window.dispatchEvent(new CustomEvent(MODULE_DEACTIVATED_EVENT, { detail: prev }))
+    }
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
@@ -155,6 +171,8 @@ function Shell() {
               )}
               {m.id === 'reasoning' && <ReasoningModule />}
               {m.id === 'wenbi' && <WenbiModule />}
+              {m.id === 'bookshelf' && <BookshelfModule />}
+              {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}
             </div>

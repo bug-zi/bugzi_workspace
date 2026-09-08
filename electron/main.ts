@@ -3,7 +3,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { initDb } from './db/db'
 import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
-import { registerIpc } from './ipc'
+import { registerIpc, settleTurtleTimers } from './ipc'
 import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
 import { applyDataDirAtStartup } from './services/storage'
@@ -87,3 +87,6 @@ if (!app.requestSingleInstanceLock()) {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// 海龟汤净用时退出兜底（优化建议区第26轮）：结算所有进行中局的开着计时段
+app.on('before-quit', () => settleTurtleTimers())

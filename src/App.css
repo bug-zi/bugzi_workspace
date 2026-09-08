@@ -932,6 +932,12 @@
   font-weight: 500;
   color: var(--color-primary-deep);
 }
+/* 汤底卡操作行（查看复盘 / 生成中停止，优化建议区第26轮） */
+.rs-reveal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
 /* 底部输入行（提问 / 猜汤底 / 放弃） */
 .rs-input {
   display: flex;

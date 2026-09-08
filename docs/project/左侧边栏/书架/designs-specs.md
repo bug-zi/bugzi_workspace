@@ -1,6 +1,6 @@
 # 书架 designs-specs.md
 
-> 本文档由 AI 基于 `docs/project/左侧边栏/书架/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（六项决策与被否方案）见同目录 `2026-09-08-书架-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / Toast 与主题色系约束、Material Symbols 用法）、个人中心/designs-specs.md（全局字体设置读取惯例）。**本模块零 AI**——不依赖 electron/ai/*（jobs/取消机制不涉及）、不新增 AiChannel、无画像注入。
+> 本文档由 AI 基于 `docs/project/左侧边栏/书架/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（六项决策与被否方案）见同目录 `archive/2026-09-08-书架-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / Toast 与主题色系约束、Material Symbols 用法）、个人中心/designs-specs.md（全局字体设置读取惯例）。**本模块零 AI**——不依赖 electron/ai/*（jobs/取消机制不涉及）、不新增 AiChannel、无画像注入。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）。
 
 ## 0. 命名与常量
 
@@ -9,8 +9,8 @@
 - db.ts 目录数组（db.ts:35）增两项：`'books'`、`'covers'`——`<userData>/books/<id>.<epub|pdf>`、`<userData>/covers/<id>.<jpg|png|webp>`。
 - 封面经 bzres:// 加载：`bzres://root/covers/<file>`——bzres.ts 的 `root` 命名空间本就映射 userData 任意子路径且支持 png/jpg/webp/gif/bmp mime，**零协议改动**。
 - 书籍二进制不走路由协议：`books:readFile` IPC 返回 Uint8Array，直接喂 epub.js `ePub()` / pdfjs `getDocument({ data })`（两库均接受 ArrayBuffer/TypedArray，避开 file:// 与 webSecurity 问题）。
-- 新依赖（.npmrc 已配国内镜像，裸装即可）：`@flow/epubjs`（epub.js 维护中 fork；若与 React 19/TS 配合有坑，回退原版 `epubjs` 同用法，实施时定）、`pdfjs-dist`、`fflate`（主进程解 epub zip）、`fast-xml-parser`（主进程读 OPF，与信息源模块共用）。
-- epub.js 无官方 TS 类型：类型缺失时补 `src/epubjs.d.ts` 的 `declare module` 最小声明（只声明用到的 ePub/Rendition/Book 接口），不引 @types/epubjs 全量。
+- 新依赖（.npmrc 已配国内镜像，裸装即可）：`pdfjs-dist`、`fflate`（主进程解 epub zip）、`fast-xml-parser`（主进程读 OPF，与信息源模块共用）。epub 渲染引擎落地为原版 **`epubjs` 0.3.93**（自带 TS 类型）——设计候选 `@flow/epubjs` 经查 npm 不存在，specs 预留的回退路径生效。
+- pdfjs-dist 实装 v6：`page.render({ canvas, viewport })` 直接收 canvas（v5 前的 canvasContext 为兼容保留）；worker 经 vite `?url` 资产导入（新增 `src/assets.d.ts` 的 `declare module '*?url'`）。
 
 ## 1. 数据表（DB v18）
 
@@ -31,7 +31,7 @@ CREATE TABLE books (
 );
 ```
 
-- **版本号实况**：书架占 **v18**（当前库 v17）；与信息源（v19）互不依赖，若实施顺序对调则版本号对调，实施时以 db.ts 迁移链实际落点为准（文笔坊 v17 先例）。
+- **版本号实况（260908 实施落定）**：设计写 v18，被并行会话海龟汤计时（优化建议区第26轮）占用 v18，书架迁移实际占 **v19**（信息源占 v20）。
 - `BooksRecord` 补 `src/shared/types.ts` + `src/renderer/api.d.ts` 两处（全库惯例）；file_path/cover_path 一律存相对路径。
 
 ## 2. 主进程 BookService（新建 `electron/services/books.ts`）

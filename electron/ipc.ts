@@ -43,6 +43,19 @@ import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { beginJob, endJob, cancelJob } from './ai/jobs'
 import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
+import { importBooks, listBooks, readBookFile, saveProgress, deleteBook } from './services/books'
+import {
+  listFeeds,
+  fetchAllFeeds,
+  probeFeed,
+  addFeed,
+  renameFeed,
+  removeFeed,
+  listArticles,
+  openArticle,
+  markAllRead,
+  summarizeArticle
+} from './services/feed'
 import { SettingsKeys } from '../src/shared/types'
 import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -679,6 +692,67 @@ export function registerIpc(): void {
     }
   })
 
+  // ---------- 书架（DB v19，书架 specs）：本地电子书阅读，零 AI（无 jobId 取消通道） ----------
+  ipcMain.handle('books:list', () => listBooks())
+  /** 系统对话框多选 epub/pdf（取消返回 []） */
+  ipcMain.handle('books:browse', async () => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '导入书籍',
+      filters: [{ name: '电子书', extensions: ['epub', 'pdf'] }],
+      properties: ['openFile', 'multiSelections']
+    })
+    return r.canceled ? [] : r.filePaths
+  })
+  ipcMain.handle('books:import', (_e, paths: string[], force?: boolean) => importBooks(paths, force))
+  ipcMain.handle('books:readFile', (_e, id: number) => readBookFile(id))
+  ipcMain.handle(
+    'books:saveProgress',
+    (_e, id: number, p: { cfi?: string | null; page?: number | null; percent: number }) => {
+      saveProgress(id, p)
+      return true
+    }
+  )
+  ipcMain.handle('books:delete', (_e, id: number) => {
+    deleteBook(id)
+    return true
+  })
+
+  // ---------- 信息源（DB v20，信息源 specs §2/§3/§4）：RSS 聚合 + AI 总结按需缓存 ----------
+  /** 源列表 + 未读数（首次幂等 seed 三源，probe 真名） */
+  ipcMain.handle('feeds:list', async () => listFeeds())
+  ipcMain.handle('feeds:fetchAll', async () => fetchAllFeeds())
+  /** 验证订阅并取源名（添加弹窗「验证」；失败抛带 message Error） */
+  ipcMain.handle('feeds:probe', (_e, url: string) => probeFeed(url))
+  /** 入库并立即拉一次 */
+  ipcMain.handle('feeds:add', (_e, url: string) => addFeed(url))
+  ipcMain.handle('feeds:rename', (_e, id: number, title: string) => {
+    renameFeed(id, title)
+    return true
+  })
+  /** 删源连文章（前端二次确认后调用；显式两步，不依赖外键级联） */
+  ipcMain.handle('feeds:remove', (_e, id: number) => {
+    removeFeed(id)
+    return true
+  })
+  /** 文章列表（feedId=null 全部；轻量行 + 剥标签预览） */
+  ipcMain.handle('articles:list', (_e, feedId: number | null) => listArticles(feedId))
+  /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+  ipcMain.handle('articles:open', (_e, id: number) => openArticle(id))
+  /** 全部标已读（feedId=null 全部源） */
+  ipcMain.handle('articles:markAllRead', (_e, feedId: number | null) => {
+    markAllRead(feedId)
+    return true
+  })
+  /** AI 总结（按需 + 缓存）：jobId 首参 + beginJob/endJob 全局取消接线（260908 机制） */
+  ipcMain.handle('articles:summarize', async (_e, jobId: string, id: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return await summarizeArticle(id, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
     getDb().prepare('SELECT * FROM verify_records WHERE deleted_at IS NULL ORDER BY id DESC').all()
@@ -864,9 +938,31 @@ export function registerIpc(): void {
       )
       game = { id: Number(r.lastInsertRowid) }
     }
+    // 恢复对局：清残留计时段——同 run 内恢复前必有 pause 已结算（清空幂等无害）；
+    // 跨 run 即崩溃自愈（异常退出残留的开段直接丢弃，不把离线时间计入）
+    d.prepare('UPDATE turtle_games SET segment_start_at = NULL WHERE id = ?').run(game.id)
     return turtleGamePayload(game.id)
   })
   ipcMain.handle('turtle:game', (_e, gameId: number) => turtleGamePayload(gameId))
+
+  // ---------- 海龟汤净用时记账（优化建议区第26轮）：渲染层边界事件，主进程记账 ----------
+  // start/pause 均对非 playing 局静默 no-op（终局竞态下渲染层迟到的 pause 不抛错）
+  ipcMain.handle('turtle:timerStart', (_e, gameId: number) => {
+    getDb()
+      .prepare(
+        "UPDATE turtle_games SET segment_start_at = ? WHERE id = ? AND status = 'playing' AND segment_start_at IS NULL AND deleted_at IS NULL"
+      )
+      .run(nowIso(), gameId)
+    return true
+  })
+  ipcMain.handle('turtle:timerPause', (_e, gameId: number) => {
+    const d = getDb()
+    const game = d
+      .prepare("SELECT * FROM turtle_games WHERE id = ? AND status = 'playing' AND deleted_at IS NULL")
+      .get(gameId) as TurtleGameRow | undefined
+    if (game) settleGameSegment(d, game)
+    return true
+  })
   ipcMain.handle('turtle:ask', async (_e, jobId: string, gameId: number, question: string) => {
     const ac = beginJob(jobId)
     try {
@@ -924,14 +1020,14 @@ export function registerIpc(): void {
         d.prepare('UPDATE turtle_games SET updated_at = ? WHERE id = ?').run(now, gameId)
         return { solved: false, hits: verdict.hits, misses: verdict.misses, feedback: verdict.feedback }
       }
-      const fin = await finishTurtleGame(gameId, 'solved', ac.signal)
+      const fin = await finishTurtleGame(gameId, 'solved')
       return {
         solved: true,
         bottom: fin.bottom,
         hits: verdict.hits,
         misses: verdict.misses,
         feedback: verdict.feedback,
-        mdPath: fin.mdPath
+        durationMs: fin.durationMs
       }
     } finally {
       endJob(jobId)
@@ -943,7 +1039,65 @@ export function registerIpc(): void {
       const d = getDb()
       getPlayingGame(d, gameId)
       insertTurtleMsg(d, gameId, 'system', 'notice', '我放弃了本局，揭示汤底。', nowIso())
-      return await finishTurtleGame(gameId, 'abandoned', ac.signal)
+      return await finishTurtleGame(gameId, 'abandoned')
+    } finally {
+      endJob(jobId)
+    }
+  })
+  // 复盘报告懒生成（优化建议区第26轮）：终局秒回不生成；点「查看复盘」时 ensure——
+  // 已有 md 直接返回（旧记录零变化），无则生成点评→拼 md→写盘→回填路径；失败可重试
+  ipcMain.handle('turtle:report', async (_e, jobId: string, gameId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      const d = getDb()
+      const game = d
+        .prepare('SELECT * FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
+        .get(gameId) as TurtleGameRow | undefined
+      if (!game) throw new Error('NOT_FOUND')
+      if (game.status === 'playing') throw new Error('PLAYING')
+      if (game.md_path) return game.md_path
+      const soup = d
+        .prepare('SELECT title, surface, bottom, analysis, difficulty, theme_tag FROM turtle_soups WHERE id = ?')
+        .get(game.soup_id) as
+        | {
+            title: string
+            surface: string
+            bottom: string
+            analysis: string
+            difficulty: string
+            theme_tag: string
+          }
+        | undefined
+      if (!soup) throw new Error('NOT_FOUND')
+      const msgs = d
+        .prepare('SELECT type, content FROM turtle_game_messages WHERE game_id = ? ORDER BY id ASC')
+        .all(gameId) as { type: string; content: string }[]
+      const transcript = msgs.map(fmtTurtleMsg).join('\n\n')
+      const review = await soupReview(
+        { surface: soup.surface, bottom: soup.bottom, analysis: soup.analysis },
+        transcript,
+        game.status === 'solved' ? 'solved' : 'abandoned',
+        game.question_count,
+        ac.signal
+      )
+      const lastGuess = [...msgs].reverse().find((m) => m.type === 'guess')
+      const mdPath = `md/turtle/${gameId}.md`
+      mdWrite(
+        mdPath,
+        `# ${soup.title}（${DIFFICULTY_ZH[soup.difficulty] ?? soup.difficulty} · ${soup.theme_tag}）\n\n> ${
+          game.status === 'solved' ? '已破汤' : '弃汤'
+        } · 提问 ${game.question_count} 次 · 用时 ${fmtDuration(game.duration_ms ?? 0)}\n\n## 汤面\n\n${
+          soup.surface
+        }\n\n## 汤底\n\n${soup.bottom}\n\n## 问答全程\n\n${transcript}\n${
+          lastGuess ? `\n## 最终推理\n\n${lastGuess.content}\n` : ''
+        }\n## AI 点评\n\n${review}\n`
+      )
+      d.prepare('UPDATE turtle_games SET md_path = ?, updated_at = ? WHERE id = ?').run(
+        mdPath,
+        nowIso(),
+        gameId
+      )
+      return mdPath
     } finally {
       endJob(jobId)
     }
@@ -1404,6 +1558,10 @@ interface TurtleGameRow {
   ended_at: string | null
   duration_ms: number | null
   md_path: string | null
+  /** 累计净用时 ms（v18；终局结算进 duration_ms） */
+  active_ms: number
+  /** 当前计时段起点（NULL=暂停中；SELECT * 反序列化可空） */
+  segment_start_at: string | null
 }
 
 interface WallPuzzleRow {
@@ -1453,6 +1611,29 @@ function getPlayingGame(d: ReturnType<typeof getDb>, gameId: number): TurtleGame
   return game
 }
 
+/** 结算局的未闭合计时段并返回最新累计净用时（timerPause / 终局 / 退出兜底共用） */
+function settleGameSegment(d: ReturnType<typeof getDb>, game: TurtleGameRow): number {
+  if (!game.segment_start_at) return game.active_ms
+  const add = Math.max(0, Date.now() - new Date(game.segment_start_at).getTime())
+  const total = game.active_ms + add
+  d.prepare('UPDATE turtle_games SET active_ms = ?, segment_start_at = NULL WHERE id = ?').run(
+    total,
+    game.id
+  )
+  return total
+}
+
+/** 退出兜底：结算所有进行中局的开着计时段（崩溃场景无此钩子，残留段由 openSoup 恢复时丢弃自愈） */
+export function settleTurtleTimers(): void {
+  const d = getDb()
+  const rows = d
+    .prepare(
+      "SELECT * FROM turtle_games WHERE status = 'playing' AND segment_start_at IS NOT NULL AND deleted_at IS NULL"
+    )
+    .all() as unknown as TurtleGameRow[]
+  for (const g of rows) settleGameSegment(d, g)
+}
+
 /** 汤三件套（裁判材料） */
 function turtleMaterial(d: ReturnType<typeof getDb>, soupId: number): TurtleSoupMaterial {
   const soup = d
@@ -1493,6 +1674,22 @@ function insertTurtleMsg(
   ).run(gameId, role, type, content, createdAt)
 }
 
+/** 问答流消息 → 复盘 md 行（原 finishTurtleGame 内 fmtMsg 提出，report 拼装用） */
+function fmtTurtleMsg(m: { type: string; content: string }): string {
+  switch (m.type) {
+    case 'question':
+      return `**我**：${m.content}`
+    case 'guess':
+      return `> **我猜汤底**：${m.content}`
+    case 'verdict':
+      return `> **判定**：${m.content}`
+    case 'notice':
+      return `*（${m.content}）*`
+    default:
+      return `**裁判**：${m.content}` // answer / invalid
+  }
+}
+
 /** 对局视图载荷（openSoup / game 共用）：进行中不暴露汤底（列表与后端均不含 bottom）；终局局带汤底/复盘供回看 */
 function turtleGamePayload(gameId: number) {
   const d = getDb()
@@ -1521,93 +1718,43 @@ function turtleGamePayload(gameId: number) {
     questionCount: game.question_count,
     startedAt: game.started_at,
     messages,
-    // 终局回看（问题疑惑区第8轮）：额外暴露汤底与复盘路径；进行中不暴露
+    // 终局回看（问题疑惑区第8轮）：额外暴露汤底与复盘路径；进行中暴露计时种子。
+    // 复盘 md 懒生成（优化建议区第26轮）后 md_path 可能为 null（点「查看复盘」时现场生成）
     ...(game.status === 'playing'
-      ? {}
+      ? { activeMs: game.active_ms }
       : { bottom: soup.bottom, mdPath: game.md_path, durationMs: game.duration_ms })
   }
 }
 
 /**
- * 终局链（specs §4，guess 破汤与 abandon 共用）：点评 → 拼对局记录 md（快照式，
- * 含汤面汤底全文）→ 更新局行与汤状态。点评失败降级为固定文案，不阻断终局。
+ * 终局链（优化建议区第26轮拆分）：结算计时 → 更新局行与汤状态，**秒回**。
+ * 不再调 LLM、不写 md——复盘报告（含 AI 点评）由 turtle:report 按需懒生成。
  */
 async function finishTurtleGame(
   gameId: number,
-  result: 'solved' | 'abandoned',
-  signal?: AbortSignal
-): Promise<{ bottom: string; mdPath: string }> {
+  result: 'solved' | 'abandoned'
+): Promise<{ bottom: string; durationMs: number }> {
   const d = getDb()
   const game = d
     .prepare('SELECT * FROM turtle_games WHERE id = ? AND deleted_at IS NULL')
     .get(gameId) as TurtleGameRow | undefined
   if (!game) throw new Error('NOT_FOUND')
   const soup = d
-    .prepare('SELECT title, surface, bottom, analysis, difficulty, theme_tag FROM turtle_soups WHERE id = ?')
-    .get(game.soup_id) as
-    | {
-        title: string
-        surface: string
-        bottom: string
-        analysis: string
-        difficulty: string
-        theme_tag: string
-      }
-    | undefined
+    .prepare('SELECT bottom FROM turtle_soups WHERE id = ?')
+    .get(game.soup_id) as { bottom: string } | undefined
   if (!soup) throw new Error('NOT_FOUND')
-  const msgs = d
-    .prepare('SELECT type, content FROM turtle_game_messages WHERE game_id = ? ORDER BY id ASC')
-    .all(gameId) as { type: string; content: string }[]
-  const fmtMsg = (m: { type: string; content: string }): string => {
-    switch (m.type) {
-      case 'question':
-        return `**我**：${m.content}`
-      case 'guess':
-        return `> **我猜汤底**：${m.content}`
-      case 'verdict':
-        return `> **判定**：${m.content}`
-      case 'notice':
-        return `*（${m.content}）*`
-      default:
-        return `**裁判**：${m.content}` // answer / invalid
-    }
-  }
-  const transcript = msgs.map(fmtMsg).join('\n\n')
-  let review = ''
-  try {
-    review = await soupReview(
-      { surface: soup.surface, bottom: soup.bottom, analysis: soup.analysis },
-      transcript,
-      result,
-      game.question_count,
-      signal
-    )
-  } catch {
-    review = '（AI 点评生成失败，可重读上方问答自行复盘。）'
-  }
-  const now = new Date()
-  const duration = now.getTime() - new Date(game.started_at).getTime()
-  const mdPath = `md/turtle/${gameId}.md`
-  const lastGuess = [...msgs].reverse().find((m) => m.type === 'guess')
-  mdWrite(
-    mdPath,
-    `# ${soup.title}（${DIFFICULTY_ZH[soup.difficulty] ?? soup.difficulty} · ${soup.theme_tag}）\n\n> ${
-      result === 'solved' ? '已破汤' : '弃汤'
-    } · 提问 ${game.question_count} 次 · 用时 ${fmtDuration(duration)}\n\n## 汤面\n\n${
-      soup.surface
-    }\n\n## 汤底\n\n${soup.bottom}\n\n## 问答全程\n\n${transcript}\n${
-      lastGuess ? `\n## 最终推理\n\n${lastGuess.content}\n` : ''
-    }\n## AI 点评\n\n${review}\n`
-  )
+  // 结算未闭合计时段：duration_ms = 净用时（渲染层 pause 可能晚于终局到达，以此处为准）
+  const duration = settleGameSegment(d, game)
+  const now = nowIso()
   d.prepare(
-    'UPDATE turtle_games SET status = ?, ended_at = ?, duration_ms = ?, md_path = ?, updated_at = ? WHERE id = ?'
-  ).run(result, now.toISOString(), duration, mdPath, now.toISOString(), gameId)
+    'UPDATE turtle_games SET status = ?, ended_at = ?, duration_ms = ?, updated_at = ? WHERE id = ?'
+  ).run(result, now, duration, now, gameId)
   d.prepare('UPDATE turtle_soups SET status = ?, updated_at = ? WHERE id = ?').run(
     result,
-    now.toISOString(),
+    now,
     game.soup_id
   )
-  return { bottom: soup.bottom, mdPath }
+  return { bottom: soup.bottom, durationMs: duration }
 }
 
 /** 毫秒 → m:ss / h:mm:ss（对局用时展示） */

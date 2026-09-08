@@ -9,6 +9,8 @@ export type ModuleId =
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
+  | 'bookshelf'
+  | 'feed'
   | 'recycle'
   | 'profile'
 
@@ -227,6 +229,87 @@ export interface VerifyRecord {
   md_path: string
   created_at: string
   deleted_at: string | null
+}
+
+/** 书架书籍（books 表，书架 specs §1）：文件在 books/<id>.<ext>、封面在 covers/（bzres://root/ 加载）；删除为物理删除不入回收站 */
+export interface BooksRecord {
+  id: number
+  title: string
+  author: string
+  format: 'epub' | 'pdf'
+  /** 相对 userData 路径 books/<id>.<ext> */
+  file_path: string
+  /** 相对 userData 路径 covers/<id>.<ext>；NULL=无封面（书名占位卡） */
+  cover_path: string | null
+  file_size: number
+  /** epub 进度：epub.js CFI 定位（精确恢复） */
+  progress_cfi: string | null
+  /** pdf 进度：当前页码（1 基） */
+  progress_page: number | null
+  /** 0-100 百分比（书架卡片角标） */
+  progress_percent: number
+  added_at: string
+  /** NULL=从未读过（排序用） */
+  last_read_at: string | null
+}
+
+/** 书架导入结果（书架 specs §2.1）：duplicate 由渲染层弹确认后 force 重导 */
+export type BooksImportResult =
+  | { path: string; status: 'imported'; book: BooksRecord }
+  | { path: string; status: 'duplicate'; title: string }
+  | { path: string; status: 'failed'; error: string }
+
+/** 信息源源（feeds 表，信息源 specs §1）：fetch_error 空=上次拉取成功 */
+export interface FeedRecord {
+  id: number
+  title: string
+  feed_url: string
+  site_url: string
+  last_fetched_at: string | null
+  fetch_error: string | null
+  created_at: string
+}
+
+/** 信息源文章全量（articles 表；打开阅读视图用，含正文与总结缓存） */
+export interface ArticleRecord {
+  id: number
+  feed_id: number
+  guid: string
+  title: string
+  url: string
+  author: string
+  published_at: string | null
+  fetched_at: string
+  content_feed_html: string | null
+  content_fetched_html: string | null
+  read_at: string | null
+  summary_text: string | null
+  summary_at: string | null
+}
+
+/** 信息源文章列表轻量行（不含正文大字段） */
+export interface ArticleSummary {
+  id: number
+  feed_id: number
+  title: string
+  url: string
+  author: string
+  published_at: string | null
+  fetched_at: string
+  read_at: string | null
+  /** 已有 AI 总结缓存（列表可显小标） */
+  has_summary: boolean
+  /** 正文剥标签预览（前 120 字） */
+  preview: string
+}
+
+/** 拉取结果（feeds:fetchAll 逐源返回；单源失败不阻断） */
+export interface FeedFetchResult {
+  feedId: number
+  ok: boolean
+  error?: string
+  /** 本次新入库篇数 */
+  added: number
 }
 
 export interface RecycleItem {

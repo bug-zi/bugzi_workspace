@@ -262,7 +262,7 @@ const api = {
       question: string
     ): Promise<{ type: 'yes' | 'no' | 'irrelevant' | 'invalid'; reply: string; questionCount: number }> =>
       ipcRenderer.invoke('turtle:ask', jobId, gameId, question),
-    /** 猜汤底：未破给方向反馈；破汤由主进程完成终局链（点评+存档）后返回 */
+    /** 猜汤底：未破给方向反馈；破汤终局链（净用时结算，不生成报告）后返回汤底 */
     guess: (
       jobId: string,
       gameId: number,
@@ -273,11 +273,19 @@ const api = {
       hits: string[]
       misses: string[]
       feedback: string
-      mdPath?: string
+      durationMs: number
     }> => ipcRenderer.invoke('turtle:guess', jobId, gameId, reasoning),
-    /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
-    abandon: (jobId: string, gameId: number): Promise<{ bottom: string; mdPath: string }> =>
+    /** 放弃（前端二次确认后调用）：秒回汤底（净用时结算，报告点「查看复盘」时生成） */
+    abandon: (jobId: string, gameId: number): Promise<{ bottom: string; durationMs: number }> =>
       ipcRenderer.invoke('turtle:abandon', jobId, gameId),
+    /** 净用时记账（边界事件）：start=开段（幂等） / pause=结算当前段 */
+    timerStart: (gameId: number): Promise<boolean> =>
+      ipcRenderer.invoke('turtle:timerStart', gameId),
+    timerPause: (gameId: number): Promise<boolean> =>
+      ipcRenderer.invoke('turtle:timerPause', gameId),
+    /** 复盘报告 ensure：已有 md 直接返回路径，无则现场生成（含 AI 点评，可取消/失败可重试） */
+    report: (jobId: string, gameId: number): Promise<string> =>
+      ipcRenderer.invoke('turtle:report', jobId, gameId),
     /** 汤入回收站（进行中的汤抛 PLAYING） */
     discardSoup: (soupId: number): Promise<boolean> =>
       ipcRenderer.invoke('turtle:discardSoup', soupId),
@@ -396,6 +404,51 @@ const api = {
       action: 'draft' | 'continue' | 'polish' | 'rewrite',
       selection?: string
     ): Promise<string> => ipcRenderer.invoke('wenbi:copilot', jobId, id, action, selection)
+  },
+  books: {
+    /** 书架列表（最近阅读在前） */
+    list: (): Promise<import('../src/shared/types').BooksRecord[]> => ipcRenderer.invoke('books:list'),
+    /** 系统对话框多选 epub/pdf（取消返回 []） */
+    browse: (): Promise<string[]> => ipcRenderer.invoke('books:browse'),
+    /** 导入（复制+解析元数据；duplicate 项由渲染层弹确认后携 force 重导） */
+    import: (paths: string[], force?: boolean): Promise<import('../src/shared/types').BooksImportResult[]> =>
+      ipcRenderer.invoke('books:import', paths, force),
+    /** 书籍二进制（喂 epub.js / pdfjs 渲染引擎） */
+    readFile: (id: number): Promise<Uint8Array> => ipcRenderer.invoke('books:readFile', id),
+    /** 进度保存（渲染层节流 3 秒 + 退出阅读 flush） */
+    saveProgress: (
+      id: number,
+      p: { cfi?: string | null; page?: number | null; percent: number }
+    ): Promise<boolean> => ipcRenderer.invoke('books:saveProgress', id, p),
+    /** 彻底删除（前端二次确认后调用，连物理文件） */
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('books:delete', id)
+  },
+  feeds: {
+    /** 源列表 + 未读数（首次幂等 seed 预置三源） */
+    list: (): Promise<(import('../src/shared/types').FeedRecord & { unread: number })[]> =>
+      ipcRenderer.invoke('feeds:list'),
+    /** 并发拉全部源（逐源返回成败，单源失败不阻断） */
+    fetchAll: (): Promise<import('../src/shared/types').FeedFetchResult[]> => ipcRenderer.invoke('feeds:fetchAll'),
+    /** 验证订阅并取源名（失败抛带 message Error） */
+    probe: (url: string): Promise<{ title: string; siteUrl: string }> => ipcRenderer.invoke('feeds:probe', url),
+    /** 添加订阅（入库并立即拉一次） */
+    add: (url: string): Promise<import('../src/shared/types').FeedRecord & { unread: number }> =>
+      ipcRenderer.invoke('feeds:add', url),
+    /** 改显示名（拉取永不覆盖） */
+    rename: (id: number, title: string): Promise<boolean> => ipcRenderer.invoke('feeds:rename', id, title),
+    /** 删源连文章（前端二次确认后调用，彻底删除） */
+    remove: (id: number): Promise<boolean> => ipcRenderer.invoke('feeds:remove', id)
+  },
+  articles: {
+    /** 文章列表（feedId=null 全部；轻量行 + 预览） */
+    list: (feedId: number | null): Promise<import('../src/shared/types').ArticleSummary[]> =>
+      ipcRenderer.invoke('articles:list', feedId),
+    /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+    open: (id: number): Promise<import('../src/shared/types').ArticleRecord> => ipcRenderer.invoke('articles:open', id),
+    /** 全部标已读（feedId=null 全部源） */
+    markAllRead: (feedId: number | null): Promise<boolean> => ipcRenderer.invoke('articles:markAllRead', feedId),
+    /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
+    summarize: (jobId: string, id: number): Promise<string> => ipcRenderer.invoke('articles:summarize', jobId, id)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),

@@ -1,6 +1,6 @@
 # 信息源 designs-specs.md
 
-> 本文档由 AI 基于 `docs/project/左侧边栏/信息源/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（七项决策与被否方案）见同目录 `2026-09-08-信息源-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / GoConfigDialog / Toast 与主题色系、Material Symbols 用法）、个人中心/designs-specs.md（LLM 配置与 GoConfigDialog kind='llm' 惯例）、**AI 生成全局取消机制（260908 落地）**——本模块 `articles:summarize` 为 AI 通道，按「jobId 首参 + beginJob → ac.signal → finally endJob」模式接入（electron/ai/jobs.ts）。
+> 本文档由 AI 基于 `docs/project/左侧边栏/信息源/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（七项决策与被否方案）见同目录 `archive/2026-09-08-信息源-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / GoConfigDialog / Toast 与主题色系、Material Symbols 用法）、个人中心/designs-specs.md（LLM 配置与 GoConfigDialog kind='llm' 惯例）、**AI 生成全局取消机制（260908 落地）**——本模块 `articles:summarize` 为 AI 通道，按「jobId 首参 + beginJob → ac.signal → finally endJob」模式接入（electron/ai/jobs.ts）。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）。
 
 ## 0. 命名与常量
 
@@ -43,8 +43,8 @@ CREATE TABLE articles (
 CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 ```
 
-- **版本号实况**：信息源占 **v19**（书架占 v18）；两模块互不依赖，实施顺序对调则版本号对调，以 db.ts 迁移链实际落点为准。
-- **不依赖外键级联**（node:sqlite PRAGMA foreign_keys 默认关）：`feeds:remove` 显式两步 `DELETE FROM articles WHERE feed_id = ?` → `DELETE FROM feeds WHERE id = ?`。
+- **版本号实况（260908 实施落定）**：设计写 v19，被并行会话海龟汤计时的 v18 顺延挤占，信息源迁移实际占 **v20**（书架占 v19）。
+- **不依赖外键级联**（稳妥起见不依赖 PRAGMA）：`feeds:remove` 显式两步 `DELETE FROM articles WHERE feed_id = ?` → `DELETE FROM feeds WHERE id = ?`。
 - `FeedRecord` / `ArticleRecord`（全量）/ `ArticleSummary`（列表轻量：无 content 两字段，摘要截 120 字）补 `src/shared/types.ts` + `src/renderer/api.d.ts`。
 
 ## 2. 主进程 FeedService（新建 `electron/services/feed.ts`）

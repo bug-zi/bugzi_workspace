@@ -7,6 +7,8 @@ export type ModuleId =
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
+  | 'bookshelf'
+  | 'feed'
   | 'recycle'
   | 'profile'
 
@@ -105,6 +107,84 @@ export interface WenbiJournalRecord {
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+/** 书架书籍（books 表，DB v19）：文件在 books/<id>.<ext>、封面在 covers/（bzres://root/ 加载）；删除为物理删除不入回收站 */
+export interface BooksRecord {
+  id: number
+  title: string
+  author: string
+  format: 'epub' | 'pdf'
+  /** 相对 userData 路径 books/<id>.<ext> */
+  file_path: string
+  /** 相对 userData 路径 covers/<id>.<ext>；NULL=无封面（书名占位卡） */
+  cover_path: string | null
+  file_size: number
+  /** epub 进度：epub.js CFI 定位（精确恢复） */
+  progress_cfi: string | null
+  /** pdf 进度：当前页码（1 基） */
+  progress_page: number | null
+  /** 0-100 百分比（书架卡片角标） */
+  progress_percent: number
+  added_at: string
+  /** NULL=从未读过（排序用） */
+  last_read_at: string | null
+}
+
+/** 书架导入结果：duplicate 由前端弹确认后 force 重导 */
+export type BooksImportResult =
+  | { path: string; status: 'imported'; book: BooksRecord }
+  | { path: string; status: 'duplicate'; title: string }
+  | { path: string; status: 'failed'; error: string }
+
+/** 信息源源（feeds 表，DB v20）：fetch_error 空=上次拉取成功 */
+export interface FeedRecord {
+  id: number
+  title: string
+  feed_url: string
+  site_url: string
+  last_fetched_at: string | null
+  fetch_error: string | null
+  created_at: string
+}
+
+/** 信息源文章全量（打开阅读视图用，含正文与总结缓存） */
+export interface ArticleRecord {
+  id: number
+  feed_id: number
+  guid: string
+  title: string
+  url: string
+  author: string
+  published_at: string | null
+  fetched_at: string
+  content_feed_html: string | null
+  content_fetched_html: string | null
+  read_at: string | null
+  summary_text: string | null
+  summary_at: string | null
+}
+
+/** 信息源文章列表轻量行（不含正文大字段） */
+export interface ArticleSummary {
+  id: number
+  feed_id: number
+  title: string
+  url: string
+  author: string
+  published_at: string | null
+  fetched_at: string
+  read_at: string | null
+  has_summary: boolean
+  preview: string
+}
+
+/** 拉取结果（fetchAll 逐源返回；单源失败不阻断） */
+export interface FeedFetchResult {
+  feedId: number
+  ok: boolean
+  error?: string
+  added: number
 }
 
 /** 写作台文章（wenbi_articles 表，文笔坊 specs §1）：zone 四区流转 */
@@ -214,9 +294,11 @@ export interface TurtleGamePayload {
   questionCount: number
   startedAt: string
   messages: TurtleGameMessageRow[]
-  /** 仅终局回看时有值：汤底 / 复盘 md 相对路径 / 对局用时（问题疑惑区第8轮） */
+  /** 仅 playing 有值：净用时计时种子（v18 计时主进程记账） */
+  activeMs?: number
+  /** 仅终局回看时有值：汤底 / 复盘 md 相对路径（懒生成，可能为 null）/ 对局净用时 */
   bottom?: string
-  mdPath?: string
+  mdPath?: string | null
   durationMs?: number | null
 }
 
@@ -229,7 +311,8 @@ export interface TurtleGameRecordRow {
   started_at: string
   ended_at: string
   duration_ms: number | null
-  md_path: string
+  /** 复盘 md 相对路径（懒生成，未看过的局为 null——「复盘待生成」标记依据） */
+  md_path: string | null
   difficulty: string
 }
 
@@ -466,7 +549,7 @@ export interface Api {
       reply: string
       questionCount: number
     }>
-    /** 猜汤底：未破给方向反馈（不泄露关键缺失）；破汤由主进程完成终局链后返回汤底+复盘路径 */
+    /** 猜汤底：未破给方向反馈（不泄露关键缺失）；破汤终局链（净用时结算，不生成报告）后返回汤底 */
     guess(
       jobId: string,
       gameId: number,
@@ -477,10 +560,15 @@ export interface Api {
       hits: string[]
       misses: string[]
       feedback: string
-      mdPath?: string
+      durationMs: number
     }>
-    /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
-    abandon(jobId: string, gameId: number): Promise<{ bottom: string; mdPath: string }>
+    /** 放弃（前端二次确认后调用）：秒回汤底（净用时结算，报告点「查看复盘」时生成） */
+    abandon(jobId: string, gameId: number): Promise<{ bottom: string; durationMs: number }>
+    /** 净用时记账（边界事件）：start=开段（幂等） / pause=结算当前段 */
+    timerStart(gameId: number): Promise<boolean>
+    timerPause(gameId: number): Promise<boolean>
+    /** 复盘报告 ensure：已有 md 直接返回路径，无则现场生成（含 AI 点评，可取消/失败可重试） */
+    report(jobId: string, gameId: number): Promise<string>
     /** 汤入回收站（进行中的汤抛 PLAYING，前端不提供入口） */
     discardSoup(soupId: number): Promise<boolean>
     /** 对局记录入回收站（仅终局局） */
@@ -583,6 +671,44 @@ export interface Api {
       action: 'draft' | 'continue' | 'polish' | 'rewrite',
       selection?: string
     ): Promise<string>
+  }
+  books: {
+    /** 书架列表（最近阅读在前） */
+    list(): Promise<BooksRecord[]>
+    /** 系统对话框多选 epub/pdf（取消返回 []） */
+    browse(): Promise<string[]>
+    /** 导入（复制+解析元数据；duplicate 项由前端弹确认后携 force 重导） */
+    import(paths: string[], force?: boolean): Promise<BooksImportResult[]>
+    /** 书籍二进制（喂 epub.js / pdfjs 渲染引擎） */
+    readFile(id: number): Promise<Uint8Array>
+    /** 进度保存（前端节流 3 秒 + 退出阅读 flush） */
+    saveProgress(id: number, p: { cfi?: string | null; page?: number | null; percent: number }): Promise<boolean>
+    /** 彻底删除（前端二次确认后调用，连物理文件） */
+    delete(id: number): Promise<boolean>
+  }
+  feeds: {
+    /** 源列表 + 未读数（首次幂等 seed 预置三源） */
+    list(): Promise<(FeedRecord & { unread: number })[]>
+    /** 并发拉全部源（逐源返回成败，单源失败不阻断） */
+    fetchAll(): Promise<FeedFetchResult[]>
+    /** 验证订阅并取源名（失败抛带 message Error） */
+    probe(url: string): Promise<{ title: string; siteUrl: string }>
+    /** 添加订阅（入库并立即拉一次） */
+    add(url: string): Promise<FeedRecord & { unread: number }>
+    /** 改显示名（拉取永不覆盖） */
+    rename(id: number, title: string): Promise<boolean>
+    /** 删源连文章（前端二次确认后调用，彻底删除） */
+    remove(id: number): Promise<boolean>
+  }
+  articles: {
+    /** 文章列表（feedId=null 全部；轻量行 + 预览） */
+    list(feedId: number | null): Promise<ArticleSummary[]>
+    /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+    open(id: number): Promise<ArticleRecord>
+    /** 全部标已读（feedId=null 全部源） */
+    markAllRead(feedId: number | null): Promise<boolean>
+    /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
+    summarize(jobId: string, id: number): Promise<string>
   }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>

@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'books', 'covers', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -514,6 +514,76 @@ function migrate(): void {
       CREATE INDEX IF NOT EXISTS idx_wenbi_articles_zone ON wenbi_articles(zone);
     `)
     d.exec('PRAGMA user_version = 17')
+  }
+
+  if (version < 18) {
+    // v18：海龟汤计时净用时（优化建议区第26轮）——active_ms 累计净思考用时，
+    // segment_start_at 当前计时段起点（NULL=暂停中）；渲染层发 timerStart/timerPause 边界事件，
+    // 终局结算 duration_ms=active_ms。存量 playing 局 active_ms 从 0 起算（历史墙钟不并入），
+    // 旧终局记录 duration_ms 不追溯（维持原墙钟口径）。
+    d.exec('ALTER TABLE turtle_games ADD COLUMN active_ms INTEGER NOT NULL DEFAULT 0')
+    d.exec('ALTER TABLE turtle_games ADD COLUMN segment_start_at TEXT')
+    d.exec('PRAGMA user_version = 18')
+  }
+
+  if (version < 19) {
+    // v19：书架（书架 specs §1）——本地电子书阅读。epub/pdf 复制入库（books/）+ 封面（covers/），
+    // 进度记忆：epub 存 CFI + 百分比、pdf 存页码；路径一律相对 userData（库可整体迁移）。
+    // 删除为二次确认后物理删除（不入回收站），故无 deleted_at 列。
+    // （设计写 v18，被并行会话海龟汤计时（优化建议区第26轮）占用，顺延 v19——specs 版本号实况条款）
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS books (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT '',
+        format TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        cover_path TEXT,
+        file_size INTEGER NOT NULL DEFAULT 0,
+        progress_cfi TEXT,
+        progress_page INTEGER,
+        progress_percent REAL NOT NULL DEFAULT 0,
+        added_at TEXT NOT NULL,
+        last_read_at TEXT
+      );
+    `)
+    d.exec('PRAGMA user_version = 19')
+  }
+
+  if (version < 20) {
+    // v20：信息源（信息源 specs §1）——RSS 订阅聚合 + AI 总结按需缓存。articles 以 (feed_id, guid)
+    // 去重；正文两级（content_feed_html=RSS 自带 / content_fetched_html=readability 懒抓）；
+    // 删除源为显式两步删（连文章），不依赖外键级联，不入回收站。
+    // （设计写 v19，被并行会话海龟汤计时的 v18 顺延挤占，落 v20——specs 版本号实况条款）
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS feeds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        feed_url TEXT NOT NULL UNIQUE,
+        site_url TEXT NOT NULL DEFAULT '',
+        last_fetched_at TEXT,
+        fetch_error TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS articles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        feed_id INTEGER NOT NULL,
+        guid TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',
+        author TEXT NOT NULL DEFAULT '',
+        published_at TEXT,
+        fetched_at TEXT NOT NULL,
+        content_feed_html TEXT,
+        content_fetched_html TEXT,
+        read_at TEXT,
+        summary_text TEXT,
+        summary_at TEXT,
+        UNIQUE(feed_id, guid)
+      );
+      CREATE INDEX IF NOT EXISTS idx_articles_feed ON articles(feed_id, published_at DESC);
+    `)
+    d.exec('PRAGMA user_version = 20')
   }
 }
 
