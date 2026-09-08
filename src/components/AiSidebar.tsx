@@ -105,6 +105,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendJob, setSendJob] = useState<string | null>(null)
   const [needConfig, setNeedConfig] = useState(false)
   const [aiWidth, setAiWidth] = useState(AI_WIDTH_DEFAULT)
   const listRef = useRef<HTMLDivElement>(null)
@@ -307,8 +308,10 @@ export default function AiSidebar(props: AiSidebarProps) {
       }
       sendingRef.current = true
       setSending(true)
+      const jobId = crypto.randomUUID()
+      setSendJob(jobId)
       try {
-        const ns = await window.api.aiSession.compact(sid)
+        const ns = await window.api.aiSession.compact(jobId, sid)
         await persistActive(ns.id, activeChannelRef.current)
         activeIdRef.current = ns.id
         setActiveId(ns.id)
@@ -316,15 +319,19 @@ export default function AiSidebar(props: AiSidebarProps) {
         await loadMessages(ns.id)
         toast('已压缩为前情摘要（原会话保留在列表）')
       } catch (e) {
-        toast(`压缩失败：${String((e as Error).message).slice(0, 80)}`)
+        const msg = String((e as Error).message)
+        toast(msg.includes('已取消') ? '已取消' : `压缩失败：${msg.slice(0, 80)}`)
       } finally {
         sendingRef.current = false
         setSending(false)
+        setSendJob(null)
       }
       return
     }
     sendingRef.current = true
     setSending(true)
+    const jobId = crypto.randomUUID()
+    setSendJob(jobId)
     const channel = activeChannelRef.current
     let sid = activeIdRef.current
     try {
@@ -343,13 +350,16 @@ export default function AiSidebar(props: AiSidebarProps) {
         ...arr,
         { id: -Date.now(), session_id: sid ?? -1, role: 'user', ai_module: null, content: t, created_at: '' }
       ])
-      await window.api.ai.chat(t, currentModule, sid, channel)
+      await window.api.ai.chat(jobId, t, currentModule, sid, channel)
       await loadSessions(channel) // 首条消息自动命名 + updated_at 排序变化
       await loadMessages(sid)
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('LLM_NOT_CONFIGURED')) {
         setNeedConfig(true)
+      } else if (msg.includes('已取消')) {
+        // 取消：用户消息已落库，重载替换乐观行；不产生 assistant 回复、不加「请求失败」占位
+        if (sid != null) await loadMessages(sid)
       } else {
         setMessages((arr) => [
           ...arr,
@@ -359,6 +369,7 @@ export default function AiSidebar(props: AiSidebarProps) {
     } finally {
       sendingRef.current = false
       setSending(false)
+      setSendJob(null)
     }
   }
 
@@ -605,7 +616,24 @@ export default function AiSidebar(props: AiSidebarProps) {
               </div>
             )
           })}
-          {sending && <div className="ai-msg assistant"><div className="ai-msg-role">{AI_NAME}</div><div className="ai-msg-content">思考中…</div></div>}
+          {sending && (
+            <div className="ai-msg assistant">
+              <div className="ai-msg-role">{AI_NAME}</div>
+              <div className="ai-msg-content">
+                思考中…
+                {sendJob && (
+                  <button
+                    className="btn btn-ghost ai-stop"
+                    onClick={() => void window.api.ai.cancel(sendJob)}
+                    title="停止生成"
+                  >
+                    <span className="material-symbols-outlined">stop_circle</span>
+                    停止生成
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {needConfig && (

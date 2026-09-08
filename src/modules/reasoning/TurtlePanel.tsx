@@ -82,10 +82,12 @@ export default function TurtlePanel() {
   const [records, setRecords] = useState<TurtleGameRecordRow[]>([])
   const [filter, setFilter] = useState('all')
   const [preference, setPreference] = useState('random')
-  const [generating, setGenerating] = useState(false)
+  const [genJob, setGenJob] = useState<string | null>(null)
+  const generating = genJob != null
   // 对局进行态
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false) // ask / guess / abandon 的 LLM 调用中
+  const [busyJob, setBusyJob] = useState<string | null>(null) // busy 对应的 jobId（取消按钮用）
   const [guessOpen, setGuessOpen] = useState(false)
   const [guessText, setGuessText] = useState('')
   const [revealed, setRevealed] = useState<{ bottom: string; mdPath: string } | null>(null)
@@ -159,18 +161,22 @@ export default function TurtlePanel() {
   }
 
   const generate = async (): Promise<void> => {
-    if (generating) return
-    setGenerating(true)
+    if (genJob) return
+    const jobId = crypto.randomUUID()
+    setGenJob(jobId)
     try {
       const r = await window.api.turtle.generate(
+        jobId,
         preference as 'random' | 'easy' | 'medium' | 'hard'
       )
       toast(`已出 ${r.inserted} 碗汤`)
       await loadSoups()
     } catch (e) {
-      handleErr(e)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
-      setGenerating(false)
+      setGenJob(null)
     }
   }
 
@@ -193,7 +199,9 @@ export default function TurtlePanel() {
   const ask = async (): Promise<void> => {
     const q = input.trim()
     if (!q || !gameData || busy) return
+    const jobId = crypto.randomUUID()
     setBusy(true)
+    setBusyJob(jobId)
     // 乐观上屏（照 AI 边栏同款机制）：问题即刻入对话流、输入框即刻清空，裁判回复到达后再追加
     const optimisticId = -Date.now()
     setInput('')
@@ -213,7 +221,7 @@ export default function TurtlePanel() {
       }
     )
     try {
-      const r = await window.api.turtle.ask(gameData.gameId, q)
+      const r = await window.api.turtle.ask(jobId, gameData.gameId, q)
       setGameData((prev) =>
         prev && {
           ...prev,
@@ -236,18 +244,23 @@ export default function TurtlePanel() {
         prev && { ...prev, messages: prev.messages.filter((m) => m.id !== optimisticId) }
       )
       setInput(q)
-      handleErr(e)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
       setBusy(false)
+      setBusyJob(null)
     }
   }
 
   const guess = async (): Promise<void> => {
     const g = guessText.trim()
     if (!g || !gameData || busy) return
+    const jobId = crypto.randomUUID()
     setBusy(true)
+    setBusyJob(jobId)
     try {
-      const r = await window.api.turtle.guess(gameData.gameId, g)
+      const r = await window.api.turtle.guess(jobId, gameData.gameId, g)
       const vText = r.solved
         ? `破汤！${r.feedback}`
         : `未破。${r.hits.length ? `已命中：${r.hits.join('；')}。` : ''}${
@@ -273,17 +286,23 @@ export default function TurtlePanel() {
       await loadSoups()
       await loadRecords()
     } catch (e) {
-      handleErr(e)
+      // 取消：判答未落库，guessText/guessOpen 未动，可改后重交
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
       setBusy(false)
+      setBusyJob(null)
     }
   }
 
   const doAbandon = async (): Promise<void> => {
     if (!abandonTarget || busy) return
+    const jobId = crypto.randomUUID()
     setBusy(true)
+    setBusyJob(jobId)
     try {
-      const r = await window.api.turtle.abandon(abandonTarget.gameId)
+      const r = await window.api.turtle.abandon(jobId, abandonTarget.gameId)
       const now = new Date().toISOString()
       setGameData((prev) =>
         prev && {
@@ -306,9 +325,11 @@ export default function TurtlePanel() {
       await loadSoups()
       await loadRecords()
     } catch (e) {
+      // 该链路的取消只影响点评段（主进程降级为固定文案、终局照常完成），渲染层走成功路径
       handleErr(e)
     } finally {
       setBusy(false)
+      setBusyJob(null)
     }
   }
 
@@ -460,6 +481,15 @@ export default function TurtlePanel() {
               <div className="rs-msg ai rs-thinking">
                 <span className="material-symbols-outlined spin">progress_activity</span>
                 裁判思考中…
+                {busyJob && (
+                  <button
+                    className="btn btn-ghost rs-stop"
+                    onClick={() => void window.api.ai.cancel(busyJob)}
+                    title="取消本次判答"
+                  >
+                    停止
+                  </button>
+                )}
               </div>
             )}
             <div ref={chatBottomRef} />
@@ -583,6 +613,12 @@ export default function TurtlePanel() {
           <span className={`material-symbols-outlined${generating ? ' spin' : ''}`}>casino</span>
           {generating ? '出题中，审题人正在验汤…' : '来 3 碗汤'}
         </button>
+        {genJob && (
+          <button className="btn" onClick={() => void window.api.ai.cancel(genJob)} title="取消本次生成">
+            <span className="material-symbols-outlined">stop_circle</span>
+            取消
+          </button>
+        )}
         <div className="recycle-tabs" style={{ marginLeft: 'auto' }}>
           <button
             className={`recycle-tab${libTab === 'soups' ? ' active' : ''}`}

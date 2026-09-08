@@ -25,7 +25,8 @@ export class McpSession {
 
   constructor(
     private config: { name: string; url: string; authType?: 'none' | 'bearer'; apiKey?: string },
-    private onLog?: (msg: string) => void
+    private onLog?: (msg: string) => void,
+    private signal?: AbortSignal
   ) {}
 
   private log(msg: string): void {
@@ -50,9 +51,11 @@ export class McpSession {
       res = await fetch(this.config.url, {
         method: 'POST',
         headers: { ...this.headers(), ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}) },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: this.signal
       })
     } catch (e) {
+      if (this.signal?.aborted) throw new Error('已取消')
       throw new Error(`MCP ${this.config.name} 请求失败：${(e as Error).message}`)
     }
     const sid = res.headers.get('mcp-session-id')
@@ -84,7 +87,8 @@ export class McpSession {
       await fetch(this.config.url, {
         method: 'POST',
         headers: { ...this.headers(), ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}) },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+        signal: this.signal
       })
     } catch {
       /* 通知无需响应，失败可容忍 */
@@ -137,13 +141,14 @@ async function parseSseResponse(res: Response): Promise<any> {
 
 /** 取第一个可用的搜索类工具（辩真阁用）：优先名字含 search/query/fetch 的工具 */
 export async function findSearchTool(
-  onLog?: (msg: string) => void
+  onLog?: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<{ mcp: McpSession; tool: string } | null> {
   const mcps = getEnabledMcps()
   if (mcps.length === 0) throw new McpNotEnabledError()
   for (const config of mcps) {
     try {
-      const session = new McpSession(config, onLog)
+      const session = new McpSession(config, onLog, signal)
       const tools = await session.listTools()
       const search = tools.find((t) => /search|query|fetch/i.test(t.name))
       if (search) return { mcp: session, tool: search.name }

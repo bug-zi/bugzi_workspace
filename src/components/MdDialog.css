@@ -43,6 +43,37 @@
   color: var(--color-text-secondary);
 }
 
+/* 标题行（横排，优化建议区第25轮）：标题文字可省略（悬停看全文），板块 pill 固定右侧不被挤掉 */
+.md-dialog .dialog-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.md-dialog .dialog-title-line .dialog-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-dialog .dialog-title-line .title-input {
+  flex: 1;
+  min-width: 0;
+}
+/* 标题右侧板块 pill（万象卡片所属板块）：主题色小胶囊，双主题走既有变量 */
+.md-dialog .dialog-title-tag {
+  flex-shrink: 0;
+  font-size: 0.75em;
+  font-weight: 400;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary-deep);
+  white-space: nowrap;
+  cursor: default;
+}
+
 /* 版本切换条 + 让 AI 追问（致知己 specs §2）：头部下方常驻，一次呈现一个版本 */
 .md-dialog .dialog-versionbar {
   display: flex;

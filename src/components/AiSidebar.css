@@ -330,3 +330,13 @@
   background: var(--color-surface-strong);
   line-height: 1.6;
 }
+
+/* 思考占位内的停止生成按钮（260908 全局取消，AiSidebar 与致知己追问栏共用） */
+.ai-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 12px;
+  font-size: 0.85em;
+}

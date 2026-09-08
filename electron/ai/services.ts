@@ -2,6 +2,7 @@
 import { getDb, nowIso, normalizeText, isDupMotto } from '../db/db'
 import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
+import { ensureNotCancelled } from './jobs'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
 import { AI_NAME, SettingsKeys } from '../../src/shared/types'
 import type { AiChannel, AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
@@ -93,7 +94,7 @@ export function clearAiSession(sessionId: number): void {
 }
 
 /** /compact（优化建议区第14轮）：把会话历史压成「前情摘要」另存新会话（原会话保留），返回新会话 */
-export async function compactAiSession(sessionId: number): Promise<AiSession> {
+export async function compactAiSession(sessionId: number, signal?: AbortSignal): Promise<AiSession> {
   const d = getDb()
   const s = d
     .prepare('SELECT id, title, channel FROM ai_sessions WHERE id = ?')
@@ -112,7 +113,8 @@ export async function compactAiSession(sessionId: number): Promise<AiSession> {
         content: `请把以下对话历史压缩成一份简明摘要（保留关键事实、结论、待办与用户个人信息，500 字以内），直接输出摘要正文，不要任何前缀：\n\n${transcript}`
       }
     ],
-    temperature: 0.3
+    temperature: 0.3,
+    signal
   })
   const summary = res.content.trim()
   if (!summary) throw new Error('LLM 未返回内容')
@@ -252,6 +254,7 @@ export function lookupProfileFacts(keyword: string): string[] {
 async function chatWithProfileLookup(req: {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
   temperature: number
+  signal?: AbortSignal
 }): Promise<{ content: string }> {
   const first = await chatCompletion(req)
   const m = first.content.match(PROFILE_LOOKUP_RE)
@@ -277,7 +280,8 @@ export async function aiChat(
   userMessage: string,
   currentModule: string,
   sessionId: number,
-  channel: AiChannel = 'assistant'
+  channel: AiChannel = 'assistant',
+  signal?: AbortSignal
 ): Promise<AiMessage> {
   // 首条用户消息自动命名会话，再落用户消息（持久化该会话全历史）
   autoTitleSession(sessionId, userMessage)
@@ -300,7 +304,8 @@ export async function aiChat(
   // 记忆化（优化建议区第13轮）：画像只带索引，AI 需要时经 PROFILE_LOOKUP 检索详情
   const res = await chatWithProfileLookup({
     messages: [{ role: 'system', content: system }, ...history],
-    temperature: 0.8
+    temperature: 0.8,
+    signal
   })
   const assistantMsg = appendAiMessage('assistant', res.content, currentModule, sessionId)
   return assistantMsg
@@ -372,7 +377,7 @@ const COMPOSED_BANNED_PATTERNS: RegExp[] = [
 ]
 
 /** 「来10条格言」（v2.0：5 摘录 + 5 编撰）：正式区风格样本 → LLM 生成 → 增强查重入库草稿区 */
-export async function generateMottos(): Promise<GenerateMottosResult> {
+export async function generateMottos(signal?: AbortSignal): Promise<GenerateMottosResult> {
   const d = getDb()
   const formal = d
     .prepare("SELECT content, source FROM mottos WHERE status = 'formal' AND deleted_at IS NULL ORDER BY id DESC LIMIT 50")
@@ -408,7 +413,8 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
       chatCompletion({
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.9,
-        jsonMode: true
+        jsonMode: true,
+        signal
       })
     const res = await call()
     try {
@@ -469,6 +475,7 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   // 第一轮：5 摘录 + 5 编撰
   const firstItems = await callAndParse(buildPrompt(5, 5, ''))
   let generated = firstItems.length
+  ensureNotCancelled(signal)
   insertBatch(firstItems)
   // 补足轮（优化建议区第24轮·统一补一轮）：第一轮剔除（墓碑/库内/句式）后按 5/5 配比
   // 补缺口，本批已入库进避免清单，重跑同一套过滤；失败非致命，保留第一轮结果
@@ -477,14 +484,16 @@ export async function generateMottos(): Promise<GenerateMottosResult> {
   const shortfallComposed = Math.max(0, 5 - composedInserted)
   if (shortfallExcerpt > 0 || shortfallComposed > 0) {
     try {
+      ensureNotCancelled(signal)
       const batchAvoid = batchInsertedContents.map((c) => `- ${c}`).join('\n')
       const more = await callAndParse(buildPrompt(shortfallExcerpt, shortfallComposed, batchAvoid))
       generated += more.length
       const before = inserted
       insertBatch(more)
       supplemented = inserted - before
-    } catch {
-      // 补足调用/解析失败非致命（第24轮）：损失只是少几条，不值得整批报错
+    } catch (e) {
+      // 取消如实上抛（渲染层 toast「已取消」，不走「生成失败」弹窗）；其余失败非致命（第24轮）
+      if (signal?.aborted) throw e
     }
   }
   return {
@@ -691,7 +700,7 @@ export interface GenerateInspirationsResult {
  * 阶段一发散——12 条粗点子（形态分散、标题实体锚点、summary 两句白话、风向注入）；阶段二自评——五维评审按批内配额挑 5 条打磨。
  * 口味注入：手动指引置顶 + 跨模块口味画像；AI 生成条只进避免清单。
  */
-export async function generateInspirations(): Promise<GenerateInspirationsResult> {
+export async function generateInspirations(signal?: AbortSignal): Promise<GenerateInspirationsResult> {
   const d = getDb()
   // 避免清单（specs §6.2）：全部标题（含回收站，不过滤 deleted_at），最多 500 条防 prompt 超长
   const existingRows = d
@@ -737,13 +746,15 @@ ${avoidList}
     chatCompletion({
       messages: [{ role: 'user', content: divergePrompt }],
       temperature: 0.95,
-      jsonMode: true
+      jsonMode: true,
+      signal
     })
   let candidates: { title: string; summary: string; form: string }[]
   try {
     candidates = parseInspirationArray((await callDiverge()).content)
-  } catch {
-    // 解析失败自动重试一次（同 generateMottos）；仍失败 → 抛出，整体不入库（specs §6.2）
+  } catch (e) {
+    // 取消直接上抛，不重试；解析失败自动重试一次（同 generateMottos），仍失败 → 抛出整体不入库
+    if (signal?.aborted) throw e
     candidates = parseInspirationArray((await callDiverge()).content)
   }
 
@@ -768,21 +779,25 @@ ${list.map((c, i) => `${i + 1}. [${c.form}] ${c.title}：${c.summary}`).join('\n
     chatCompletion({
       messages: [{ role: 'user', content: reviewPrompt(list) }],
       temperature: 0.4,
-      jsonMode: true
+      jsonMode: true,
+      signal
     })
   let items: { title: string; summary: string; form: string }[]
   try {
     items = parseInspirationArray((await callReview(candidates)).content)
-  } catch {
+  } catch (e) {
+    if (signal?.aborted) throw e
     try {
       items = parseInspirationArray((await callReview(candidates)).content)
-    } catch {
+    } catch (e2) {
+      if (signal?.aborted) throw e2
       // 自评两趟均失败 → 代码侧按 form 配额挑前 5，不空手而归也不带病降级（优化建议区任务2）
       items = pickDiverseFive(candidates)
     }
   }
 
   // 入库：标题精确查重（含回收站 + 批内互斥）→ 插草稿区末尾（specs §6.2，与 moveTo 区末尾语义一致）
+  ensureNotCancelled(signal)
   const titles = new Set(existingRows.map((r) => r.title.trim()))
   let tailSort = (
     d.prepare("SELECT MAX(sort) AS m FROM inspirations WHERE status = 'draft' AND deleted_at IS NULL").get() as {
@@ -811,14 +826,14 @@ ${list.map((c, i) => `${i + 1}. [${c.form}] ${c.title}：${c.summary}`).join('\n
 }
 
 /** AI 完善（specs §6.3）：基于标题+正文生成三小节扩展建议；只生成不写库，追加由 inspirations:appendRefine 完成 */
-export async function refineInspiration(id: number): Promise<string> {
+export async function refineInspiration(id: number, signal?: AbortSignal): Promise<string> {
   const row = getDb().prepare('SELECT title, md_path FROM inspirations WHERE id = ?').get(id) as
     | { title: string; md_path: string }
     | undefined
   if (!row) throw new Error('NOT_FOUND')
   const body = inspirationBody(row.md_path, 4000, false) || '（正文暂空）'
   const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
-  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, signal })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   if (!md) throw new Error('LLM 未返回内容')
   return md
@@ -833,7 +848,8 @@ export type WenbiCopilotAction = 'draft' | 'continue' | 'polish' | 'rewrite'
 export async function copilotWriting(
   articleId: number,
   action: WenbiCopilotAction,
-  selection?: string
+  selection?: string,
+  signal?: AbortSignal
 ): Promise<string> {
   if ((action === 'polish' || action === 'rewrite') && (!selection || !selection.trim())) {
     throw new Error('NO_SELECTION')
@@ -859,7 +875,8 @@ export async function copilotWriting(
   const prompt = `${head}\n\n${instructions[action]}\n\n用简体中文 Markdown 输出，只输出正文内容，不要任何解释、前言或代码围栏。`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
-    temperature: action === 'draft' || action === 'continue' ? 0.7 : 0.4
+    temperature: action === 'draft' || action === 'continue' ? 0.7 : 0.4,
+    signal
   })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   if (!md) throw new Error('LLM 未返回内容')
@@ -875,7 +892,10 @@ export interface GenerateWikiResult {
 }
 
 /** 构思词条名（优化建议区「指定板块随机生成」）：指定板块用指定，未指定随机挑；规避全部已有词条 */
-export async function suggestWikiTerm(sectionId: number | null): Promise<{ sectionId: number; term: string }> {
+export async function suggestWikiTerm(
+  sectionId: number | null,
+  signal?: AbortSignal
+): Promise<{ sectionId: number; term: string }> {
   const d = getDb()
   let section: { id: number; name: string }
   if (sectionId != null) {
@@ -903,7 +923,8 @@ export async function suggestWikiTerm(sectionId: number | null): Promise<{ secti
         content: `请从「${section.name}」领域中构思一个值得收藏的知识词条（${avoid}），只返回词条名本身，不要任何解释和标点。`
       }
     ],
-    temperature: 1.0
+    temperature: 1.0,
+    signal
   })
   const term = res.content.trim().replace(/^["'《]|["'》]$/g, '')
   if (!term) throw new Error('未能生成词条名')
@@ -911,11 +932,15 @@ export async function suggestWikiTerm(sectionId: number | null): Promise<{ secti
 }
 
 /** 生成知识卡片 md（固定模板，specs §3.1），并建词条记录 */
-export async function generateWikiCard(term: string | null, sectionId: number | null): Promise<GenerateWikiResult> {
+export async function generateWikiCard(
+  term: string | null,
+  sectionId: number | null,
+  signal?: AbortSignal
+): Promise<GenerateWikiResult> {
   const d = getDb()
   // 词条名缺省：LLM 构思（板块 = 指定板块，未指定则随机挑）
   if (!term) {
-    const suggested = await suggestWikiTerm(sectionId)
+    const suggested = await suggestWikiTerm(sectionId, signal)
     sectionId = suggested.sectionId
     term = suggested.term
   }
@@ -925,7 +950,7 @@ export async function generateWikiCard(term: string | null, sectionId: number | 
     .get(term)
   if (dup) throw new Error('CONFLICT:' + term)
   const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
-  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, signal })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   // 一句话定义提取（模板第一个 ## 段）
   const summaryMatch = md.match(/## 一句话定义\s*\n([\s\S]*?)(?=\n## |\n*$)/)
@@ -986,7 +1011,7 @@ function parseQuizArray(
 }
 
 /** 每次测 5 题：随机抽 5 张卡片（不足则全取）→ 一次 LLM 调用批量出四选一 */
-export async function generateWikiQuiz(): Promise<WikiQuizQuestion[]> {
+export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQuestion[]> {
   const d = getDb()
   const rows = d
     .prepare('SELECT id, term, md_path FROM wiki_entries WHERE deleted_at IS NULL')
@@ -1016,7 +1041,8 @@ export async function generateWikiQuiz(): Promise<WikiQuizQuestion[]> {
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   return parseQuizArray(res.content, idByTerm)
 }
@@ -1031,12 +1057,13 @@ export interface VerifyResult {
 /** 主进程验证流程：MCP 搜索多轮 → LLM 综合 → 写记录+md，过程消息经 onProgress 推 AI 边栏 */
 export async function runVerification(
   claim: string,
-  onProgress: (msg: string) => void
+  onProgress: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<VerifyResult> {
   // 动态 import 避免循环依赖
   const { findSearchTool } = await import('./mcp')
   onProgress(`开始验证：${claim}`)
-  const found = await findSearchTool(onProgress)
+  const found = await findSearchTool(onProgress, signal)
   if (!found) throw new Error('未找到可用的搜索工具，请检查 MCP 服务器是否提供 search 类工具')
   const { mcp, tool } = found
   onProgress(`使用搜索工具：${tool}`)
@@ -1049,7 +1076,8 @@ export async function runVerification(
         content: `我想验证这个观点的真实性：「${claim}」。请生成 3 组适合搜索引擎检索的中英文关键词（每组关键词一行，直接输出，不要编号和解释）。`
       }
     ],
-    temperature: 0.5
+    temperature: 0.5,
+    signal
   })
   const keywords = kwRes.content
     .split('\n')
@@ -1061,6 +1089,7 @@ export async function runVerification(
   // 2) 逐组检索
   const searchResults: string[] = []
   for (const kw of keywords) {
+    ensureNotCancelled(signal)
     onProgress(`正在检索：${kw}`)
     try {
       const resultText = await mcp.callTool(tool, { query: kw })
@@ -1082,14 +1111,16 @@ export async function runVerification(
         content: `观点：「${claim}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料验证该观点。先输出验证分析（引用资料说明依据），然后单独一行输出可信度百分比（0-100 的整数），格式严格为：可信度：N%\n\n分析正文使用 Markdown，若引用了具体来源请在分析中以 Markdown 链接列出。`
       }
     ],
-    temperature: 0.3
+    temperature: 0.3,
+    signal
   })
   const full = analysisRes.content
   const m = full.match(/可信度[：:]\s*(\d{1,3})\s*%/)
   const credibility = Math.max(0, Math.min(100, m ? Number(m[1]) : 50))
   const analysis = (m ? full.replace(/可信度[：:]\s*\d{1,3}\s*%/, '').trim() : full).trim()
 
-  // 4) 写记录 + md
+  // 4) 写记录 + md（取消在写库前拦截；已推送边栏的进度消息保留为历史事实）
+  ensureNotCancelled(signal)
   const d = getDb()
   const now = nowIso()
   const r = d
@@ -1168,7 +1199,8 @@ export interface TurtleSoupDraft {
  * 落库难度以最后一次通过审题的评定为准。
  */
 export async function generateSoups(
-  preference: 'random' | 'easy' | 'medium' | 'hard'
+  preference: 'random' | 'easy' | 'medium' | 'hard',
+  signal?: AbortSignal
 ): Promise<{ generated: number; inserted: number }> {
   const d = getDb()
   const existing = d
@@ -1193,7 +1225,8 @@ export async function generateSoups(
 
   const drafts = await composeSoups(
     buildSoupPrompt({ count: 3, difficultyText, avoidList, recentTrickList }),
-    3
+    3,
+    signal
   )
 
   /** 最终入碗：落库难度一律以最后一次通过审题的评定为准 */
@@ -1203,11 +1236,16 @@ export async function generateSoups(
   // 审，复审无硬伤即入碗（难度按重评落库）。全程串行，与全仓 LLM 调用惯例同构（中转
   // 通道有账号并发上限，并行突发会触发 429 退避共振）
   for (const draft of drafts) {
-    const r1 = await reviewSoupSafe(draft, {
-      recentTricks,
-      peerTricks: drafts.filter((o) => o !== draft).map((o) => o.trick_note),
-      requiredDifficulty
-    })
+    ensureNotCancelled(signal)
+    const r1 = await reviewSoupSafe(
+      draft,
+      {
+        recentTricks,
+        peerTricks: drafts.filter((o) => o !== draft).map((o) => o.trick_note),
+        requiredDifficulty
+      },
+      signal
+    )
     if (!r1) continue // 审题通道两次故障 → 弃碗
     if (r1.qualityOk && r1.difficultyOk) {
       finals.push({ soup: draft, difficulty: r1.ratedDifficulty })
@@ -1225,17 +1263,24 @@ export async function generateSoups(
           redoProblems: r1.problems,
           keepTricks: finals.map((f) => f.soup.trick_note)
         }),
-        1
+        1,
+        signal
       )
-      const r2 = await reviewSoupSafe(redone, {
-        recentTricks,
-        peerTricks: finals.map((f) => f.soup.trick_note),
-        requiredDifficulty
-      })
+      const r2 = await reviewSoupSafe(
+        redone,
+        {
+          recentTricks,
+          peerTricks: finals.map((f) => f.soup.trick_note),
+          requiredDifficulty
+        },
+        signal
+      )
       // 复审无硬伤即入碗（难度偏好仍不符时按重评档如实落库，260907 二调不再弃碗）；
       // 复审仍有硬伤 → 弃碗不弃批
       if (r2?.qualityOk) finals.push({ soup: redone, difficulty: r2.ratedDifficulty })
-    } catch {
+    } catch (e) {
+      // 取消异常已在 composeSoups/reviewSoupSafe 内先抛「已取消」，此处如实上抛不被吞
+      if (signal?.aborted) throw e
       // 重出失败 → 弃碗
     }
   }
@@ -1244,6 +1289,7 @@ export async function generateSoups(
     throw new Error('本批汤未通过审题或生成通道不稳定，未落库，请稍后重试')
   }
 
+  ensureNotCancelled(signal)
   const now = nowIso()
   const ins = d.prepare(
     "INSERT INTO turtle_soups (title, surface, bottom, analysis, difficulty, theme_tag, trick_note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh', ?, ?)"
@@ -1359,13 +1405,14 @@ ${redoBlock}${keepBlock}
 以 JSON 对象返回，最外层是对象，格式：{"soups":[{"title":"...","surface":"...","bottom":"...","analysis":"...","trick_note":"...","difficulty":"easy|medium|hard","theme":"..."}]}，soups 数组内恰好 ${opts.count} 项，不要输出其他任何内容。`
 }
 
-/** 单趟出题调用 + 解析（解析失败自动重试一次，同 generateMottos 惯例；仍失败抛错不落库） */
-async function composeSoups(prompt: string, count: number): Promise<TurtleSoupDraft[]> {
+/** 单趟出题调用 + 解析（解析失败自动重试一次，同 generateMottos 惯例；取消即抛「已取消」不重试；仍失败抛错不落库） */
+async function composeSoups(prompt: string, count: number, signal?: AbortSignal): Promise<TurtleSoupDraft[]> {
   const call = () =>
-    chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.9, jsonMode: true })
+    chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.9, jsonMode: true, signal })
   try {
     return parseSoupArray((await call()).content, count)
-  } catch {
+  } catch (e) {
+    if (signal?.aborted) throw e
     return parseSoupArray((await call()).content, count)
   }
 }
@@ -1394,7 +1441,8 @@ async function reviewSoup(
     peerTricks: string[]
     /** 玩家指定的难度偏好（random 模式为 undefined） */
     requiredDifficulty?: 'easy' | 'medium' | 'hard'
-  }
+  },
+  signal?: AbortSignal
 ): Promise<SoupReview> {
   const targetLine = ctx.requiredDifficulty
     ? `本轮玩家指定了难度偏好「${DIFF_ZH[ctx.requiredDifficulty]}」——按定义独立重评实际难度档即可，偏差不影响 verdict（系统会另行处理）。`
@@ -1436,7 +1484,8 @@ ${ctx.peerTricks.length ? ctx.peerTricks.map((s) => `- ${s}`).join('\n') : '（�
       }
     ],
     temperature: 0.2,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const problems = Array.isArray(parsed.problems)
@@ -1460,14 +1509,17 @@ async function reviewSoupSafe(
     recentTricks: string[]
     peerTricks: string[]
     requiredDifficulty?: 'easy' | 'medium' | 'hard'
-  }
+  },
+  signal?: AbortSignal
 ): Promise<SoupReview | null> {
   try {
-    return await reviewSoup(draft, ctx)
-  } catch {
+    return await reviewSoup(draft, ctx, signal)
+  } catch (e) {
+    if (signal?.aborted) throw e
     try {
-      return await reviewSoup(draft, ctx)
-    } catch {
+      return await reviewSoup(draft, ctx, signal)
+    } catch (e2) {
+      if (signal?.aborted) throw e2
       return null
     }
   }
@@ -1539,7 +1591,8 @@ ${material.analysis}`
 export async function judgeSoupQuestion(
   material: TurtleSoupMaterial,
   historyText: string,
-  question: string
+  question: string,
+  signal?: AbortSignal
 ): Promise<SoupAskResult> {
   const system = `${soupJudgeSystem(material)}
 
@@ -1555,7 +1608,8 @@ export async function judgeSoupQuestion(
       { role: 'user', content: `${history}## 本次提问\n${question}` }
     ],
     temperature: 0.2,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const t = parsed.type
@@ -1589,7 +1643,8 @@ export interface SoupGuessResult {
 export async function judgeSoupGuess(
   material: TurtleSoupMaterial,
   historyText: string,
-  reasoning: string
+  reasoning: string,
+  signal?: AbortSignal
 ): Promise<SoupGuessResult> {
   const system = `${soupJudgeSystem(material)}
 
@@ -1605,7 +1660,8 @@ export async function judgeSoupGuess(
       { role: 'user', content: `${history}## 我的推理（猜汤底）\n${reasoning}` }
     ],
     temperature: 0.2,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const strArr = (v: unknown): string[] =>
@@ -1626,7 +1682,8 @@ export async function soupReview(
   material: TurtleSoupMaterial,
   transcript: string,
   result: 'solved' | 'abandoned',
-  questionCount: number
+  questionCount: number,
+  signal?: AbortSignal
 ): Promise<string> {
   const prompt = `${soupJudgeSystem(material)}
 
@@ -1642,7 +1699,8 @@ ${transcript || '（本局无提问）'}
 3. ${result === 'abandoned' ? '指出卡点：玩家最接近真相的时刻与偏离处，以及当时本该问的问题方向（局已结束，现在可以说透）。' : '一句收尾建议。'}`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
-    temperature: 0.5
+    temperature: 0.5,
+    signal
   })
   const md = stripMdFence(res.content)
   if (!md) throw new Error('LLM 未返回内容')
@@ -1682,7 +1740,8 @@ const WALL_TYPE_ZH_FULL: Record<WallPuzzleType, string> = {
  */
 export async function generateWallPuzzle(
   difficulty: 'easy' | 'medium' | 'hard',
-  opts?: { type?: WallPuzzleType; avoid?: string[] }
+  opts?: { type?: WallPuzzleType; avoid?: string[] },
+  signal?: AbortSignal
 ): Promise<WallPuzzleDraft> {
   const type: WallPuzzleType =
     opts?.type ?? WALL_TYPE_LIST[Math.floor(Math.random() * WALL_TYPE_LIST.length)]
@@ -1715,18 +1774,20 @@ ${avoidBlock}
 
 只输出 JSON：{"puzzle":"题面全文","answer":"标准结论（简短明确）","reasoning":"标准论证全文","hints":["提示1","提示2","提示3"]}，不要输出其他任何内容。`
 
-  let draft = await composeWallPuzzle(type, difficulty, basePrompt)
+  let draft = await composeWallPuzzle(type, difficulty, basePrompt, signal)
   // 阶段二：审题人独立验证，不过打回重出一次（问题清单回注 prompt），仍不过抛错
-  const v1 = await verifyWallPuzzle(draft, difficulty)
+  const v1 = await verifyWallPuzzle(draft, difficulty, signal)
   if (!v1.ok) {
+    ensureNotCancelled(signal)
     draft = await composeWallPuzzle(
       type,
       difficulty,
       `${basePrompt}\n\n## 上一次出的题被审题人打回，问题如下（重新出题必须全部规避）\n${v1.problems
         .map((p) => `- ${p}`)
-        .join('\n')}`
+        .join('\n')}`,
+      signal
     )
-    const v2 = await verifyWallPuzzle(draft, difficulty)
+    const v2 = await verifyWallPuzzle(draft, difficulty, signal)
     if (!v2.ok) throw new Error('出题未通过审题验证（两次），不落库')
   }
   return draft
@@ -1736,12 +1797,14 @@ ${avoidBlock}
 async function composeWallPuzzle(
   type: WallPuzzleType,
   difficulty: 'easy' | 'medium' | 'hard',
-  prompt: string
+  prompt: string,
+  signal?: AbortSignal
 ): Promise<WallPuzzleDraft> {
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const puzzle = typeof parsed.puzzle === 'string' ? parsed.puzzle.trim() : ''
@@ -1763,7 +1826,8 @@ async function composeWallPuzzle(
  */
 async function verifyWallPuzzle(
   draft: WallPuzzleDraft,
-  target: 'easy' | 'medium' | 'hard'
+  target: 'easy' | 'medium' | 'hard',
+  signal?: AbortSignal
 ): Promise<{ ok: boolean; problems: string[] }> {
   const res = await chatCompletion({
     messages: [
@@ -1787,7 +1851,8 @@ ${draft.answer}
       }
     ],
     temperature: 0.2,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const problems = Array.isArray(parsed.problems)
@@ -1811,7 +1876,8 @@ export async function judgeWallAnswer(
   puzzleText: string,
   standardAnswer: string,
   standardReasoning: string,
-  myAnswer: string
+  myAnswer: string,
+  signal?: AbortSignal
 ): Promise<WallAnswerResult> {
   const prompt = `你是思维墙的判答员，宽松等价判定：玩家答案与标准答案表述不同但实质等价（同一个数值 / 同一个结论 / 同一种策略或等价构造）即算对；仅当结论实质不同才判错。
 
@@ -1832,7 +1898,8 @@ explanation 用简体中文 Markdown（150~400 字，不用表格）：先给判
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.1,
-    jsonMode: true
+    jsonMode: true,
+    signal
   })
   const parsed = parseJsonObject(res.content)
   const explanation = typeof parsed.explanation === 'string' ? stripMdFence(parsed.explanation) : ''

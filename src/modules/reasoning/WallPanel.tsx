@@ -49,9 +49,11 @@ export default function WallPanel(props: WallPanelProps) {
   const { active } = props
   const { toast } = useToast()
   const [today, setToday] = useState<WallTodayInfo | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [ensureJob, setEnsureJob] = useState<string | null>(null)
+  const loading = ensureJob != null
   const [answering, setAnswering] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const [submitJob, setSubmitJob] = useState<string | null>(null)
+  const submitting = submitJob != null
   const [hinting, setHinting] = useState(false)
   const [hintsShown, setHintsShown] = useState<{ level: number; text: string }[]>([])
   const [lastResult, setLastResult] = useState<{ correct: boolean; standardAnswer: string } | null>(
@@ -73,13 +75,16 @@ export default function WallPanel(props: WallPanelProps) {
 
   /** 打开现出（specs §2）：每天首次进入思维墙，无当日题则 AI 现场出一道 */
   const ensure = useCallback(async () => {
-    setLoading(true)
+    const jobId = crypto.randomUUID()
+    setEnsureJob(jobId)
     try {
-      setToday(await window.api.wall.ensureToday())
+      setToday(await window.api.wall.ensureToday(jobId))
     } catch (e) {
-      handleErr(e)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
-      setLoading(false)
+      setEnsureJob(null)
     }
   }, [])
 
@@ -108,9 +113,10 @@ export default function WallPanel(props: WallPanelProps) {
   const submit = async (): Promise<void> => {
     const a = answering.trim()
     if (!a || !today || submitting) return
-    setSubmitting(true)
+    const jobId = crypto.randomUUID()
+    setSubmitJob(jobId)
     try {
-      const r = await window.api.wall.answer(today.puzzleId, a)
+      const r = await window.api.wall.answer(jobId, today.puzzleId, a)
       toast(r.correct ? '答对！打卡成功' : '答错，明日再战')
       setLastResult({ correct: r.correct, standardAnswer: r.standardAnswer })
       setToday((prev) =>
@@ -124,9 +130,12 @@ export default function WallPanel(props: WallPanelProps) {
       )
       await loadMonth()
     } catch (e) {
-      handleErr(e)
+      // 取消：判答未落库，题目仍是 answering 态可重交
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
-      setSubmitting(false)
+      setSubmitJob(null)
     }
   }
 
@@ -180,6 +189,10 @@ export default function WallPanel(props: WallPanelProps) {
             <div className="empty-state">
               <span className="material-symbols-outlined spin">progress_activity</span>
               <div>出题中…</div>
+              <button className="btn" onClick={() => void window.api.ai.cancel(ensureJob!)} title="取消本次出题">
+                <span className="material-symbols-outlined">stop_circle</span>
+                取消
+              </button>
             </div>
           )}
           {!loading && !today && (
@@ -221,6 +234,16 @@ export default function WallPanel(props: WallPanelProps) {
                 >
                   {submitting ? '判定中…' : '提交作答'}
                 </button>
+                {submitJob && (
+                  <button
+                    className="btn"
+                    onClick={() => void window.api.ai.cancel(submitJob)}
+                    title="取消本次判答"
+                  >
+                    <span className="material-symbols-outlined">stop_circle</span>
+                    取消
+                  </button>
+                )}
                 <button
                   className="btn"
                   disabled={hinting || today.hintsUsed >= today.hintsTotal}

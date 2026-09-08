@@ -35,12 +35,14 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
   const dragIdRef = useRef<number | null>(null)
   const [dragOverZone, setDragOverZone] = useState<string | null>(null)
   // v2.0：AI 生成/完善
-  const [generating, setGenerating] = useState(false)
+  const [genJob, setGenJob] = useState<string | null>(null)
+  const generating = genJob != null
   const [goConfig, setGoConfig] = useState(false)
   const [failMsg, setFailMsg] = useState<string | null>(null)
   const [refineFor, setRefineFor] = useState<InspirationRecord | null>(null)
   const [refineResult, setRefineResult] = useState<string | null>(null)
-  const [refining, setRefining] = useState(false)
+  const [refineJob, setRefineJob] = useState<string | null>(null)
+  const refining = refineJob != null
   // 正文预览（优化建议区：卡片显示 md 正文预览，看全灵感内容；手动条正文为空不显示）
   const [previews, setPreviews] = useState<Record<number, string>>({})
   // 灵感方向指引（优化建议区第18轮）：手动「想要/不想要」，AI 生成时置顶注入
@@ -181,10 +183,11 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
 
   /** 「来5条灵感」：画像生成 5 条入草稿区；未配置弹「去配置」，其余失败弹框可重试 */
   const doGenerate = async (): Promise<void> => {
-    if (generating) return
-    setGenerating(true)
+    if (genJob) return
+    const jobId = crypto.randomUUID()
+    setGenJob(jobId)
     try {
-      const r = await window.api.inspirations.generate()
+      const r = await window.api.inspirations.generate(jobId)
       toast(
         r.winds?.length
           ? `已生成 ${r.inserted} 条灵感，已入草稿区；本期风向：${r.winds.join(' · ')}`
@@ -193,10 +196,11 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
       await load()
     } catch (e) {
       const msg = (e as Error).message
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
       else setFailMsg(msg)
     } finally {
-      setGenerating(false)
+      setGenJob(null)
     }
   }
 
@@ -205,17 +209,19 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
     setMenuFor(null)
     setRefineFor(item)
     setRefineResult(null)
-    setRefining(true)
+    const jobId = crypto.randomUUID()
+    setRefineJob(jobId)
     try {
-      const content = await window.api.inspirations.refine(item.id)
+      const content = await window.api.inspirations.refine(jobId, item.id)
       setRefineResult(content)
     } catch (e) {
       const msg = (e as Error).message
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
       else toast(`AI 完善失败：${msg}`)
       setRefineFor(null)
     } finally {
-      setRefining(false)
+      setRefineJob(null)
     }
   }
 
@@ -268,6 +274,12 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
         >
           {generating ? '生成中…' : '来5条灵感'}
         </button>
+        {genJob && (
+          <button className="btn" onClick={() => void window.api.ai.cancel(genJob)} title="取消本次生成">
+            <span className="material-symbols-outlined">stop_circle</span>
+            取消
+          </button>
+        )}
       </div>
 
       <div className="kanban">
@@ -509,16 +521,23 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
               )}
             </div>
             <div className="dialog-footer">
-              <button className="btn" onClick={() => setRefineFor(null)}>
-                放弃
-              </button>
-              <button
-                className="btn btn-primary"
-                disabled={refining || !refineResult}
-                onClick={() => void doAppendRefine()}
-              >
-                追加到文档
-              </button>
+              {refining ? (
+                <button
+                  className="btn"
+                  onClick={() => void window.api.ai.cancel(refineJob!)}
+                  title="取消本次生成"
+                >
+                  <span className="material-symbols-outlined">stop_circle</span>
+                  取消
+                </button>
+              ) : (
+                <>
+                  <button className="btn" onClick={() => setRefineFor(null)}>放弃</button>
+                  <button className="btn btn-primary" onClick={() => void doAppendRefine()}>
+                    追加到文档
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

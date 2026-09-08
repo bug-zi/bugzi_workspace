@@ -21,7 +21,8 @@ export default function BankPanel() {
   const [rows, setRows] = useState<WallBankRow[]>([])
   const [current, setCurrent] = useState<WallBankInfo | null>(null)
   const [answering, setAnswering] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const [submitJob, setSubmitJob] = useState<string | null>(null)
+  const submitting = submitJob != null
   /** 终局后的一次性结果呈现（判答讲解 / 看解答的标准论证） */
   const [reveal, setReveal] = useState<{ correct: boolean; standardAnswer: string; text: string } | null>(
     null
@@ -67,9 +68,10 @@ export default function BankPanel() {
   const submit = async (): Promise<void> => {
     const a = answering.trim()
     if (!a || !current || submitting) return
-    setSubmitting(true)
+    const jobId = crypto.randomUUID()
+    setSubmitJob(jobId)
     try {
-      const r = await window.api.wall.bankAnswer(current.id, a)
+      const r = await window.api.wall.bankAnswer(jobId, current.id, a)
       toast(r.correct ? '已破！讲解在下方' : '未破，讲解与标准论证在下方')
       setReveal({ correct: r.correct, standardAnswer: r.standardAnswer, text: r.explanation })
       setCurrent((prev) =>
@@ -77,9 +79,12 @@ export default function BankPanel() {
       )
       await loadList()
     } catch (e) {
-      handleErr(e)
+      // 取消：判答未落库，todo 态保留可重交
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
-      setSubmitting(false)
+      setSubmitJob(null)
     }
   }
 
@@ -164,6 +169,16 @@ export default function BankPanel() {
                     >
                       {submitting ? '判定中…' : '提交作答'}
                     </button>
+                    {submitJob && (
+                      <button
+                        className="btn"
+                        onClick={() => void window.api.ai.cancel(submitJob)}
+                        title="取消本次判答"
+                      >
+                        <span className="material-symbols-outlined">stop_circle</span>
+                        取消
+                      </button>
+                    )}
                     <button className="btn" onClick={() => setRevealTarget(current)}>
                       <span className="material-symbols-outlined">visibility</span>
                       看解答

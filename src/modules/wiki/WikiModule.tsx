@@ -40,12 +40,14 @@ export default function WikiModule(props: WikiModuleProps) {
   const [cardEntry, setCardEntry] = useState<WikiEntry | null>(null)
   const [mdVersion, setMdVersion] = useState(0)
   // 生成
-  const [generating, setGenerating] = useState(false)
+  const [genJob, setGenJob] = useState<string | null>(null)
+  const generating = genJob != null
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTerm, setManualTerm] = useState('')
   const [manualSection, setManualSection] = useState<number | null>(null)
   // 手动弹窗骰子：随机词条名加载中
-  const [suggesting, setSuggesting] = useState(false)
+  const [suggestJob, setSuggestJob] = useState<string | null>(null)
+  const suggesting = suggestJob != null
   const [conflictTerm, setConflictTerm] = useState<string | null>(null)
   const [conflictEntry, setConflictEntry] = useState<WikiEntry | null>(null)
   const [goConfig, setGoConfig] = useState<'llm' | 'mcp' | null>(null)
@@ -73,7 +75,8 @@ export default function WikiModule(props: WikiModuleProps) {
   const [reviewing, setReviewing] = useState(false)
   const [reviewDelete, setReviewDelete] = useState<WikiEntry | null>(null)
   // 测一测（优化建议区）
-  const [quizLoading, setQuizLoading] = useState(false)
+  const [quizJob, setQuizJob] = useState<string | null>(null)
+  const quizLoading = quizJob != null
   const [quizQuestions, setQuizQuestions] = useState<WikiQuizQuestion[]>([])
   const [quizIdx, setQuizIdx] = useState(0)
   const [quizPick, setQuizPick] = useState<number | null>(null)
@@ -134,22 +137,26 @@ export default function WikiModule(props: WikiModuleProps) {
   // ---------- 生成 ----------
   /** 手动弹窗骰子：随机填一个词条名（当前所选板块），只构思词条不生成卡片 */
   const suggestTerm = async (): Promise<void> => {
-    if (suggesting || manualSection == null) return
-    setSuggesting(true)
+    if (suggestJob || manualSection == null) return
+    const jobId = crypto.randomUUID()
+    setSuggestJob(jobId)
     try {
-      setManualTerm(await window.api.wiki.suggestTerm(manualSection))
+      setManualTerm(await window.api.wiki.suggestTerm(jobId, manualSection))
     } catch (e) {
-      setFailMsg(String((e as Error).message))
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else setFailMsg(msg)
     } finally {
-      setSuggesting(false)
+      setSuggestJob(null)
     }
   }
 
   const runGenerate = async (term: string | null, sectionId: number | null): Promise<void> => {
-    if (generating) return
-    setGenerating(true)
+    if (genJob) return
+    const jobId = crypto.randomUUID()
+    setGenJob(jobId)
     try {
-      const r = await window.api.wiki.generate(term, sectionId)
+      const r = await window.api.wiki.generate(jobId, term, sectionId)
       if (r.ok) {
         toast(`已生成词条「${r.data.term}」`)
         await loadSections()
@@ -167,10 +174,11 @@ export default function WikiModule(props: WikiModuleProps) {
       }
     } catch (e) {
       const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
       else setFailMsg(msg)
     } finally {
-      setGenerating(false)
+      setGenJob(null)
     }
   }
 
@@ -230,23 +238,25 @@ export default function WikiModule(props: WikiModuleProps) {
 
   // ---------- 测一测（优化建议区：随机 5 张卡片各 1 题，逐题反馈） ----------
   const startQuiz = async (): Promise<void> => {
-    if (quizLoading) return
+    if (quizJob) return
+    const jobId = crypto.randomUUID()
     setView({ kind: 'quiz' })
-    setQuizLoading(true)
+    setQuizJob(jobId)
     setQuizQuestions([])
     setQuizIdx(0)
     setQuizPick(null)
     setQuizPicks([])
     setQuizFinished(false)
     try {
-      setQuizQuestions(await window.api.wiki.quiz())
+      setQuizQuestions(await window.api.wiki.quiz(jobId))
     } catch (e) {
       const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
       else setFailMsg(msg)
       setView({ kind: 'overview' })
     } finally {
-      setQuizLoading(false)
+      setQuizJob(null)
     }
   }
 
@@ -300,6 +310,12 @@ export default function WikiModule(props: WikiModuleProps) {
               <span className="material-symbols-outlined">casino</span>
               {generating ? '生成中…' : '随机来一条'}
             </button>
+            {genJob && (
+              <button className="btn" onClick={() => void window.api.ai.cancel(genJob)} title="取消本次生成">
+                <span className="material-symbols-outlined">stop_circle</span>
+                取消
+              </button>
+            )}
             <button
               className="btn"
               onClick={() => {
@@ -390,6 +406,15 @@ export default function WikiModule(props: WikiModuleProps) {
               >
                 <span className={`material-symbols-outlined${generating ? ' spin' : ''}`}>casino</span>
               </button>
+              {genJob && (
+                <button
+                  className="icon-btn"
+                  title="取消本次生成"
+                  onClick={() => void window.api.ai.cancel(genJob)}
+                >
+                  <span className="material-symbols-outlined">stop_circle</span>
+                </button>
+              )}
             </div>
           </div>
           <div className="zone-body">
@@ -484,6 +509,10 @@ export default function WikiModule(props: WikiModuleProps) {
               <div className="empty-state">
                 <span className="material-symbols-outlined spin">progress_activity</span>
                 <div>出题中，约需数秒…</div>
+                <button className="btn" onClick={() => void window.api.ai.cancel(quizJob!)} title="取消本次出题">
+                  <span className="material-symbols-outlined">stop_circle</span>
+                  取消
+                </button>
               </div>
             )}
             {!quizLoading && !quizFinished && quizQuestions[quizIdx] && (
@@ -549,6 +578,7 @@ export default function WikiModule(props: WikiModuleProps) {
         key={cardEntry?.id ?? 'none'}
         open={cardEntry != null}
         title={cardEntry?.term ?? ''}
+        titleTag={cardEntry ? sections.find((s) => s.id === cardEntry.section_id)?.name : undefined}
         filePath={cardEntry?.md_path ?? ''}
         onClose={() => {
           // 生成审核态关闭 =「加入」保留（优化建议区）
@@ -609,6 +639,15 @@ export default function WikiModule(props: WikiModuleProps) {
                 >
                   <span className={`material-symbols-outlined${suggesting ? ' spin' : ''}`}>casino</span>
                 </button>
+                {suggestJob && (
+                  <button
+                    className="icon-btn"
+                    title="取消本次生成"
+                    onClick={() => void window.api.ai.cancel(suggestJob)}
+                  >
+                    <span className="material-symbols-outlined">stop_circle</span>
+                  </button>
+                )}
               </div>
             </div>
             <div className="dialog-footer">

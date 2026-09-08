@@ -25,7 +25,8 @@ export default function MottosModule(props: MottosModuleProps) {
   const { toast } = useToast()
   const [mottos, setMottos] = useState<MottoRecord[]>([])
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [generating, setGenerating] = useState(false)
+  const [genJob, setGenJob] = useState<string | null>(null)
+  const generating = genJob != null
   const [goConfig, setGoConfig] = useState(false)
   const [failMsg, setFailMsg] = useState<string | null>(null)
   // MdDialog
@@ -186,10 +187,11 @@ export default function MottosModule(props: MottosModuleProps) {
   }
 
   const generate = async (): Promise<void> => {
-    if (generating) return
-    setGenerating(true)
+    if (genJob) return
+    const jobId = crypto.randomUUID()
+    setGenJob(jobId)
     try {
-      const r = await window.api.mottos.generate()
+      const r = await window.api.mottos.generate(jobId)
       toast(
         `本次生成 ${r.generated} 条（摘录 ${r.excerptInserted} + 编撰 ${r.composedInserted}），去重后入库 ${r.inserted} 条` +
           (r.supplemented > 0 ? `，其中 ${r.supplemented} 条为补足生成` : '') +
@@ -199,10 +201,11 @@ export default function MottosModule(props: MottosModuleProps) {
       await load()
     } catch (e) {
       const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
       else setFailMsg(msg)
     } finally {
-      setGenerating(false)
+      setGenJob(null)
     }
   }
 
@@ -550,6 +553,16 @@ export default function MottosModule(props: MottosModuleProps) {
                       <span className="material-symbols-outlined">auto_awesome</span>
                       {generating ? '生成中…' : '来10条格言'}
                     </button>
+                    {genJob && (
+                      <button
+                        className="btn"
+                        onClick={() => void window.api.ai.cancel(genJob)}
+                        title="取消本次生成"
+                      >
+                        <span className="material-symbols-outlined">stop_circle</span>
+                        取消
+                      </button>
+                    )}
                     <button className="icon-btn" title="定时设置" onClick={() => setScheduleOpen(true)}>
                       <span className="material-symbols-outlined">schedule</span>
                     </button>

@@ -398,12 +398,15 @@ export interface Api {
   ai: {
     messages(sessionId: number): Promise<AiMessageRow[]>
     chat(
+      jobId: string,
       message: string,
       currentModule: string,
       sessionId: number,
       channel?: AiChannel
     ): Promise<{ id: number; role: string; content: string }>
     configured(): Promise<boolean>
+    /** 取消进行中的 AI 任务（false = 任务已结束，静默即可） */
+    cancel(jobId: string): Promise<boolean>
     pushSystem(content: string): Promise<boolean>
     deleteMessage(id: number): Promise<boolean>
     /** 改写消息内容（画像建议「加入/忽略」后剥除协议标记行） */
@@ -419,7 +422,7 @@ export interface Api {
     delete(id: number, channel?: AiChannel): Promise<boolean>
     active(channel?: AiChannel): Promise<number | null>
     /** /compact：把该会话历史压成前情摘要另存新会话（原会话保留），返回新会话 */
-    compact(sessionId: number): Promise<AiSessionRow>
+    compact(jobId: string, sessionId: number): Promise<AiSessionRow>
     /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
     clear(sessionId: number): Promise<boolean>
   }
@@ -427,6 +430,7 @@ export interface Api {
     list(): Promise<ZhijijiQuestion[]>
     /** 新问题：默认建空白 v1（直开编辑态）；aiInit=true 时 LLM 先生成初始参考答案（v0），失败抛错不创建 */
     createQuestion(
+      jobId: string,
       title: string,
       tags?: string[],
       aiInit?: boolean
@@ -445,6 +449,7 @@ export interface Api {
   turtle: {
     /** 「来 3 碗汤」：难度偏好可选（默认随机），三件套（汤面/汤底/裁判解析）入库汤库 */
     generate(
+      jobId: string,
       preference?: 'random' | 'easy' | 'medium' | 'hard'
     ): Promise<{ generated: number; inserted: number }>
     listSoups(difficulty?: string): Promise<TurtleSoupRow[]>
@@ -453,6 +458,7 @@ export interface Api {
     game(gameId: number): Promise<TurtleGamePayload>
     /** 提问 → 裁判只答「是/否/与汤无关」；invalid=非判断句引导（不计有效问答） */
     ask(
+      jobId: string,
       gameId: number,
       question: string
     ): Promise<{
@@ -462,6 +468,7 @@ export interface Api {
     }>
     /** 猜汤底：未破给方向反馈（不泄露关键缺失）；破汤由主进程完成终局链后返回汤底+复盘路径 */
     guess(
+      jobId: string,
       gameId: number,
       reasoning: string
     ): Promise<{
@@ -473,7 +480,7 @@ export interface Api {
       mdPath?: string
     }>
     /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
-    abandon(gameId: number): Promise<{ bottom: string; mdPath: string }>
+    abandon(jobId: string, gameId: number): Promise<{ bottom: string; mdPath: string }>
     /** 汤入回收站（进行中的汤抛 PLAYING，前端不提供入口） */
     discardSoup(soupId: number): Promise<boolean>
     /** 对局记录入回收站（仅终局局） */
@@ -483,9 +490,10 @@ export interface Api {
   }
   wall: {
     /** 打开现出：无当日题则现场生成（LLM 未配置抛 LLM_NOT_CONFIGURED → 弹去配置） */
-    ensureToday(): Promise<WallTodayInfo>
+    ensureToday(jobId: string): Promise<WallTodayInfo>
     /** 提交作答：宽松等价判对错 + 完整推理链讲解 + 写详情 md；答错即终局 */
     answer(
+      jobId: string,
       puzzleId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }>
@@ -497,11 +505,13 @@ export interface Api {
     recordPath(date: string): Promise<string | null>
     /** 练习场：随时出一道（pref 随机/简单/中等/困难，单次有效；typePref 题型可选；不计入墙与连胜） */
     practiceNew(
+      jobId: string,
       pref: 'random' | 'easy' | 'medium' | 'hard',
       typePref?: 'random' | 'insight_invariant' | 'strategy_protocol' | 'counter_probability'
     ): Promise<WallPracticeInfo>
     /** 练习场判答：宽松等价 + 完整讲解（无 md 落盘；一题一命，判答即终局；失效抛 PRACTICE_GONE） */
     practiceAnswer(
+      jobId: string,
       practiceId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string }>
@@ -513,6 +523,7 @@ export interface Api {
     bankOpen(bankId: number): Promise<WallBankInfo>
     /** 精选题库：提交作答（终态；判答 + 写详情 md；已答抛 ALREADY_ANSWERED） */
     bankAnswer(
+      jobId: string,
       bankId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }>
@@ -566,7 +577,12 @@ export interface Api {
     /** 导出 .md（保存对话框；取消返回 null） */
     articleExport(id: number): Promise<string | null>
     /** Copilot 协笔：起稿/续写/润色/改写，返回建议文本（不写库）；LLM 未配置抛 LLM_NOT_CONFIGURED */
-    copilot(id: number, action: 'draft' | 'continue' | 'polish' | 'rewrite', selection?: string): Promise<string>
+    copilot(
+      jobId: string,
+      id: number,
+      action: 'draft' | 'continue' | 'polish' | 'rewrite',
+      selection?: string
+    ): Promise<string>
   }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
@@ -578,7 +594,7 @@ export interface Api {
     /** 区内重排（sort 覆盖为 0..n-1） */
     reorder(moves: { id: number; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
-    generate(): Promise<{
+    generate(jobId: string): Promise<{
       generated: number
       inserted: number
       excerptInserted: number
@@ -604,15 +620,16 @@ export interface Api {
     entry(id: number): Promise<WikiEntry>
     updateEntry(id: number, term: string, summary: string): Promise<boolean>
     generate(
+      jobId: string,
       term: string | null,
       sectionId: number | null
     ): Promise<
       { ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }
     >
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
-    suggestTerm(sectionId: number | null): Promise<string>
+    suggestTerm(jobId: string, sectionId: number | null): Promise<string>
     /** 测一测：随机 5 张卡片各出 1 道四选一 */
-    quiz(): Promise<WikiQuizQuestion[]>
+    quiz(jobId: string): Promise<WikiQuizQuestion[]>
     /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
     deleteForeverEntry(id: number): Promise<boolean>
     highlights(): Promise<WikiHighlightRow[]>
@@ -628,9 +645,9 @@ export interface Api {
     reorder(moves: { id: number; status: string; sort: number }[]): Promise<boolean>
     discard(id: number): Promise<boolean>
     /** 「来5条灵感」：两阶段生成（发散 12 → 配额自评 5）入草稿区；winds 为本批风向（specs §6.2 + 优化建议区任务2） */
-    generate(): Promise<{ generated: number; inserted: number; winds: string[] }>
+    generate(jobId: string): Promise<{ generated: number; inserted: number; winds: string[] }>
     /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
-    refine(id: number): Promise<string>
+    refine(jobId: string, id: number): Promise<string>
     /** 确认追加：以「## AI 补充 · 时间」段追加到该条 md 末尾 */
     appendRefine(id: number, content: string): Promise<boolean>
   }
@@ -638,19 +655,19 @@ export interface Api {
     list(): Promise<VerifyRecord[]>
     get(id: number): Promise<VerifyRecord>
     findDuplicate(claim: string): Promise<{ id: number; claim: string; created_at: string } | null>
-    run(claim: string): Promise<{ recordId: number; credibility: number }>
+    run(jobId: string, claim: string): Promise<{ recordId: number; credibility: number }>
     discard(id: number): Promise<boolean>
   }
   llm: {
-    test(config: LlmConfig): Promise<void>
+    test(jobId: string, config: LlmConfig): Promise<void>
     models(config: LlmConfig): Promise<string[]>
   }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>
     /** AI 辅助配置：研究 MCP 配置元数据（Registry/文档/LLM 三步降级） */
-    research(name: string): Promise<McpResearch>
+    research(jobId: string, name: string): Promise<McpResearch>
     /** 测试连接：initialize + tools/list，返回工具名列表 */
-    test(config: {
+    test(jobId: string, config: {
       name: string
       url: string
       authType?: 'none' | 'bearer'

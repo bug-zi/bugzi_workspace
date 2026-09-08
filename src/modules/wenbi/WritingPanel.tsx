@@ -1,7 +1,7 @@
-// 写作台（文笔坊 specs §3/§4）：文章四区流转（构思/写作/完稿/已发布）+ Copilot 协笔 + 复制/导出
+// 写作台（文笔坊 specs §3/§4 + 2026-09-08 页面化 design）：文章四区流转（构思/写作/完稿/已发布）+ 文章页（Copilot/自动保存）+ 复制/导出
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WenbiArticleRecord } from '../../shared/types'
-import MdDialog from '../../components/MdDialog'
+import ArticlePage from './ArticlePage'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
@@ -137,124 +137,108 @@ export default function WritingPanel(props: { active: boolean }) {
     }
   }
 
-  /** Copilot 错误分流：LLM 未配置 → 去配置；其余 toast（specs §4.2） */
-  const onCopilotError = (e: unknown): void => {
-    const msg = (e as Error).message
-    if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
-    else toast(`协笔失败：${msg}`)
-  }
+  /** 返回看板：ArticlePage 返回前已 flush，这里刷新列表（标题/时间）并清 openDoc */
+  const handleBack = useCallback(async (): Promise<void> => {
+    await load()
+    setOpenDoc(null)
+  }, [load])
 
   return (
-    <div>
-      <div className="module-sub" style={{ marginBottom: 8 }}>
-        文章流转：构思 → 写作 → 完稿 → 已发布（发布在博客站手动完成，拖入已发布区作状态记录）
-      </div>
-      <div className="kanban">
-        {ZONES.map((z) => {
-          const zoneItems = itemsOf(z.zone)
-          return (
-            <section className="zone" key={z.zone}>
-              <div className="zone-header">
-                <span>{z.label}</span>
-                <span className="zone-count">{zoneItems.length}</span>
-                <div className="zone-actions">
-                  <button
-                    className="icon-btn"
-                    title="新建"
-                    onClick={() => {
-                      setAddingZone(z.zone)
-                      setNewTitle('')
-                    }}
-                  >
-                    <span className="material-symbols-outlined">add</span>
-                  </button>
-                </div>
-              </div>
-              <div
-                className={`zone-body${dragOverZone === z.zone ? ' drag-over' : ''}`}
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  setDragOverZone(z.zone)
-                }}
-                onDragLeave={(e) => {
-                  if (e.currentTarget === e.target) setDragOverZone(null)
-                }}
-                onDrop={(e) => void onDropToZone(e, z.zone)}
-              >
-                <div className="drop-hint">松开放入{z.label}</div>
-                {zoneItems.length === 0 && (
-                  <div className="empty-state" style={{ padding: '14px 0' }}>
-                    <span className="material-symbols-outlined">history_edu</span>
-                    暂无文章
-                  </div>
-                )}
-                {zoneItems.map((it) => (
-                  <div
-                    className="row-item kanban-card"
-                    key={it.id}
-                    draggable
-                    onDragStart={(e) => onDragStart(e, it)}
-                    onDragEnd={onDragEnd}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => void onDropToCard(e, it)}
-                    onClick={() => setOpenDoc(it)}
-                  >
-                    <div className="row-main">
-                      <div className="row-title" title={it.title}>
-                        {it.title}
-                      </div>
-                      <div className="row-sub">{fmtDate(it.updated_at)}</div>
-                    </div>
-                    <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+    <div className="writing-panel">
+      {openDoc ? (
+        <ArticlePage
+          key={openDoc.id}
+          item={openDoc}
+          active={props.active}
+          onBack={() => void handleBack()}
+          onRenamed={(t) => setOpenDoc((d) => (d ? { ...d, title: t } : d))}
+          onGoConfig={() => setGoConfig(true)}
+        />
+      ) : (
+        <>
+          <div className="module-sub" style={{ marginBottom: 8 }}>
+            文章流转：构思 → 写作 → 完稿 → 已发布（发布在博客站手动完成，拖入已发布区作状态记录）
+          </div>
+          <div className="kanban">
+            {ZONES.map((z) => {
+              const zoneItems = itemsOf(z.zone)
+              return (
+                <section className="zone" key={z.zone}>
+                  <div className="zone-header">
+                    <span>{z.label}</span>
+                    <span className="zone-count">{zoneItems.length}</span>
+                    <div className="zone-actions">
                       <button
                         className="icon-btn"
-                        title="更多操作"
-                        onClick={(e) => {
-                          const r = e.currentTarget.getBoundingClientRect()
-                          setMenuFor({ item: it, left: r.right, top: r.bottom + 4 })
+                        title="新建"
+                        onClick={() => {
+                          setAddingZone(z.zone)
+                          setNewTitle('')
                         }}
                       >
-                        <span className="material-symbols-outlined">more_horiz</span>
-                      </button>
-                      <button className="icon-btn danger" title="丢弃" onClick={() => setDiscardTarget(it)}>
-                        <span className="material-symbols-outlined">delete</span>
+                        <span className="material-symbols-outlined">add</span>
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
-          )
-        })}
-      </div>
-
-      {/* 文章弹窗：标题可编辑 + copilot 扩展位；编辑保存后 touch 浮顶（draft:touch 先例） */}
-      <MdDialog
-        open={openDoc != null}
-        title={openDoc?.title ?? ''}
-        filePath={openDoc?.md_path ?? ''}
-        onClose={() => setOpenDoc(null)}
-        onChanged={() => {
-          if (openDoc) void window.api.wenbi.articleTouch(openDoc.id)
-          void load()
-        }}
-        onTitleChange={
-          openDoc
-            ? (t) => {
-                void window.api.wenbi.articleRename(openDoc.id, t).then(load)
-                setOpenDoc({ ...openDoc, title: t })
-              }
-            : undefined
-        }
-        copilot={
-          openDoc
-            ? {
-                request: (action, ctx) => window.api.wenbi.copilot(openDoc.id, action, ctx.selection),
-                onError: onCopilotError
-              }
-            : undefined
-        }
-      />
+                  <div
+                    className={`zone-body${dragOverZone === z.zone ? ' drag-over' : ''}`}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setDragOverZone(z.zone)
+                    }}
+                    onDragLeave={(e) => {
+                      if (e.currentTarget === e.target) setDragOverZone(null)
+                    }}
+                    onDrop={(e) => void onDropToZone(e, z.zone)}
+                  >
+                    <div className="drop-hint">松开放入{z.label}</div>
+                    {zoneItems.length === 0 && (
+                      <div className="empty-state" style={{ padding: '14px 0' }}>
+                        <span className="material-symbols-outlined">history_edu</span>
+                        暂无文章
+                      </div>
+                    )}
+                    {zoneItems.map((it) => (
+                      <div
+                        className="row-item kanban-card"
+                        key={it.id}
+                        draggable
+                        onDragStart={(e) => onDragStart(e, it)}
+                        onDragEnd={onDragEnd}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => void onDropToCard(e, it)}
+                        onClick={() => setOpenDoc(it)}
+                      >
+                        <div className="row-main">
+                          <div className="row-title" title={it.title}>
+                            {it.title}
+                          </div>
+                          <div className="row-sub">{fmtDate(it.updated_at)}</div>
+                        </div>
+                        <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="icon-btn"
+                            title="更多操作"
+                            onClick={(e) => {
+                              const r = e.currentTarget.getBoundingClientRect()
+                              setMenuFor({ item: it, left: r.right, top: r.bottom + 4 })
+                            }}
+                          >
+                            <span className="material-symbols-outlined">more_horiz</span>
+                          </button>
+                          <button className="icon-btn danger" title="丢弃" onClick={() => setDiscardTarget(it)}>
+                            <span className="material-symbols-outlined">delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       {/* 新建 */}
       {addingZone && (

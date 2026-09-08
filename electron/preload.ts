@@ -77,13 +77,16 @@ const api = {
       }[]
     > => ipcRenderer.invoke('ai:messages', sessionId),
     chat: (
+      jobId: string,
       message: string,
       currentModule: string,
       sessionId: number,
       channel?: string
     ): Promise<{ id: number; role: string; content: string }> =>
-      ipcRenderer.invoke('ai:chat', message, currentModule, sessionId, channel),
+      ipcRenderer.invoke('ai:chat', jobId, message, currentModule, sessionId, channel),
     configured: (): Promise<boolean> => ipcRenderer.invoke('ai:configured'),
+    /** 取消进行中的 AI 任务（false = 任务已结束，静默即可） */
+    cancel: (jobId: string): Promise<boolean> => ipcRenderer.invoke('ai:cancel', jobId),
     pushSystem: (content: string): Promise<boolean> => ipcRenderer.invoke('ai:pushSystem', content),
     deleteMessage: (id: number): Promise<boolean> => ipcRenderer.invoke('ai:deleteMessage', id),
     /** 改写消息内容（画像建议「加入/忽略」后剥除协议标记行） */
@@ -116,13 +119,13 @@ const api = {
       ipcRenderer.invoke('aiSession:delete', id, channel),
     active: (channel?: string): Promise<number | null> => ipcRenderer.invoke('aiSession:active', channel),
     /** /compact：把该会话历史压成前情摘要另存新会话（原会话保留），返回新会话 */
-    compact: (sessionId: number): Promise<{
+    compact: (jobId: string, sessionId: number): Promise<{
       id: number
       title: string
       channel: string
       created_at: string
       updated_at: string
-    }> => ipcRenderer.invoke('aiSession:compact', sessionId),
+    }> => ipcRenderer.invoke('aiSession:compact', jobId, sessionId),
     /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
     clear: (sessionId: number): Promise<boolean> => ipcRenderer.invoke('aiSession:clear', sessionId)
   },
@@ -140,7 +143,7 @@ const api = {
     reorder: (moves: { id: number; sort: number }[]): Promise<boolean> =>
       ipcRenderer.invoke('mottos:reorder', moves),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'mottos', id),
-    generate: (): Promise<{
+    generate: (jobId: string): Promise<{
       generated: number
       inserted: number
       excerptInserted: number
@@ -150,7 +153,7 @@ const api = {
       tombstoneRejected: number
       /** 补足轮最终入库条数（优化建议区第24轮） */
       supplemented: number
-    }> => ipcRenderer.invoke('mottos:generate'),
+    }> => ipcRenderer.invoke('mottos:generate', jobId),
     normalize: (s: string): Promise<string> => ipcRenderer.invoke('mottos:normalize', s),
     /** 未删除区内判重（v2.0 §7.4：规范化一致或包含关系） */
     checkDuplicate: (content: string): Promise<boolean> =>
@@ -169,17 +172,18 @@ const api = {
     updateEntry: (id: number, term: string, summary: string): Promise<boolean> =>
       ipcRenderer.invoke('wiki:updateEntry', id, term, summary),
     generate: (
+      jobId: string,
       term: string | null,
       sectionId: number | null
     ): Promise<{ ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }> =>
-      ipcRenderer.invoke('wiki:generate', term, sectionId),
+      ipcRenderer.invoke('wiki:generate', jobId, term, sectionId),
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
-    suggestTerm: (sectionId: number | null): Promise<string> =>
-      ipcRenderer.invoke('wiki:suggestTerm', sectionId),
+    suggestTerm: (jobId: string, sectionId: number | null): Promise<string> =>
+      ipcRenderer.invoke('wiki:suggestTerm', jobId, sectionId),
     /** 测一测：随机 5 张卡片各出 1 道四选一 */
-    quiz: (): Promise<
+    quiz: (jobId: string): Promise<
       { entryId: number; term: string; question: string; options: string[]; answer: number }[]
-    > => ipcRenderer.invoke('wiki:quiz'),
+    > => ipcRenderer.invoke('wiki:quiz', jobId),
     /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
     deleteForeverEntry: (id: number): Promise<boolean> =>
       ipcRenderer.invoke('wiki:deleteForeverEntry', id),
@@ -201,10 +205,10 @@ const api = {
       ipcRenderer.invoke('inspirations:reorder', moves),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'inspirations', id),
     /** 「来5条灵感」：两阶段生成（发散 12 → 配额自评 5）入草稿区；winds 为本批风向（specs §6.2 + 优化建议区任务2） */
-    generate: (): Promise<{ generated: number; inserted: number; winds: string[] }> =>
-      ipcRenderer.invoke('inspirations:generate'),
+    generate: (jobId: string): Promise<{ generated: number; inserted: number; winds: string[] }> =>
+      ipcRenderer.invoke('inspirations:generate', jobId),
     /** AI 完善：生成扩展建议 md（不写库），预览确认后走 appendRefine */
-    refine: (id: number): Promise<string> => ipcRenderer.invoke('inspirations:refine', id),
+    refine: (jobId: string, id: number): Promise<string> => ipcRenderer.invoke('inspirations:refine', jobId, id),
     /** 确认追加：以「## AI 补充 · 时间」段追加到该条 md 末尾 */
     appendRefine: (id: number, content: string): Promise<boolean> =>
       ipcRenderer.invoke('inspirations:appendRefine', id, content)
@@ -214,19 +218,20 @@ const api = {
     get: (id: number): Promise<unknown> => ipcRenderer.invoke('verify:get', id),
     findDuplicate: (claim: string): Promise<{ id: number; claim: string; created_at: string } | null> =>
       ipcRenderer.invoke('verify:findDuplicate', claim),
-    run: (claim: string): Promise<{ recordId: number; credibility: number }> =>
-      ipcRenderer.invoke('verify:run', claim),
+    run: (jobId: string, claim: string): Promise<{ recordId: number; credibility: number }> =>
+      ipcRenderer.invoke('verify:run', jobId, claim),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'verify_records', id)
   },
   zhijiji: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:list'),
     /** 新问题：默认建空白 v1；aiInit=true 时 LLM 先生成初始参考答案（v0），失败抛错不创建 */
     createQuestion: (
+      jobId: string,
       title: string,
       tags?: string[],
       aiInit?: boolean
     ): Promise<{ questionId: number; versionId: number; mdPath: string }> =>
-      ipcRenderer.invoke('zhijiji:createQuestion', title, tags, aiInit),
+      ipcRenderer.invoke('zhijiji:createQuestion', jobId, title, tags, aiInit),
     versions: (questionId: number): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:versions', questionId),
     /** 保存为新版本：seq=max+1、date=当日，返回新版本标识 */
     saveNewVersion: (questionId: number, content: string): Promise<{ versionId: number; seq: number; date: string }> =>
@@ -241,9 +246,10 @@ const api = {
   turtle: {
     /** 「来 3 碗汤」：难度偏好可选（random 默认），3 碗三件套入库汤库 */
     generate: (
+      jobId: string,
       preference?: 'random' | 'easy' | 'medium' | 'hard'
     ): Promise<{ generated: number; inserted: number }> =>
-      ipcRenderer.invoke('turtle:generate', preference ?? 'random'),
+      ipcRenderer.invoke('turtle:generate', jobId, preference ?? 'random'),
     listSoups: (difficulty?: string): Promise<unknown[]> =>
       ipcRenderer.invoke('turtle:listSoups', difficulty),
     /** 开局/续局：fresh 建新局、playing 返回现有局；终态汤抛 SOUP_FINISHED */
@@ -251,12 +257,14 @@ const api = {
     game: (gameId: number): Promise<unknown> => ipcRenderer.invoke('turtle:game', gameId),
     /** 提问 → 裁判只答是/否/与汤无关（invalid=非判断句引导，不计有效问答） */
     ask: (
+      jobId: string,
       gameId: number,
       question: string
     ): Promise<{ type: 'yes' | 'no' | 'irrelevant' | 'invalid'; reply: string; questionCount: number }> =>
-      ipcRenderer.invoke('turtle:ask', gameId, question),
+      ipcRenderer.invoke('turtle:ask', jobId, gameId, question),
     /** 猜汤底：未破给方向反馈；破汤由主进程完成终局链（点评+存档）后返回 */
     guess: (
+      jobId: string,
       gameId: number,
       reasoning: string
     ): Promise<{
@@ -266,10 +274,10 @@ const api = {
       misses: string[]
       feedback: string
       mdPath?: string
-    }> => ipcRenderer.invoke('turtle:guess', gameId, reasoning),
+    }> => ipcRenderer.invoke('turtle:guess', jobId, gameId, reasoning),
     /** 放弃（前端二次确认后调用）：揭示汤底 + 终局链 */
-    abandon: (gameId: number): Promise<{ bottom: string; mdPath: string }> =>
-      ipcRenderer.invoke('turtle:abandon', gameId),
+    abandon: (jobId: string, gameId: number): Promise<{ bottom: string; mdPath: string }> =>
+      ipcRenderer.invoke('turtle:abandon', jobId, gameId),
     /** 汤入回收站（进行中的汤抛 PLAYING） */
     discardSoup: (soupId: number): Promise<boolean> =>
       ipcRenderer.invoke('turtle:discardSoup', soupId),
@@ -281,13 +289,14 @@ const api = {
   },
   wall: {
     /** 打开现出：无当日题则现场生成（LLM 未配置抛 LLM_NOT_CONFIGURED） */
-    ensureToday: (): Promise<unknown> => ipcRenderer.invoke('wall:ensureToday'),
+    ensureToday: (jobId: string): Promise<unknown> => ipcRenderer.invoke('wall:ensureToday', jobId),
     /** 提交作答：判对错（宽松等价）+ 讲解 + 写详情 md；答错即终局 */
     answer: (
+      jobId: string,
       puzzleId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }> =>
-      ipcRenderer.invoke('wall:answer', puzzleId, myAnswer),
+      ipcRenderer.invoke('wall:answer', jobId, puzzleId, myAnswer),
     /** 取下一级提示（库存直取不调 LLM）；用尽返回 null */
     hint: (puzzleId: number): Promise<{ level: number; text: string } | null> =>
       ipcRenderer.invoke('wall:hint', puzzleId),
@@ -299,14 +308,15 @@ const api = {
       ipcRenderer.invoke('wall:month', year, month),
     recordPath: (date: string): Promise<string | null> => ipcRenderer.invoke('wall:recordPath', date),
     /** 练习场：随时出一道（pref: random|easy|medium|hard；typePref: 题型可选；不计入墙与连胜） */
-    practiceNew: (pref: string, typePref?: string): Promise<unknown> =>
-      ipcRenderer.invoke('wall:practiceNew', pref, typePref),
+    practiceNew: (jobId: string, pref: string, typePref?: string): Promise<unknown> =>
+      ipcRenderer.invoke('wall:practiceNew', jobId, pref, typePref),
     /** 练习场判答（一题一命，判答即终局；无 md 落盘） */
     practiceAnswer: (
+      jobId: string,
       practiceId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string }> =>
-      ipcRenderer.invoke('wall:practiceAnswer', practiceId, myAnswer),
+      ipcRenderer.invoke('wall:practiceAnswer', jobId, practiceId, myAnswer),
     /** 练习场取下一级提示（内存直取不调 LLM）；用尽返回 null */
     practiceHint: (practiceId: number): Promise<{ level: number; text: string } | null> =>
       ipcRenderer.invoke('wall:practiceHint', practiceId),
@@ -316,10 +326,11 @@ const api = {
     bankOpen: (bankId: number): Promise<unknown> => ipcRenderer.invoke('wall:bankOpen', bankId),
     /** 精选题库：提交作答（终态；判答 + 写详情 md） */
     bankAnswer: (
+      jobId: string,
       bankId: number,
       myAnswer: string
     ): Promise<{ correct: boolean; standardAnswer: string; explanation: string; mdPath: string }> =>
-      ipcRenderer.invoke('wall:bankAnswer', bankId, myAnswer),
+      ipcRenderer.invoke('wall:bankAnswer', jobId, bankId, myAnswer),
     /** 精选题库：看解答（终态，不判答直接揭示；写详情 md） */
     bankReveal: (
       bankId: number
@@ -380,10 +391,11 @@ const api = {
     articleExport: (id: number): Promise<string | null> => ipcRenderer.invoke('wenbi:articleExport', id),
     /** Copilot 协笔：起稿/续写/润色/改写，返回建议文本（不写库）；LLM 未配置抛 LLM_NOT_CONFIGURED */
     copilot: (
+      jobId: string,
       id: number,
       action: 'draft' | 'continue' | 'polish' | 'rewrite',
       selection?: string
-    ): Promise<string> => ipcRenderer.invoke('wenbi:copilot', id, action, selection)
+    ): Promise<string> => ipcRenderer.invoke('wenbi:copilot', jobId, id, action, selection)
   },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
@@ -395,22 +407,22 @@ const api = {
     delete: (id: number): Promise<boolean> => ipcRenderer.invoke('profile:delete', id)
   },
   llm: {
-    test: (config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', config),
+    test: (jobId: string, config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', jobId, config),
     models: (config: unknown): Promise<string[]> => ipcRenderer.invoke('llm:models', config)
   },
   mcp: {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
       ipcRenderer.invoke('mcp:listEnabled'),
     /** AI 辅助配置：研究 MCP 配置元数据（Registry/文档/LLM 三步降级） */
-    research: (name: string): Promise<import('../src/shared/types').McpResearch> =>
-      ipcRenderer.invoke('mcp:research', name),
+    research: (jobId: string, name: string): Promise<import('../src/shared/types').McpResearch> =>
+      ipcRenderer.invoke('mcp:research', jobId, name),
     /** 测试连接：initialize + tools/list，返回工具名列表 */
-    test: (config: {
+    test: (jobId: string, config: {
       name: string
       url: string
       authType?: 'none' | 'bearer'
       apiKey?: string
-    }): Promise<{ tools: string[] }> => ipcRenderer.invoke('mcp:test', config)
+    }): Promise<{ tools: string[] }> => ipcRenderer.invoke('mcp:test', jobId, config)
   },
   storage: {
     /** 当前数据存储目录（绝对路径） */

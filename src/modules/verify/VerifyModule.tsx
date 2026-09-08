@@ -16,7 +16,8 @@ export default function VerifyModule(props: VerifyModuleProps) {
   const { toast } = useToast()
   const [records, setRecords] = useState<VerifyRecord[]>([])
   const [claim, setClaim] = useState('')
-  const [running, setRunning] = useState(false)
+  const [runJob, setRunJob] = useState<string | null>(null)
+  const running = runJob != null
   const [goConfig, setGoConfig] = useState<'llm' | 'mcp' | null>(null)
   const [failMsg, setFailMsg] = useState<string | null>(null)
   // 重复检测
@@ -62,20 +63,22 @@ export default function VerifyModule(props: VerifyModuleProps) {
   }
 
   const doVerify = async (text: string): Promise<void> => {
-    setRunning(true)
+    const jobId = crypto.randomUUID()
+    setRunJob(jobId)
     setClaim('')
     props.onOpenAi() // 展开边栏看过程
     try {
-      const r = await window.api.verify.run(text)
+      const r = await window.api.verify.run(jobId, text)
       toast(`验证完成，可信度 ${r.credibility}%`)
       await load()
     } catch (e) {
       const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
       else if (msg.includes('MCP_NOT_ENABLED')) setGoConfig('mcp')
       else setFailMsg(msg)
     } finally {
-      setRunning(false)
+      setRunJob(null)
     }
   }
 
@@ -126,7 +129,19 @@ export default function VerifyModule(props: VerifyModuleProps) {
               </>
             )}
           </button>
-          {running && <span className="module-sub">正在通过 MCP 检索并综合分析</span>}
+          {running && (
+            <>
+              <button
+                className="btn"
+                onClick={() => void window.api.ai.cancel(runJob!)}
+                title="取消本次验证"
+              >
+                <span className="material-symbols-outlined">stop_circle</span>
+                取消
+              </button>
+              <span className="module-sub">正在通过 MCP 检索并综合分析</span>
+            </>
+          )}
         </div>
       </div>
 

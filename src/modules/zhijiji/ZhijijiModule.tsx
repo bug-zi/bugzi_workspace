@@ -88,6 +88,7 @@ function ZhijijiChat(props: {
   const [delSess, setDelSess] = useState<{ id: number; title: string } | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendJob, setSendJob] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const sidRef = useRef<number | null>(null)
@@ -194,23 +195,29 @@ function ZhijijiChat(props: {
       }
       sendingRef.current = true
       setSending(true)
+      const jobId = crypto.randomUUID()
+      setSendJob(jobId)
       try {
-        const ns = await window.api.aiSession.compact(sid)
+        const ns = await window.api.aiSession.compact(jobId, sid)
         await window.api.settings.set(SettingsKeys.AiActiveSessionZhijiji, String(ns.id))
         sidRef.current = ns.id
         await loadSessions()
         setMessages(await window.api.ai.messages(ns.id))
         toast('已压缩为前情摘要（原会话保留在列表）')
       } catch (e) {
-        toast(`压缩失败：${String((e as Error).message).slice(0, 80)}`)
+        const msg = String((e as Error).message)
+        toast(msg.includes('已取消') ? '已取消' : `压缩失败：${msg.slice(0, 80)}`)
       } finally {
         sendingRef.current = false
         setSending(false)
+        setSendJob(null)
       }
       return
     }
     sendingRef.current = true
     setSending(true)
+    const jobId = crypto.randomUUID()
+    setSendJob(jobId)
     let sid = sidRef.current
     try {
       if (sid == null) {
@@ -224,13 +231,16 @@ function ZhijijiChat(props: {
         ...arr,
         { id: -Date.now(), session_id: sid ?? -1, role: 'user', ai_module: null, content: t, created_at: '' }
       ])
-      await window.api.ai.chat(t, 'zhijiji', sid, 'zhijiji')
+      await window.api.ai.chat(jobId, t, 'zhijiji', sid, 'zhijiji')
       if (sidRef.current === sid) await load()
       else await loadSessions()
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('LLM_NOT_CONFIGURED')) onNeedConfig()
-      else
+      else if (msg.includes('已取消')) {
+        // 取消：用户消息主进程已落库，重载替换乐观行；不产生 assistant 回复、不加错误占位
+        if (sid != null && sidRef.current === sid) await load()
+      } else
         setMessages((arr) => [
           ...arr,
           { id: -Date.now(), session_id: sid ?? -1, role: 'system', ai_module: null, content: `请求失败：${msg}`, created_at: '' }
@@ -238,6 +248,7 @@ function ZhijijiChat(props: {
     } finally {
       sendingRef.current = false
       setSending(false)
+      setSendJob(null)
     }
   }
 
@@ -373,7 +384,19 @@ function ZhijijiChat(props: {
         {sending && (
           <div className="ai-msg assistant">
             <div className="ai-msg-role">AI</div>
-            <div className="ai-msg-content">思考中…</div>
+            <div className="ai-msg-content">
+              思考中…
+              {sendJob && (
+                <button
+                  className="btn btn-ghost ai-stop"
+                  onClick={() => void window.api.ai.cancel(sendJob)}
+                  title="停止生成"
+                >
+                  <span className="material-symbols-outlined">stop_circle</span>
+                  停止生成
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -430,7 +453,8 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   const [addTitle, setAddTitle] = useState('')
   const [addTags, setAddTags] = useState('')
   const [addAiInit, setAddAiInit] = useState(false)
-  const [creating, setCreating] = useState(false)
+  const [createJob, setCreateJob] = useState<string | null>(null)
+  const creating = createJob != null
   // 详情弹窗：问题 + 版本列表 + 当前版本
   const [viewQ, setViewQ] = useState<ZhijijiQuestion | null>(null)
   const [versions, setVersions] = useState<ZhijijiVersion[]>([])
@@ -502,9 +526,10 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         return
       }
     }
-    setCreating(true)
+    const jobId = crypto.randomUUID()
+    setCreateJob(jobId)
     try {
-      const r = await window.api.zhijiji.createQuestion(t, parseTagInput(addTags), addAiInit || undefined)
+      const r = await window.api.zhijiji.createQuestion(jobId, t, parseTagInput(addTags), addAiInit || undefined)
       setAdding(false)
       setAddTitle('')
       setAddTags('')
@@ -517,10 +542,11 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
       if (q) await open(q, !r.mdPath.endsWith('-v0.md'))
     } catch (e) {
       const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) setNeedConfig(true)
+      if (msg.includes('已取消')) toast('已取消')
+      else if (msg.includes('LLM_NOT_CONFIGURED')) setNeedConfig(true)
       else toast(`创建失败：${msg.slice(0, 100)}`)
     } finally {
-      setCreating(false)
+      setCreateJob(null)
     }
   }
 
@@ -694,6 +720,16 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
               <button className="btn" onClick={() => setAdding(false)} disabled={creating}>
                 取消
               </button>
+              {createJob && (
+                <button
+                  className="btn"
+                  onClick={() => void window.api.ai.cancel(createJob)}
+                  title="取消本次生成"
+                >
+                  <span className="material-symbols-outlined">stop_circle</span>
+                  取消
+                </button>
+              )}
               <button className="btn btn-primary" onClick={() => void createQuestion()} disabled={creating}>
                 {creating ? 'AI 思考中…' : '创建'}
               </button>

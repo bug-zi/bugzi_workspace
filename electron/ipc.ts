@@ -40,6 +40,7 @@ import {
 } from './ai/services'
 import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
+import { beginJob, endJob, cancelJob } from './ai/jobs'
 import { getEnabledMcps } from './ai/mcp'
 import { researchMcpConfig, testMcpConnection } from './ai/mcpResearch'
 import { SettingsKeys } from '../src/shared/types'
@@ -174,11 +175,18 @@ export function registerIpc(): void {
   })
 
   // ---------- AI 边栏（多会话 + 频道制：致知己 specs §4） ----------
+  // 统一取消通道（260908 全局取消）：渲染层 ai.cancel(jobId) → 掐断进行中的 AI 任务
+  ipcMain.handle('ai:cancel', (_e, jobId: string) => cancelJob(jobId))
   ipcMain.handle('ai:messages', (_e, sessionId: number) => listAiMessages(sessionId))
   ipcMain.handle(
     'ai:chat',
-    async (_e, message: string, currentModule: string, sessionId: number, channel?: string) => {
-      return await aiChat(message, currentModule, sessionId, (channel ?? 'assistant') as AiChannel)
+    async (_e, jobId: string, message: string, currentModule: string, sessionId: number, channel?: string) => {
+      const ac = beginJob(jobId)
+      try {
+        return await aiChat(message, currentModule, sessionId, (channel ?? 'assistant') as AiChannel, ac.signal)
+      } finally {
+        endJob(jobId)
+      }
     }
   )
   ipcMain.handle('ai:configured', () => isLlmConfigured())
@@ -213,8 +221,15 @@ export function registerIpc(): void {
   ipcMain.handle('aiSession:active', (_e, channel?: string) =>
     getActiveSessionId((channel ?? 'assistant') as AiChannel)
   )
-  // /compact：会话历史压缩为前情摘要另存新会话（优化建议区第14轮）
-  ipcMain.handle('aiSession:compact', (_e, sessionId: number) => compactAiSession(sessionId))
+  // /compact：会话历史压缩为前情摘要另存新会话（优化建议区第14轮；补接取消——含 chatCompletion）
+  ipcMain.handle('aiSession:compact', async (_e, jobId: string, sessionId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return await compactAiSession(sessionId, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
   // /clear：清空当前会话全部消息（优化建议区第14轮修订：会话保留，存储清零）
   ipcMain.handle('aiSession:clear', (_e, sessionId: number) => {
     clearAiSession(sessionId)
@@ -342,7 +357,14 @@ export function registerIpc(): void {
     for (const m of moves) stmt.run(m.sort, nowIso(), m.id)
     return true
   })
-  ipcMain.handle('mottos:generate', () => generateMottos())
+  ipcMain.handle('mottos:generate', async (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await generateMottos(ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
   ipcMain.handle('mottos:normalize', (_e, s: string) => normalizeText(s))
   ipcMain.handle('mottos:deleteForever', (_e, id: number) => {
     // 直接删除（优化建议区）：越过回收站彻底删除，连带笔记 md（同 hardDelete 的处理口径）；
@@ -389,25 +411,38 @@ export function registerIpc(): void {
     getDb().prepare('UPDATE wiki_entries SET term = ?, summary = ?, updated_at = ? WHERE id = ?').run(term, summary, nowIso(), id)
     return true
   })
-  ipcMain.handle('wiki:generate', async (_e, term: string | null, sectionId: number | null) => {
+  ipcMain.handle('wiki:generate', async (_e, jobId: string, term: string | null, sectionId: number | null) => {
+    const ac = beginJob(jobId)
     try {
       // 必须在此 await：若把 generateWikiCard 的 Promise 嵌进返回对象，
       // ipcMain.handle 只 await 顶层值，嵌套 Promise 序列化失败 → 渲染层 invoke 永不 settle（卡"生成中"）
-      return { ok: true as const, data: await generateWikiCard(term, sectionId) }
+      return { ok: true as const, data: await generateWikiCard(term, sectionId, ac.signal) }
     } catch (e) {
       const msg = (e as Error).message
       if (msg.startsWith('CONFLICT:')) return { ok: false as const, conflict: msg.slice(9) }
       throw e
+    } finally {
+      endJob(jobId)
     }
   })
   // 随机词条名（手动弹窗骰子/指定板块随机生成）：只构思词条名不生成卡片
-  ipcMain.handle('wiki:suggestTerm', async (_e, sectionId: number | null) => {
-    const r = await suggestWikiTerm(sectionId)
-    return r.term
+  ipcMain.handle('wiki:suggestTerm', async (_e, jobId: string, sectionId: number | null) => {
+    const ac = beginJob(jobId)
+    try {
+      const r = await suggestWikiTerm(sectionId, ac.signal)
+      return r.term
+    } finally {
+      endJob(jobId)
+    }
   })
   // 测一测：随机 5 张卡片批量出四选一（优化建议区）
-  ipcMain.handle('wiki:quiz', async () => {
-    return await generateWikiQuiz()
+  ipcMain.handle('wiki:quiz', async (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await generateWikiQuiz(ac.signal)
+    } finally {
+      endJob(jobId)
+    }
   })
   // 直接删除词条（生成审核流）：越过回收站删卡片 md + 高光 + 词条行（同 hardDelete wiki 口径）
   ipcMain.handle('wiki:deleteForeverEntry', (_e, id: number) => {
@@ -468,8 +503,22 @@ export function registerIpc(): void {
     return true
   })
   // 灵感泉 v2.0（specs §6.1）：AI 生成 / AI 完善
-  ipcMain.handle('inspirations:generate', async () => generateInspirations())
-  ipcMain.handle('inspirations:refine', async (_e, id: number) => refineInspiration(id))
+  ipcMain.handle('inspirations:generate', async (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await generateInspirations(ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('inspirations:refine', async (_e, jobId: string, id: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return await refineInspiration(id, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
   /** AI 完善确认后追加进 md：拼接收敛主进程，避免前端 read-modify-write 与打开中的 MdDialog 竞态 */
   ipcMain.handle('inspirations:appendRefine', (_e, id: number, content: string) => {
     const d = getDb()
@@ -621,9 +670,14 @@ export function registerIpc(): void {
     writeFileSync(r.filePath, content, 'utf-8')
     return r.filePath
   })
-  ipcMain.handle('wenbi:copilot', async (_e, id: number, action: string, selection?: string) =>
-    copilotWriting(id, action as 'draft' | 'continue' | 'polish' | 'rewrite', selection)
-  )
+  ipcMain.handle('wenbi:copilot', async (_e, jobId: string, id: number, action: string, selection?: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await copilotWriting(id, action as 'draft' | 'continue' | 'polish' | 'rewrite', selection, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
 
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
@@ -637,9 +691,13 @@ export function registerIpc(): void {
     const key = normalizeText(claim)
     return rows.find((r) => normalizeText(r.claim) === key) ?? null
   })
-  ipcMain.handle('verify:run', async (_e, claim: string) => {
-    const result = await runVerification(claim, (msg) => pushAiSystemMessage(msg))
-    return result
+  ipcMain.handle('verify:run', async (_e, jobId: string, claim: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await runVerification(claim, (msg) => pushAiSystemMessage(msg), ac.signal)
+    } finally {
+      endJob(jobId)
+    }
   })
 
   // ---------- 致知己（DB v9，致知己 specs §2：问题 + 多版本答案，AI 只追问不代笔） ----------
@@ -655,42 +713,48 @@ export function registerIpc(): void {
   })
   ipcMain.handle(
     'zhijiji:createQuestion',
-    async (_e, title: string, tags?: string[], aiInit?: boolean) => {
-      const t = title.trim()
-      if (!t) throw new Error('TITLE_REQUIRED')
-      // AI 初始化答案（优化建议区第13轮）：LLM 先就问题给出初始参考答案（v0），
-      // 失败则抛错不建问题（渲染层提示，用户的输入不落半截数据）
-      let initContent = ''
-      if (aiInit) {
-        const digest = profileDigest()
-        const prompt = `${digest}${digest ? '\n\n' : ''}请回答这个问题：「${t}」。用简体中文 Markdown 输出一份结构清晰、有见解的初始参考答案（600 字以内），不要输出与答案无关的内容。`
-        const res = await chatCompletion({
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.7
-        })
-        const body = res.content
-          .replace(/^```(?:markdown|md)?\s*\n?/, '')
-          .replace(/\n?```\s*$/, '')
-          .trim()
-        if (!body) throw new Error('LLM 未返回内容')
-        initContent = `> 以下是 AI 初始化的参考答案（v0）。请在此基础上写出属于你自己的 v1，完成后可删除本段。\n\n${body}\n`
+    async (_e, jobId: string, title: string, tags?: string[], aiInit?: boolean) => {
+      const ac = beginJob(jobId)
+      try {
+        const t = title.trim()
+        if (!t) throw new Error('TITLE_REQUIRED')
+        // AI 初始化答案（优化建议区第13轮）：LLM 先就问题给出初始参考答案（v0），
+        // 失败则抛错不建问题（渲染层提示，用户的输入不落半截数据）
+        let initContent = ''
+        if (aiInit) {
+          const digest = profileDigest()
+          const prompt = `${digest}${digest ? '\n\n' : ''}请回答这个问题：「${t}」。用简体中文 Markdown 输出一份结构清晰、有见解的初始参考答案（600 字以内），不要输出与答案无关的内容。`
+          const res = await chatCompletion({
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7,
+            signal: ac.signal
+          })
+          const body = res.content
+            .replace(/^```(?:markdown|md)?\s*\n?/, '')
+            .replace(/\n?```\s*$/, '')
+            .trim()
+          if (!body) throw new Error('LLM 未返回内容')
+          initContent = `> 以下是 AI 初始化的参考答案（v0）。请在此基础上写出属于你自己的 v1，完成后可删除本段。\n\n${body}\n`
+        }
+        const d = getDb()
+        const now = nowIso()
+        const r = d
+          .prepare('INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)')
+          .run(t, JSON.stringify(sanitizeTags(tags)), now, now)
+        const qid = Number(r.lastInsertRowid)
+        // v0（AI 初始化）或空白 v1：seq = aiInit ? 0 : 1，用户在其上编辑保存为 v1/v2…
+        const seq = aiInit ? 0 : 1
+        const mdPath = `md/zhijiji/${qid}-v${seq}.md`
+        mdCreate(mdPath, initContent)
+        const vr = d
+          .prepare(
+            'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+          )
+          .run(qid, seq, yyMMdd(), mdPath, now, now)
+        return { questionId: qid, versionId: Number(vr.lastInsertRowid), mdPath }
+      } finally {
+        endJob(jobId)
       }
-      const d = getDb()
-      const now = nowIso()
-      const r = d
-        .prepare('INSERT INTO zhijiji_questions (title, tags, created_at, updated_at) VALUES (?, ?, ?, ?)')
-        .run(t, JSON.stringify(sanitizeTags(tags)), now, now)
-      const qid = Number(r.lastInsertRowid)
-      // v0（AI 初始化）或空白 v1：seq = aiInit ? 0 : 1，用户在其上编辑保存为 v1/v2…
-      const seq = aiInit ? 0 : 1
-      const mdPath = `md/zhijiji/${qid}-v${seq}.md`
-      mdCreate(mdPath, initContent)
-      const vr = d
-        .prepare(
-          'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-        )
-        .run(qid, seq, yyMMdd(), mdPath, now, now)
-      return { questionId: qid, versionId: Number(vr.lastInsertRowid), mdPath }
     }
   )
   ipcMain.handle('zhijiji:versions', (_e, questionId: number) =>
@@ -748,11 +812,17 @@ export function registerIpc(): void {
   })
 
   // ---------- 推理角（DB v12，推理角 specs §2/§4） ----------
-  ipcMain.handle('turtle:generate', async (_e, preference: string) =>
-    generateSoups(
-      preference === 'easy' || preference === 'medium' || preference === 'hard' ? preference : 'random'
-    )
-  )
+  ipcMain.handle('turtle:generate', async (_e, jobId: string, preference: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await generateSoups(
+        preference === 'easy' || preference === 'medium' || preference === 'hard' ? preference : 'random',
+        ac.signal
+      )
+    } finally {
+      endJob(jobId)
+    }
+  })
   ipcMain.handle('turtle:listSoups', (_e, difficulty?: string) => {
     const base =
       'SELECT id, title, difficulty, theme_tag, status, created_at FROM turtle_soups WHERE deleted_at IS NULL'
@@ -797,70 +867,86 @@ export function registerIpc(): void {
     return turtleGamePayload(game.id)
   })
   ipcMain.handle('turtle:game', (_e, gameId: number) => turtleGamePayload(gameId))
-  ipcMain.handle('turtle:ask', async (_e, gameId: number, question: string) => {
-    const q = question.trim()
-    if (!q) throw new Error('EMPTY')
-    const d = getDb()
-    const game = getPlayingGame(d, gameId)
-    const judged = await judgeSoupQuestion(
-      turtleMaterial(d, game.soup_id),
-      turtleHistoryText(d, gameId),
-      q
-    )
-    const now = nowIso()
-    insertTurtleMsg(d, gameId, 'user', 'question', q, now)
-    insertTurtleMsg(
-      d,
-      gameId,
-      'assistant',
-      judged.type === 'invalid' ? 'invalid' : 'answer',
-      judged.reply,
-      now
-    )
-    let count = game.question_count
-    if (judged.type !== 'invalid') {
-      count += 1
-      d.prepare('UPDATE turtle_games SET question_count = ?, updated_at = ? WHERE id = ?').run(
-        count,
-        now,
-        gameId
+  ipcMain.handle('turtle:ask', async (_e, jobId: string, gameId: number, question: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const q = question.trim()
+      if (!q) throw new Error('EMPTY')
+      const d = getDb()
+      const game = getPlayingGame(d, gameId)
+      const judged = await judgeSoupQuestion(
+        turtleMaterial(d, game.soup_id),
+        turtleHistoryText(d, gameId),
+        q,
+        ac.signal
       )
-    }
-    return { type: judged.type, reply: judged.reply, questionCount: count }
-  })
-  ipcMain.handle('turtle:guess', async (_e, gameId: number, reasoning: string) => {
-    const g = reasoning.trim()
-    if (!g) throw new Error('EMPTY')
-    const d = getDb()
-    const game = getPlayingGame(d, gameId)
-    const verdict = await judgeSoupGuess(turtleMaterial(d, game.soup_id), turtleHistoryText(d, gameId), g)
-    const vText = verdict.solved
-      ? `破汤！${verdict.feedback}`
-      : `未破。${verdict.hits.length ? `已命中：${verdict.hits.join('；')}。` : ''}${
-          verdict.misses.length ? `有偏差：${verdict.misses.join('；')}。` : ''
-        }${verdict.feedback}`
-    const now = nowIso()
-    insertTurtleMsg(d, gameId, 'user', 'guess', g, now)
-    insertTurtleMsg(d, gameId, 'assistant', 'verdict', vText, now)
-    if (!verdict.solved) {
-      d.prepare('UPDATE turtle_games SET updated_at = ? WHERE id = ?').run(now, gameId)
-      return { solved: false, hits: verdict.hits, misses: verdict.misses, feedback: verdict.feedback }
-    }
-    const fin = await finishTurtleGame(gameId, 'solved')
-    return {
-      solved: true,
-      bottom: fin.bottom,
-      hits: verdict.hits,
-      misses: verdict.misses,
-      feedback: verdict.feedback,
-      mdPath: fin.mdPath
+      const now = nowIso()
+      insertTurtleMsg(d, gameId, 'user', 'question', q, now)
+      insertTurtleMsg(
+        d,
+        gameId,
+        'assistant',
+        judged.type === 'invalid' ? 'invalid' : 'answer',
+        judged.reply,
+        now
+      )
+      let count = game.question_count
+      if (judged.type !== 'invalid') {
+        count += 1
+        d.prepare('UPDATE turtle_games SET question_count = ?, updated_at = ? WHERE id = ?').run(
+          count,
+          now,
+          gameId
+        )
+      }
+      return { type: judged.type, reply: judged.reply, questionCount: count }
+    } finally {
+      endJob(jobId)
     }
   })
-  ipcMain.handle('turtle:abandon', async (_e, gameId: number) => {
-    const d = getDb()
-    getPlayingGame(d, gameId)
-    insertTurtleMsg(d, gameId, 'system', 'notice', '我放弃了本局，揭示汤底。', nowIso())
-    return await finishTurtleGame(gameId, 'abandoned')
+  ipcMain.handle('turtle:guess', async (_e, jobId: string, gameId: number, reasoning: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const g = reasoning.trim()
+      if (!g) throw new Error('EMPTY')
+      const d = getDb()
+      const game = getPlayingGame(d, gameId)
+      const verdict = await judgeSoupGuess(turtleMaterial(d, game.soup_id), turtleHistoryText(d, gameId), g, ac.signal)
+      const vText = verdict.solved
+        ? `破汤！${verdict.feedback}`
+        : `未破。${verdict.hits.length ? `已命中：${verdict.hits.join('；')}。` : ''}${
+            verdict.misses.length ? `有偏差：${verdict.misses.join('；')}。` : ''
+          }${verdict.feedback}`
+      const now = nowIso()
+      insertTurtleMsg(d, gameId, 'user', 'guess', g, now)
+      insertTurtleMsg(d, gameId, 'assistant', 'verdict', vText, now)
+      if (!verdict.solved) {
+        d.prepare('UPDATE turtle_games SET updated_at = ? WHERE id = ?').run(now, gameId)
+        return { solved: false, hits: verdict.hits, misses: verdict.misses, feedback: verdict.feedback }
+      }
+      const fin = await finishTurtleGame(gameId, 'solved', ac.signal)
+      return {
+        solved: true,
+        bottom: fin.bottom,
+        hits: verdict.hits,
+        misses: verdict.misses,
+        feedback: verdict.feedback,
+        mdPath: fin.mdPath
+      }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('turtle:abandon', async (_e, jobId: string, gameId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      const d = getDb()
+      getPlayingGame(d, gameId)
+      insertTurtleMsg(d, gameId, 'system', 'notice', '我放弃了本局，揭示汤底。', nowIso())
+      return await finishTurtleGame(gameId, 'abandoned', ac.signal)
+    } finally {
+      endJob(jobId)
+    }
   })
   ipcMain.handle('turtle:discardSoup', (_e, soupId: number) => {
     const soup = getDb()
@@ -893,88 +979,99 @@ export function registerIpc(): void {
   )
 
   // ---------- 思维墙（打开现出，无定时器；specs §2/§4；v1.2 洞察题管线） ----------
-  ipcMain.handle('wall:ensureToday', async () => {
-    const d = getDb()
-    const today = localDateStr()
-    let row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
-    if (!row) {
-      // 出题难度由连胜推导（v1.2：答对 1 天即升一档，答错清零回 easy）
-      const lv = Math.min(2, wallStreak())
-      const difficulty = (['easy', 'medium', 'hard'] as const)[lv]
-      // 题型轮换：近 2 日已出题型不再出（三题型池保证至少剩一种可选）
-      const recentTypes = d
-        .prepare(
-          'SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2'
-        )
-        .all()
-        .map((r) => (r as { puzzle_type: string }).puzzle_type)
-      const candidates = WALL_TYPE_LIST.filter((t) => !recentTypes.includes(t))
-      const type = candidates[Math.floor(Math.random() * candidates.length)] ?? WALL_TYPE_LIST[0]
-      // 避免重复：近 20 题题面摘要入避免清单（防同构重出）
-      const avoid = (
-        d
+  ipcMain.handle('wall:ensureToday', async (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const d = getDb()
+      const today = localDateStr()
+      let row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+      if (!row) {
+        // 出题难度由连胜推导（v1.2：答对 1 天即升一档，答错清零回 easy）
+        const lv = Math.min(2, wallStreak())
+        const difficulty = (['easy', 'medium', 'hard'] as const)[lv]
+        // 题型轮换：近 2 日已出题型不再出（三题型池保证至少剩一种可选）
+        const recentTypes = d
           .prepare(
-            'SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20'
+            'SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2'
           )
-          .all() as { puzzle_text: string }[]
-      ).map((r) => r.puzzle_text.replace(/\s+/g, ' ').slice(0, 60))
-      const draft = await generateWallPuzzle(difficulty, { type, avoid })
-      const now = nowIso()
-      d.prepare(
-        'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(
-        today,
-        draft.puzzle,
-        draft.answer,
-        draft.reasoning,
-        JSON.stringify(draft.hints),
-        draft.type,
-        draft.difficulty,
-        'answering',
-        now,
-        now
-      )
-      row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+          .all()
+          .map((r) => (r as { puzzle_type: string }).puzzle_type)
+        const candidates = WALL_TYPE_LIST.filter((t) => !recentTypes.includes(t))
+        const type = candidates[Math.floor(Math.random() * candidates.length)] ?? WALL_TYPE_LIST[0]
+        // 避免重复：近 20 题题面摘要入避免清单（防同构重出）
+        const avoid = (
+          d
+            .prepare(
+              'SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20'
+            )
+            .all() as { puzzle_text: string }[]
+        ).map((r) => r.puzzle_text.replace(/\s+/g, ' ').slice(0, 60))
+        const draft = await generateWallPuzzle(difficulty, { type, avoid }, ac.signal)
+        const now = nowIso()
+        d.prepare(
+          'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+          today,
+          draft.puzzle,
+          draft.answer,
+          draft.reasoning,
+          JSON.stringify(draft.hints),
+          draft.type,
+          draft.difficulty,
+          'answering',
+          now,
+          now
+        )
+        row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+      }
+      return wallPayload(row)
+    } finally {
+      endJob(jobId)
     }
-    return wallPayload(row)
   })
-  ipcMain.handle('wall:answer', async (_e, puzzleId: number, myAnswer: string) => {
-    const a = myAnswer.trim()
-    if (!a) throw new Error('EMPTY')
-    const d = getDb()
-    const row = d.prepare('SELECT * FROM wall_puzzles WHERE id = ?').get(puzzleId) as
-      | WallPuzzleRow
-      | undefined
-    if (!row) throw new Error('NOT_FOUND')
-    if (row.status !== 'answering') throw new Error('ALREADY_ANSWERED')
-    const verdict = await judgeWallAnswer(
-      row.puzzle_text,
-      row.answer_standard,
-      row.standard_reasoning ?? '',
-      a
-    )
-    const hintsTotal = parseWallHints(row.hints).length
-    const mdPath = `md/wall/${row.date}.md`
-    mdWrite(
-      mdPath,
-      `# ${row.date} 每日一题（${WALL_TYPE_ZH[row.puzzle_type] ?? row.puzzle_type} · ${
-        DIFFICULTY_ZH[row.difficulty] ?? row.difficulty
-      }）\n\n> ${verdict.correct ? '答对' : '答错'} · 提示使用 ${row.hints_used}/${hintsTotal}\n\n## 题面\n\n${
-        row.puzzle_text
-      }\n\n## 我的作答\n\n${a}\n\n## 判定\n\n${
-        verdict.correct ? '答对' : '答错'
-      }（标准答案：${row.answer_standard}）\n\n## 讲解\n\n${verdict.explanation}\n\n## 标准论证\n\n${
-        row.standard_reasoning ?? '（未存档）'
-      }\n`
-    )
-    d.prepare(
-      'UPDATE wall_puzzles SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
-    ).run(verdict.correct ? 'correct' : 'wrong', a, mdPath, nowIso(), puzzleId)
-    return {
-      correct: verdict.correct,
-      standardAnswer: row.answer_standard,
-      explanation: verdict.explanation,
-      mdPath
+  ipcMain.handle('wall:answer', async (_e, jobId: string, puzzleId: number, myAnswer: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const a = myAnswer.trim()
+      if (!a) throw new Error('EMPTY')
+      const d = getDb()
+      const row = d.prepare('SELECT * FROM wall_puzzles WHERE id = ?').get(puzzleId) as
+        | WallPuzzleRow
+        | undefined
+      if (!row) throw new Error('NOT_FOUND')
+      if (row.status !== 'answering') throw new Error('ALREADY_ANSWERED')
+      const verdict = await judgeWallAnswer(
+        row.puzzle_text,
+        row.answer_standard,
+        row.standard_reasoning ?? '',
+        a,
+        ac.signal
+      )
+      const hintsTotal = parseWallHints(row.hints).length
+      const mdPath = `md/wall/${row.date}.md`
+      mdWrite(
+        mdPath,
+        `# ${row.date} 每日一题（${WALL_TYPE_ZH[row.puzzle_type] ?? row.puzzle_type} · ${
+          DIFFICULTY_ZH[row.difficulty] ?? row.difficulty
+        }）\n\n> ${verdict.correct ? '答对' : '答错'} · 提示使用 ${row.hints_used}/${hintsTotal}\n\n## 题面\n\n${
+          row.puzzle_text
+        }\n\n## 我的作答\n\n${a}\n\n## 判定\n\n${
+          verdict.correct ? '答对' : '答错'
+        }（标准答案：${row.answer_standard}）\n\n## 讲解\n\n${verdict.explanation}\n\n## 标准论证\n\n${
+          row.standard_reasoning ?? '（未存档）'
+        }\n`
+      )
+      d.prepare(
+        'UPDATE wall_puzzles SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
+      ).run(verdict.correct ? 'correct' : 'wrong', a, mdPath, nowIso(), puzzleId)
+      return {
+        correct: verdict.correct,
+        standardAnswer: row.answer_standard,
+        explanation: verdict.explanation,
+        mdPath
+      }
+    } finally {
+      endJob(jobId)
     }
   })
   ipcMain.handle('wall:hint', (_e, puzzleId: number) => {
@@ -1028,50 +1125,59 @@ export function registerIpc(): void {
 
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
   // 会话级暂存主进程内存（practiceBank）：不落库、不写 md，应用重启即清——练习无存档语义。
-  ipcMain.handle('wall:practiceNew', async (_e, pref: string, typePref?: string) => {
-    const difficulty =
-      pref === 'easy' || pref === 'medium' || pref === 'hard'
-        ? pref
-        : (['easy', 'medium', 'hard'] as const)[Math.floor(Math.random() * 3)] // 随机
-    // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落库，无历史可避）
-    const type: WallPuzzleType | undefined = WALL_TYPE_LIST.find((t) => t === typePref)
-    const draft = await generateWallPuzzle(difficulty, {
-      type: type ?? undefined
-    })
-    const id = ++practiceSeq
-    practiceBank.set(id, {
-      puzzle: draft.puzzle,
-      answer: draft.answer,
-      reasoning: draft.reasoning,
-      hints: draft.hints,
-      hintsUsed: 0,
-      typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
-      diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty
-    })
-    // 长会话防累积：只留最近 10 条。Map 按插入序遍历，删最旧不伤当前题（当前题必是最新插入）
-    for (const old of practiceBank.keys()) {
-      if (practiceBank.size <= 10) break
-      practiceBank.delete(old)
-    }
-    return {
-      id,
-      puzzle: draft.puzzle,
-      typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
-      diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty,
-      hintsTotal: draft.hints.length
+  ipcMain.handle('wall:practiceNew', async (_e, jobId: string, pref: string, typePref?: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const difficulty =
+        pref === 'easy' || pref === 'medium' || pref === 'hard'
+          ? pref
+          : (['easy', 'medium', 'hard'] as const)[Math.floor(Math.random() * 3)] // 随机
+      // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落库，无历史可避）
+      const type: WallPuzzleType | undefined = WALL_TYPE_LIST.find((t) => t === typePref)
+      const draft = await generateWallPuzzle(difficulty, { type: type ?? undefined }, ac.signal)
+      const id = ++practiceSeq
+      practiceBank.set(id, {
+        puzzle: draft.puzzle,
+        answer: draft.answer,
+        reasoning: draft.reasoning,
+        hints: draft.hints,
+        hintsUsed: 0,
+        typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+        diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty
+      })
+      // 长会话防累积：只留最近 10 条。Map 按插入序遍历，删最旧不伤当前题（当前题必是最新插入）
+      for (const old of practiceBank.keys()) {
+        if (practiceBank.size <= 10) break
+        practiceBank.delete(old)
+      }
+      return {
+        id,
+        puzzle: draft.puzzle,
+        typeZh: WALL_TYPE_ZH[draft.type] ?? draft.type,
+        diffZh: DIFFICULTY_ZH[draft.difficulty] ?? draft.difficulty,
+        hintsTotal: draft.hints.length
+      }
+    } finally {
+      endJob(jobId)
     }
   })
-  ipcMain.handle('wall:practiceAnswer', async (_e, practiceId: number, myAnswer: string) => {
-    const a = myAnswer.trim()
-    if (!a) throw new Error('EMPTY')
-    const entry = practiceBank.get(practiceId)
-    if (!entry) throw new Error('PRACTICE_GONE')
-    const verdict = await judgeWallAnswer(entry.puzzle, entry.answer, entry.reasoning, a)
-    practiceBank.delete(practiceId) // 一题一命：判答即终局，对错都揭示答案与讲解
-    return {
-      correct: verdict.correct,
-      standardAnswer: entry.answer,
-      explanation: verdict.explanation
+  ipcMain.handle('wall:practiceAnswer', async (_e, jobId: string, practiceId: number, myAnswer: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const a = myAnswer.trim()
+      if (!a) throw new Error('EMPTY')
+      const entry = practiceBank.get(practiceId)
+      if (!entry) throw new Error('PRACTICE_GONE')
+      // 取消 → 判答未完成，entry 未删，可重新提交
+      const verdict = await judgeWallAnswer(entry.puzzle, entry.answer, entry.reasoning, a, ac.signal)
+      practiceBank.delete(practiceId) // 一题一命：判答即终局，对错都揭示答案与讲解
+      return {
+        correct: verdict.correct,
+        standardAnswer: entry.answer,
+        explanation: verdict.explanation
+      }
+    } finally {
+      endJob(jobId)
     }
   })
   ipcMain.handle('wall:practiceHint', (_e, practiceId: number) => {
@@ -1140,37 +1246,42 @@ export function registerIpc(): void {
       mdPath: row.md_path
     }
   })
-  ipcMain.handle('wall:bankAnswer', async (_e, bankId: number, myAnswer: string) => {
-    const a = myAnswer.trim()
-    if (!a) throw new Error('EMPTY')
-    const d = getDb()
-    const row = d.prepare('SELECT * FROM wall_bank WHERE id = ?').get(bankId) as
-      | {
-          id: number
-          title: string
-          tag: string
-          difficulty: string
-          puzzle_text: string
-          answer_standard: string
-          solution: string
-          source: string
-          status: string
-          my_answer: string | null
-          md_path: string | null
-        }
-      | undefined
-    if (!row) throw new Error('NOT_FOUND')
-    if (row.status !== 'todo') throw new Error('ALREADY_ANSWERED')
-    const verdict = await judgeWallAnswer(row.puzzle_text, row.answer_standard, row.solution, a)
-    const mdPath = writeBankMd(row, a, verdict.correct, verdict.explanation)
-    d.prepare(
-      'UPDATE wall_bank SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
-    ).run(verdict.correct ? 'solved' : 'failed', a, mdPath, nowIso(), bankId)
-    return {
-      correct: verdict.correct,
-      standardAnswer: row.answer_standard,
-      explanation: verdict.explanation,
-      mdPath
+  ipcMain.handle('wall:bankAnswer', async (_e, jobId: string, bankId: number, myAnswer: string) => {
+    const ac = beginJob(jobId)
+    try {
+      const a = myAnswer.trim()
+      if (!a) throw new Error('EMPTY')
+      const d = getDb()
+      const row = d.prepare('SELECT * FROM wall_bank WHERE id = ?').get(bankId) as
+        | {
+            id: number
+            title: string
+            tag: string
+            difficulty: string
+            puzzle_text: string
+            answer_standard: string
+            solution: string
+            source: string
+            status: string
+            my_answer: string | null
+            md_path: string | null
+          }
+        | undefined
+      if (!row) throw new Error('NOT_FOUND')
+      if (row.status !== 'todo') throw new Error('ALREADY_ANSWERED')
+      const verdict = await judgeWallAnswer(row.puzzle_text, row.answer_standard, row.solution, a, ac.signal)
+      const mdPath = writeBankMd(row, a, verdict.correct, verdict.explanation)
+      d.prepare(
+        'UPDATE wall_bank SET status = ?, my_answer = ?, md_path = ?, updated_at = ? WHERE id = ?'
+      ).run(verdict.correct ? 'solved' : 'failed', a, mdPath, nowIso(), bankId)
+      return {
+        correct: verdict.correct,
+        standardAnswer: row.answer_standard,
+        explanation: verdict.explanation,
+        mdPath
+      }
+    } finally {
+      endJob(jobId)
     }
   })
   ipcMain.handle('wall:bankReveal', (_e, bankId: number) => {
@@ -1229,12 +1340,21 @@ export function registerIpc(): void {
   })
 
   // ---------- 个人中心：LLM/MCP ----------
-  ipcMain.handle('llm:test', (_e, config: LlmConfig) => testLlmConnection(config))
+  ipcMain.handle('llm:test', (_e, jobId: string, config: LlmConfig) => {
+    const ac = beginJob(jobId)
+    return testLlmConnection(config, ac.signal).finally(() => endJob(jobId))
+  })
   ipcMain.handle('llm:models', (_e, config: LlmConfig) => listUpstreamModels(config))
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())
   // AI 辅助 MCP 配置（问题疑惑区方案）：研究配置元数据 / 测试连接
-  ipcMain.handle('mcp:research', (_e, name: string) => researchMcpConfig(name))
-  ipcMain.handle('mcp:test', (_e, config: McpConfig) => testMcpConnection(config))
+  ipcMain.handle('mcp:research', (_e, jobId: string, name: string) => {
+    const ac = beginJob(jobId)
+    return researchMcpConfig(name, ac.signal).finally(() => endJob(jobId))
+  })
+  ipcMain.handle('mcp:test', (_e, jobId: string, config: McpConfig) => {
+    const ac = beginJob(jobId)
+    return testMcpConnection(config, ac.signal).finally(() => endJob(jobId))
+  })
 
   // ---------- 个人中心：数据存储（优化建议区 #2） ----------
   ipcMain.handle('storage:currentDir', () => currentDataDir())
@@ -1414,7 +1534,8 @@ function turtleGamePayload(gameId: number) {
  */
 async function finishTurtleGame(
   gameId: number,
-  result: 'solved' | 'abandoned'
+  result: 'solved' | 'abandoned',
+  signal?: AbortSignal
 ): Promise<{ bottom: string; mdPath: string }> {
   const d = getDb()
   const game = d
@@ -1458,7 +1579,8 @@ async function finishTurtleGame(
       { surface: soup.surface, bottom: soup.bottom, analysis: soup.analysis },
       transcript,
       result,
-      game.question_count
+      game.question_count,
+      signal
     )
   } catch {
     review = '（AI 点评生成失败，可重读上方问答自行复盘。）'

@@ -38,9 +38,11 @@ export default function PracticePanel() {
   const [typePref, setTypePref] = useState<TypePref>('random')
   const [practice, setPractice] = useState<WallPracticeInfo | null>(null)
   const [result, setResult] = useState<PracticeResult | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [newJob, setNewJob] = useState<string | null>(null)
+  const loading = newJob != null
   const [answering, setAnswering] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const [submitJob, setSubmitJob] = useState<string | null>(null)
+  const submitting = submitJob != null
   const [hinting, setHinting] = useState(false)
   const [hintsShown, setHintsShown] = useState<{ level: number; text: string }[]>([])
   const [goConfig, setGoConfig] = useState(false)
@@ -54,10 +56,12 @@ export default function PracticePanel() {
 
   /** 来一道：出一道新题即弃当前题（旧题主进程侧随容量清理，不占资源） */
   const newPuzzle = async (): Promise<void> => {
-    if (loading) return
-    setLoading(true)
+    if (newJob) return
+    const jobId = crypto.randomUUID()
+    setNewJob(jobId)
     try {
       const p = await window.api.wall.practiceNew(
+        jobId,
         pref,
         typePref === 'random' ? undefined : typePref
       )
@@ -66,18 +70,21 @@ export default function PracticePanel() {
       setHintsShown([])
       setAnswering('')
     } catch (e) {
-      handleErr(e)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else handleErr(e)
     } finally {
-      setLoading(false)
+      setNewJob(null)
     }
   }
 
   const submit = async (): Promise<void> => {
     const a = answering.trim()
     if (!a || !practice || submitting) return
-    setSubmitting(true)
+    const jobId = crypto.randomUUID()
+    setSubmitJob(jobId)
     try {
-      const r = await window.api.wall.practiceAnswer(practice.id, a)
+      const r = await window.api.wall.practiceAnswer(jobId, practice.id, a)
       setResult({ ...r, myAnswer: a })
       toast(r.correct ? '答对了' : '答错了，看讲解')
     } catch (e) {
@@ -86,11 +93,14 @@ export default function PracticePanel() {
         toast('本题已失效，请重新出一道')
         setPractice(null)
         setResult(null)
+      } else if (msg.includes('已取消')) {
+        // 取消：判答未完成，entry 未删，可重新提交
+        toast('已取消')
       } else {
         handleErr(e)
       }
     } finally {
-      setSubmitting(false)
+      setSubmitJob(null)
     }
   }
 
@@ -152,6 +162,12 @@ export default function PracticePanel() {
               <span className={`material-symbols-outlined${loading ? ' spin' : ''}`}>casino</span>
               {loading ? '出题中…' : '来一道'}
             </button>
+            {newJob && (
+              <button className="btn" onClick={() => void window.api.ai.cancel(newJob)} title="取消本次出题">
+                <span className="material-symbols-outlined">stop_circle</span>
+                取消
+              </button>
+            )}
             {practice && !result && <span className="module-sub">不想做了？直接「来一道」换题</span>}
           </div>
 
@@ -189,6 +205,16 @@ export default function PracticePanel() {
                 >
                   {submitting ? '判定中…' : '提交作答'}
                 </button>
+                {submitJob && (
+                  <button
+                    className="btn"
+                    onClick={() => void window.api.ai.cancel(submitJob)}
+                    title="取消本次判答"
+                  >
+                    <span className="material-symbols-outlined">stop_circle</span>
+                    取消
+                  </button>
+                )}
                 <button
                   className="btn"
                   disabled={hinting || hintsShown.length >= practice.hintsTotal}

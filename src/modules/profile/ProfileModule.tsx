@@ -47,7 +47,8 @@ export default function ProfileModule() {
   const [llms, setLlms] = useState<LlmConfig[]>([])
   const [defaultId, setDefaultId] = useState('')
   const [llmForm, setLlmForm] = useState<LlmConfig | null>(null)
-  const [testing, setTesting] = useState(false)
+  const [testJob, setTestJob] = useState<string | null>(null)
+  const testing = testJob != null
   const [delLlm, setDelLlm] = useState<LlmConfig | null>(null)
   // 上游模型列表（优化建议区 #1）
   const [models, setModels] = useState<string[]>([])
@@ -58,11 +59,13 @@ export default function ProfileModule() {
   const [delMcp, setDelMcp] = useState<McpConfig | null>(null)
   // AI 辅助 MCP 配置（问题疑惑区方案）：输入名 → 研究 → 填 key → 测试 → 保存
   const [aiQuery, setAiQuery] = useState<{ name: string; url: string } | null>(null)
-  const [researching, setResearching] = useState(false)
+  const [researchJob, setResearchJob] = useState<string | null>(null)
+  const researching = researchJob != null
   const [research, setResearch] = useState<McpResearch | null>(null)
   const [researchErr, setResearchErr] = useState<string | null>(null)
   const [aiKey, setAiKey] = useState('')
-  const [mcpTesting, setMcpTesting] = useState(false)
+  const [mcpTestJob, setMcpTestJob] = useState<string | null>(null)
+  const mcpTesting = mcpTestJob != null
   const [mcpTestOk, setMcpTestOk] = useState<string[] | null>(null)
   // 数据存储（优化建议区 #2）
   const [dataDir, setDataDir] = useState('')
@@ -198,14 +201,17 @@ export default function ProfileModule() {
 
   const testLlm = async (): Promise<void> => {
     if (!llmForm) return
-    setTesting(true)
+    const jobId = crypto.randomUUID()
+    setTestJob(jobId)
     try {
-      await window.api.llm.test(llmForm)
+      await window.api.llm.test(jobId, llmForm)
       toast('连接成功')
     } catch (e) {
-      toast(`连接失败：${String((e as Error).message).slice(0, 120)}`)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else toast(`连接失败：${msg.slice(0, 120)}`)
     } finally {
-      setTesting(false)
+      setTestJob(null)
     }
   }
 
@@ -265,18 +271,21 @@ export default function ProfileModule() {
       toast('请先填写 MCP 名称')
       return
     }
-    setResearching(true)
+    const jobId = crypto.randomUUID()
+    setResearchJob(jobId)
     setResearch(null)
     setResearchErr(null)
     setAiKey('')
     setMcpTestOk(null)
     try {
-      const r = await window.api.mcp.research(aiQuery.name.trim())
+      const r = await window.api.mcp.research(jobId, aiQuery.name.trim())
       setResearch(r)
     } catch (e) {
-      setResearchErr(String((e as Error).message))
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else setResearchErr(msg)
     } finally {
-      setResearching(false)
+      setResearchJob(null)
     }
   }
 
@@ -294,10 +303,11 @@ export default function ProfileModule() {
       toast('端点地址无效')
       return
     }
-    setMcpTesting(true)
+    const jobId = crypto.randomUUID()
+    setMcpTestJob(jobId)
     setMcpTestOk(null)
     try {
-      const r = await window.api.mcp.test({
+      const r = await window.api.mcp.test(jobId, {
         name: research.title,
         url,
         authType: research.authType,
@@ -305,9 +315,11 @@ export default function ProfileModule() {
       })
       setMcpTestOk(r.tools)
     } catch (e) {
-      toast(`连接失败：${String((e as Error).message).slice(0, 160)}`)
+      const msg = String((e as Error).message)
+      if (msg.includes('已取消')) toast('已取消')
+      else toast(`连接失败：${msg.slice(0, 160)}`)
     } finally {
-      setMcpTesting(false)
+      setMcpTestJob(null)
     }
   }
 
@@ -770,6 +782,12 @@ export default function ProfileModule() {
               <button className="btn" onClick={() => void testLlm()} disabled={testing}>
                 {testing ? '测试中…' : '测试连接'}
               </button>
+              {testJob && (
+                <button className="btn" onClick={() => void window.api.ai.cancel(testJob)} title="取消本次测试">
+                  <span className="material-symbols-outlined">stop_circle</span>
+                  取消
+                </button>
+              )}
               <button className="btn" onClick={() => setLlmForm(null)}>取消</button>
               <button className="btn btn-primary" onClick={() => void saveLlm()}>保存</button>
             </div>
@@ -926,6 +944,16 @@ export default function ProfileModule() {
                   <button className="btn" onClick={() => void doTestMcp()} disabled={mcpTesting}>
                     {mcpTesting ? '测试中…' : '测试连接'}
                   </button>
+                  {mcpTestJob && (
+                    <button
+                      className="btn"
+                      onClick={() => void window.api.ai.cancel(mcpTestJob)}
+                      title="取消本次测试"
+                    >
+                      <span className="material-symbols-outlined">stop_circle</span>
+                      取消
+                    </button>
+                  )}
                   <button className="btn btn-primary" onClick={() => void saveResearched()}>
                     保存
                   </button>
@@ -933,6 +961,16 @@ export default function ProfileModule() {
               ) : (
                 <>
                   <button className="btn" onClick={() => setAiQuery(null)}>取消</button>
+                  {researchJob && (
+                    <button
+                      className="btn"
+                      onClick={() => void window.api.ai.cancel(researchJob)}
+                      title="取消本次研究"
+                    >
+                      <span className="material-symbols-outlined">stop_circle</span>
+                      取消
+                    </button>
+                  )}
                   <button className="btn btn-primary" onClick={() => void doResearch()} disabled={researching}>
                     {researching ? '研究中…' : '开始研究'}
                   </button>

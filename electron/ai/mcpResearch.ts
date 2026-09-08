@@ -1,6 +1,7 @@
 // AI 辅助 MCP 配置研究（问题疑惑区方案）：三步降级找配置元数据
 // ① 官方 Registry API（registry.modelcontextprotocol.io）→ ② 厂商文档 fetch + llms.txt → ③ LLM 自有知识
 import { chatCompletion } from './llm'
+import { ensureNotCancelled } from './jobs'
 import type { McpResearch, McpResearchKey } from '../../src/shared/types'
 
 const FETCH_TIMEOUT = 15_000
@@ -118,7 +119,11 @@ async function researchViaRegistry(name: string): Promise<RegistryOutcome> {
 // ---------- 第②步：LLM 定位文档 → fetch 提取 ----------
 
 /** 从文档文本里让 LLM 提取结构化配置 */
-async function extractFromDocs(name: string, docText: string): Promise<McpResearch | null> {
+async function extractFromDocs(
+  name: string,
+  docText: string,
+  signal?: AbortSignal
+): Promise<McpResearch | null> {
   const prompt = `你在为桌面 App 的 MCP 配置功能提取信息。用户想配置名为「${name}」的远程 MCP 服务器（Streamable HTTP 传输）。
 
 以下是其官方文档内容（可能截断）：
@@ -141,7 +146,8 @@ ${docText.slice(0, 24_000)}
   const r = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     jsonMode: true,
-    temperature: 0
+    temperature: 0,
+    signal
   })
   let parsed: any
   try {
@@ -174,7 +180,11 @@ ${docText.slice(0, 24_000)}
 }
 
 /** LLM 生成候选文档 URL → 逐个 fetch（含 llms.txt）→ 提取。seedUrl：Registry 给的官方仓库/官网优先查 */
-async function researchViaDocs(name: string, seedUrl?: string): Promise<McpResearch | null> {
+async function researchViaDocs(
+  name: string,
+  seedUrl?: string,
+  signal?: AbortSignal
+): Promise<McpResearch | null> {
   // ① LLM 生成候选 URL
   const gen = await chatCompletion({
     messages: [
@@ -184,7 +194,8 @@ async function researchViaDocs(name: string, seedUrl?: string): Promise<McpResea
       }
     ],
     jsonMode: true,
-    temperature: 0
+    temperature: 0,
+    signal
   })
   let urls: string[] = []
   try {
@@ -210,11 +221,12 @@ async function researchViaDocs(name: string, seedUrl?: string): Promise<McpResea
   }
   const candidates = [...urls, ...[...domains].map((d) => `${d}/llms.txt`)]
 
-  // ② 逐个 fetch，取到可提取内容即返回
+  // ② 逐个 fetch，取到可提取内容即返回（fetchText 自带 15s timeout，不挂 signal——设计口径）
   for (const u of candidates.slice(0, 8)) {
+    ensureNotCancelled(signal)
     const text = await fetchText(u).catch(() => null)
     if (!text || text.length < 200) continue
-    const r = await extractFromDocs(name, text).catch(() => null)
+    const r = await extractFromDocs(name, text, signal).catch(() => null)
     if (r) {
       if (!r.docsUrl) r.docsUrl = u
       return r
@@ -225,7 +237,7 @@ async function researchViaDocs(name: string, seedUrl?: string): Promise<McpResea
 
 // ---------- 第③步：LLM 自有知识兜底 ----------
 
-async function researchViaLlm(name: string): Promise<McpResearch | null> {
+async function researchViaLlm(name: string, signal?: AbortSignal): Promise<McpResearch | null> {
   const r = await chatCompletion({
     messages: [
       {
@@ -243,7 +255,8 @@ async function researchViaLlm(name: string): Promise<McpResearch | null> {
       }
     ],
     jsonMode: true,
-    temperature: 0
+    temperature: 0,
+    signal
   })
   let parsed: any
   try {
@@ -276,18 +289,19 @@ async function researchViaLlm(name: string): Promise<McpResearch | null> {
 }
 
 /** 主入口：三步降级研究 MCP 配置（官方优先，第三方 remote 仅兜底）。全失败抛带 message 的 Error */
-export async function researchMcpConfig(name: string): Promise<McpResearch> {
+export async function researchMcpConfig(name: string, signal?: AbortSignal): Promise<McpResearch> {
   const notes: string[] = []
   let fallback: McpResearch | undefined
 
   // ① Registry：official 直接用；officialRepo 转第②步查官方文档
   try {
+    ensureNotCancelled(signal)
     const reg = await researchViaRegistry(name)
     if (reg.official) return reg.official
     fallback = reg.fallback
     // ② 文档（需要 LLM，未配置时 chatCompletion 抛 LLM_NOT_CONFIGURED）
-    const docR = await researchViaDocs(name, reg.officialRepo).catch((e: Error) => {
-      if (e.message.includes('LLM_NOT_CONFIGURED')) throw e // LLM 未配置直抛，弹「去配置」
+    const docR = await researchViaDocs(name, reg.officialRepo, signal).catch((e: Error) => {
+      if (e.message === '已取消' || e.message.includes('LLM_NOT_CONFIGURED')) throw e // 取消/未配置直抛
       return null
     })
     if (docR) {
@@ -302,13 +316,15 @@ export async function researchMcpConfig(name: string): Promise<McpResearch> {
     }
     notes.push('官方路径未能定位远程端点')
   } catch (e) {
-    if ((e as Error).message.includes('LLM_NOT_CONFIGURED')) throw e
+    const msg = (e as Error).message
+    if (msg === '已取消' || msg.includes('LLM_NOT_CONFIGURED')) throw e
     notes.push('Registry 查询失败')
   }
 
   // ③ LLM 兜底（自有知识）
   try {
-    const r = await researchViaLlm(name)
+    ensureNotCancelled(signal)
+    const r = await researchViaLlm(name, signal)
     if (r && !fallback) return { ...r, notes: `${notes.join('；')}；${r.notes}` }
     if (r && r.source === 'llm') {
       // LLM 知识与第三方 remote 二选一：优先 LLM 官方知识，第三方作附注
@@ -319,7 +335,8 @@ export async function researchMcpConfig(name: string): Promise<McpResearch> {
       }
     }
   } catch (e) {
-    if ((e as Error).message.includes('LLM_NOT_CONFIGURED')) throw e
+    const msg = (e as Error).message
+    if (msg === '已取消' || msg.includes('LLM_NOT_CONFIGURED')) throw e
   }
 
   // ③' 第三方 remote 兜底（明确标注非官方）
@@ -340,9 +357,9 @@ export async function testMcpConnection(config: {
   url: string
   authType?: 'none' | 'bearer'
   apiKey?: string
-}): Promise<{ tools: string[] }> {
+}, signal?: AbortSignal): Promise<{ tools: string[] }> {
   const { McpSession } = await import('./mcp')
-  const session = new McpSession(config)
+  const session = new McpSession(config, undefined, signal)
   const tools = await session.listTools()
   if (tools.length === 0) {
     throw new Error('连接成功但未提供任何工具（可能是占位网关或需订阅），请换官方端点')

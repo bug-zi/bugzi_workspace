@@ -2,6 +2,7 @@
 import { getJsonSetting, getSetting } from '../db/settings'
 import type { LlmConfig } from '../../src/shared/types'
 import { SettingsKeys } from '../../src/shared/types'
+import { ensureNotCancelled } from './jobs'
 
 export class LlmNotConfiguredError extends Error {
   constructor() {
@@ -41,7 +42,8 @@ export interface ChatResult {
 /** 429 限流自动重试次数（中转服务账号并发超限属瞬态错误，等待后重试即可） */
 const RATE_LIMIT_RETRIES = 3
 
-/** 调用默认 LLM 的一次 chat completion。失败抛带 message 的 Error（渲染层 toast 展示） */
+/** 调用默认 LLM 的一次 chat completion。失败抛带 message 的 Error（渲染层 toast 展示）；
+ *  signal 取消 → 抛「已取消」（含 429 退避等待期，取消立即中断不等计时） */
 export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   const cfg = getDefaultLlm() // 未配置时抛 LlmNotConfiguredError
   const url = normalizeChatUrl(cfg.apiUrl)
@@ -55,6 +57,7 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
 
   let res: Response
   for (let attempt = 0; ; attempt++) {
+    ensureNotCancelled(opts.signal)
     try {
       res = await fetch(url, {
         method: 'POST',
@@ -62,9 +65,11 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${cfg.apiKey}`
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: opts.signal
       })
     } catch (e) {
+      if (opts.signal?.aborted) throw new Error('已取消')
       throw new Error(`网络请求失败：${(e as Error).message}`)
     }
     // 429 账号并发/限流：尊重 Retry-After 头，否则指数退避 2s/4s/8s 后自动重试
@@ -75,7 +80,7 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
       Number.isFinite(retryAfter) && retryAfter > 0
         ? Math.min(retryAfter * 1000, 15_000)
         : (backoff[attempt] ?? 8000)
-    await new Promise((r) => setTimeout(r, waitMs))
+    await sleepOrAbort(waitMs, opts.signal)
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -87,6 +92,23 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   const content = data?.choices?.[0]?.message?.content
   if (typeof content !== 'string') throw new Error('LLM 返回格式异常（无 choices[0].message.content）')
   return { content }
+}
+
+/** 退避等待：与 signal abort race（取消立即中断，不等计时走完） */
+function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((r) => setTimeout(r, ms))
+  if (signal.aborted) return Promise.reject(new Error('已取消'))
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(t)
+      reject(new Error('已取消'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 /** 标准化 models URL：自动拼 /v1/models（调用方给 base 或完整路径均可） */
@@ -121,8 +143,8 @@ export async function listUpstreamModels(config: LlmConfig): Promise<string[]> {
   return models.sort((a, b) => a.localeCompare(b))
 }
 
-/** LLM「测试连接」：发一次最小请求（个人中心 specs §3.4） */
-export async function testLlmConnection(config: LlmConfig): Promise<void> {
+/** LLM「测试连接」：发一次最小请求（个人中心 specs §3.4）；signal 取消 → 抛「已取消」 */
+export async function testLlmConnection(config: LlmConfig, signal?: AbortSignal): Promise<void> {
   const url = normalizeChatUrl(config.apiUrl)
   let res: Response
   try {
@@ -136,9 +158,11 @@ export async function testLlmConnection(config: LlmConfig): Promise<void> {
         model: config.model,
         messages: [{ role: 'user', content: 'ping' }],
         max_tokens: 1
-      })
+      }),
+      signal
     })
   } catch (e) {
+    if (signal?.aborted) throw new Error('已取消')
     throw new Error(`网络请求失败：${(e as Error).message}`)
   }
   if (!res.ok) {
