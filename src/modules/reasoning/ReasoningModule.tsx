@@ -3,9 +3,12 @@
 import { useState } from 'react'
 import TurtlePanel from './TurtlePanel'
 import WallPanel from './WallPanel'
+import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 export default function ReasoningModule() {
   const [board, setBoard] = useState<'turtle' | 'wall'>('turtle')
+  // v1.3 题库预生成：进入推理角模块触发补充泵（存量达标即 no-op；覆盖「LLM 事后才配置好」场景）
+  useModuleActivated('reasoning', () => void window.api.reasoning.stockCheck())
   return (
     <div className="module-page">
       <div className="module-header">

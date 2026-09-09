@@ -4,6 +4,7 @@ import { ThemeProvider, useAppSettings } from './theme/ThemeProvider'
 import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
+import CanvasSidebar from './components/CanvasSidebar'
 import MottosModule from './modules/mottos/MottosModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
@@ -71,8 +72,8 @@ function Shell() {
   useEffect(() => {
     moduleRef.current = module
   }, [module])
-  // 右缘双面板互斥展开（优化建议区第21轮）：'ai'=debugzi | 'draft'=草稿本 | null=都收起（右缘细条双图标入口）
-  const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | null>('ai')
+  // 右缘三面板互斥展开（260909 画布加入）：'ai'=debugzi | 'draft'=草稿本 | 'canvas'=画布 | null=都收起（右缘细条三图标入口）
+  const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | 'canvas' | null>('ai')
   const [aiPending, setAiPending] = useState<{ text: string; channel: AiChannel; auto: boolean } | null>(null)
   const [aiVersion, setAiVersion] = useState(0)
   const [aiForceOpen, setAiForceOpen] = useState(false)
@@ -92,6 +93,7 @@ function Shell() {
   useEffect(() => {
     void window.api.settings.get(SettingsKeys.RightPanelExpanded).then((v) => {
       if (v === 'draft') setRightPanel('draft')
+      else if (v === 'canvas') setRightPanel('canvas')
       else if (v === '') setRightPanel(null)
       else setRightPanel('ai')
     })
@@ -109,7 +111,7 @@ function Shell() {
     })
   }, [])
 
-  const switchRightPanel = useCallback((p: 'ai' | 'draft' | null): void => {
+  const switchRightPanel = useCallback((p: 'ai' | 'draft' | 'canvas' | null): void => {
     setRightPanel(p)
     void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')
   }, [])
@@ -213,8 +215,8 @@ function Shell() {
           {module === 'noise' && <NoisePage />}
         </main>
 
-        {/* 右侧边栏（右缘双面板互斥：debugzi 常驻挂载保持生成态，草稿本按需挂载）；
-            外包列容器底部挂主题按钮（specs §5.3，自左栏底部迁来）——三态常驻窗口右下角 */}
+        {/* 右侧边栏（右缘三面板互斥：debugzi 常驻挂载保持生成态，草稿本/画布按需挂载）；
+            主题按钮仅三面板收起时显示于右下角（优化建议区第29轮：右栏展开时隐藏，治展开态通条不美观） */}
         <div className="right-col">
           <AiSidebar
             collapsed={rightPanel !== 'ai'}
@@ -222,6 +224,7 @@ function Shell() {
             onExpand={() => switchRightPanel('ai')}
             onCollapse={() => switchRightPanel(null)}
             onOpenDraft={() => switchRightPanel('draft')}
+            onOpenCanvas={() => switchRightPanel('canvas')}
             currentModule={module}
             pending={aiPending}
             onPendingConsumed={() => setAiPending(null)}
@@ -231,13 +234,16 @@ function Shell() {
           {rightPanel === 'draft' && (
             <DraftSidebar onCollapse={() => switchRightPanel(null)} turtleGame={turtleGame} />
           )}
-          <button
-            className="right-col-theme"
-            onClick={toggleTheme}
-            title={theme === 'light' ? '切到深色' : '切到浅色'}
-          >
-            <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
-          </button>
+          {rightPanel === 'canvas' && <CanvasSidebar onCollapse={() => switchRightPanel(null)} />}
+          {rightPanel === null && (
+            <button
+              className="right-col-theme"
+              onClick={toggleTheme}
+              title={theme === 'light' ? '切到深色' : '切到浅色'}
+            >
+              <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
+            </button>
+          )}
         </div>
       </div>
 

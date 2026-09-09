@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'books', 'covers', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'canvas', 'books', 'covers', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -690,6 +690,43 @@ function migrate(): void {
       created_at TEXT NOT NULL
     )`)
     d.exec('PRAGMA user_version = 24')
+  }
+
+  if (version < 25) {
+    // v25：画布（新功能开发区 260909）——右缘第三面板的 Excalidraw 画布，多画布管理。
+    // 正文存 canvas/{id}.excalidraw（标准 Excalidraw JSON，可直接被官方导入导出），
+    // 删除走回收站软删（deleted_at）。无 channel 字段（画布无频道维度）。
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS canvases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_canvases_updated ON canvases(updated_at);
+    `)
+    d.exec('PRAGMA user_version = 25')
+  }
+
+  if (version < 26) {
+    // v26：推理角题库预生成（v1.3 设计 260907，因后续模块挤占版本号顺延至此）——
+    // 每日一题/练习场共用的预生成题池（补充泵 electron/services/reasoningStock.ts 后台维持）。
+    // 池是未消费的储备：无 deleted_at、不进回收站、无删除入口；被取走即转正（每日题）或消耗（练习场）。
+    // title 列为 v1.7 口径适配：练习场取池题生成即入 wall_bank，题库行需要标题（每日一题转正忽略 title）。
+    d.exec(`CREATE TABLE IF NOT EXISTS wall_pool (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL DEFAULT '',
+      puzzle_text TEXT NOT NULL,
+      answer_standard TEXT NOT NULL,
+      standard_reasoning TEXT NOT NULL,
+      hints TEXT NOT NULL DEFAULT '[]',
+      puzzle_type TEXT NOT NULL,
+      difficulty TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('PRAGMA user_version = 26')
   }
 }
 

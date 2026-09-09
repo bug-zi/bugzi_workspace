@@ -9,6 +9,8 @@
 > **v1.6（260908）思维墙题型换血**：三数学题型（不变量/策略协议/反直觉概率）全部退池，新四类思维游戏题型上线——detective_case 侦探断案 / lateral_puzzle 情境谜题 / word_logic 文字谜题 / life_logic 生活逻辑；难度标尺改为「线索复杂度 + 误导强度」（简单=单一洞察+伪装到位、中等=多线索+主动误导、困难=完整推理链+唯一假设法），脑筋急转弯/模板套皮/数学理论题任何档位不合格；出题审题判答 prompt 全部换血（两阶段管线机制不变），判答签名增 `typeZh` 题型语境（每日一题取 `WALL_TYPE_ZH[puzzle_type]`、练习场取 `entry.typeZh`、题库取 `row.tag`）；精选题库 v22 迁移追加 8 题（`WALL_BANK_SEED_V22`，source「AI 起草」，4 道已校准 4 道待人工验证，**题库无 hints 字段**——三级提示仅为每日一题/练习场机制）；**v23 迁移删除 v13 批次旧 10 道数学种子题**（实施后开发者追加指令——种子数组退役、v13 迁移改为只建表、旧题按标题白名单删除并连带清理题解 md，题库最终仅 8 道新题），WALL_TYPE_ZH 保留全部旧类型映射兼容存量行；v1.3 规划的 wall_pool 题池未实施（代码无此表），每日一题/练习场仍现场两阶段生成。设计文档：`docs/project/左侧边栏/推理角/archive/2026-09-08-思维墙题型换血-design.md`（例题经开发者校准确认，已实施归档）。增量见 §0 题型、§1 DB v22/v23、§3 两个 AI 函数、§8 验收。
 >
 > **v1.7（260909）练习题入库 + 题库改名 + 题面渲染**（开发者优化指令，原 `docs/project/左侧边栏/推理角/优化设计.md` 已实施归档至 `archive/2026-09-09-练习题入库与题库改名.md`）：① 练习场生成题不再用完即弃——`wall:practiceNew` 生成即 INSERT `wall_bank`（todo 态；source「AI 练习场生成（YYYY-MM-DD）」；title 取出题 JSON 新增的短标题字段（10 字内不剧透），缺失兜底题面首行去 md 记号截 16 字）；`wall:practiceAnswer` 判答后回写该行终态（solved/failed）与详情 md（行已终态则跳过，防题库侧先答双写）；弃做的题留题库 todo 可回补作答（题库侧无提示机制，一题一命口径不变）。PracticeEntry 增 `bankId`。② 「精选题库」改名「题库」，副标题「策展难题 · 练习场生成题自动入库 · 一题一命」，练习场副标题与换题提示同步。③ 三处题面显示（每日一题 / 题库 / 练习场的 quiz-question）由 `pre-wrap` 纯文本改 `MdView` 渲染（题面本就是 md，加粗与列表生效）。零 DB 迁移（复用 wall_bank 现有列）。增量见 §2、§3、§4、§8。
+>
+> **v1.8（260909）v1.3 题库预生成实施落地**（设计 260907 批准、因 DB 版本号被他模块连续挤占顺延至此）：v1.3 全量落地，与原设计的**三处实施适配**——① wall_pool 迁移最终为 **DB v26**（原写 v14，先后被草稿本 v14、汤质量 v15、题型换血 v22/v23、藏书架 v24、信息源/记账本 v20/v21、画布 v25 占用顺延）；② wall_pool 增 **`title` 列**（v1.6 起出题管线产 title、v1.7 练习题入题库需要标题，原设计写作时两者均未存在）；③ 练习场取池题**同步入 `wall_bank` todo 态**（原设计写于「练习题用完即弃」时代，须并轨 v1.7 生成即入库口径，否则判答无 bankId 可回写；source 统一「AI 练习场生成（取用当日）」，池为不可见实现细节）。新增 IPC `reasoning:stockCheck` 与事件桥 `reasoning.onStockChanged`；`ReasoningModule` 模块激活时触发泵。增量见 §0、§1、§2、§4、§6、§8。
 
 ## 0. 命名与常量
 
@@ -110,16 +112,17 @@ CREATE TABLE wall_bank (
 - v13 迁移同时插入首批评选 10 题（`electron/db/wallBankSeed.ts`，答案/论证均经人工验证；对话中已向开发者示过答案的原创题不收原题——2026 卡片题改用 2017 变体，18 日期认知题未收录）；目录清单追加 `md/wall/bank`。
 - 精选题库记录不可删除、不进回收站（同「墙是真实历史」口径）。
 
-**DB v14（v1.3 题库预生成）**：新表 `wall_pool`——每日一题/练习场共用的预生成题池：
+**wall_pool（v1.3 题库预生成，实施为 DB v26）**：新表 `wall_pool`——每日一题/练习场共用的预生成题池：
 
 ```sql
 CREATE TABLE wall_pool (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',      -- 题目短标题（v1.8 实施加列：练习场取池题入 wall_bank 用；每日一题转正忽略）
   puzzle_text TEXT NOT NULL,          -- 题面
   answer_standard TEXT NOT NULL,      -- 标准结论
   standard_reasoning TEXT NOT NULL,   -- 标准论证（判答讲解用，照 v13 口径）
   hints TEXT NOT NULL DEFAULT '[]',   -- 三级提示 JSON（出题时一次生成）
-  puzzle_type TEXT NOT NULL,          -- 三洞察题型
+  puzzle_type TEXT NOT NULL,          -- v1.6 四思维游戏题型
   difficulty TEXT NOT NULL,           -- easy|medium|hard
   created_at TEXT NOT NULL
 );
@@ -130,7 +133,7 @@ CREATE TABLE wall_pool (
 
 **DB v15（v1.4 海龟汤出题质量）**：`ALTER TABLE turtle_soups ADD COLUMN trick_note TEXT`——核心诡计一句话概括（15~40 字；新汤出题时随碗产出，存量汤启动后一次性 LLM 回填，全量含回收站软删——软删汤思路同样算「已用过」）。纯内部机制：供 generateSoups 出题避免清单与 reviewSoup 同构检查注入（近 9 碗），**不进任何 UI 与对局记录 md**（防剧透）。回填函数 `backfillTrickNotes()`（main.ts 启动延迟 10s fire-and-forget，静默失败下次启动再试，跑完即无）。
 
-（版本号更正：v1.3 的 wall_pool 迁移由「DB v14」顺延为 **v16**——草稿本模块已实际占用 v14，v15 见上。）
+（版本号更正史：v1.3 的 wall_pool 迁移由「DB v14」顺延 v16（草稿本占用 v14）→ v1.6 题型换血时仍未实施（v22 注记）→ **v1.8（260909）最终以 DB v26 落地**，v17~v25 均为他模块占用：汤对局字段/汤计时/藏书架/信息源/记账本/题库种子/种子退役/划词笔记/画布。）
 
 **DB v22（v1.6 思维墙题型换血）**：精选题库追加 8 道思维游戏题——`electron/db/wallBankSeed.ts` 新增导出 `WALL_BANK_SEED_V22`（4 道经开发者例题校准：侦探 hard「雨夜失窃的怀表」/ 情境 medium「1208 房」/ 文字 medium「祖父的信」/ 生活 hard「额头上的红漆」；4 道待人工验证：侦探 easy「碎玻璃」/ 情境 easy「周日晚上的电话」/ 文字 medium「老先生的对联」/ 生活 medium「消失的坚果」），source 统一「AI 起草」，tag 即题型中文名；迁移只插入不动旧行。**题库无 hints 字段**（三级提示仅为每日一题/练习场机制）。注：v1.3 规划的 wall_pool（顺延 v16）未实施——代码无此表，v22 直接顺延实际版本号（v17 海龟汤对局字段、v18 海龟汤计时、v19 藏书架、v20 信息源、v21 记账本均为他模块当日占用）。
 
@@ -183,7 +186,7 @@ CREATE TABLE wall_pool (
 
 - 打卡墙下方独立 zone（icon `fitness_center`）：随时刷题、自选难度（下拉 随机/简单/中等/困难，默认随机，单次有效不持久化——照汤库难度偏好惯例），**不计入打卡墙/连胜/月历**；**v1.7：题目本体生成即入题库 `wall_bank`（todo 态）**，副标提示「生成题自动入题库」。
 - **作答态是会话级的**：主进程内存 Map `practiceBank` 暂存（bankId/题面/标准答案/三级提示），容量 10 条防累积，应用重启即清——清的只是作答态，题目本体在题库不丢。判答入参 id 失效（重启后）抛 `PRACTICE_GONE`，渲染层 toast 后重出一道。
-- 交互照每日一题同款：出题（`wall:practiceNew`，v1.3 优先从 wall_pool 按难度/题型筛选取题——DELETE 池行后入 practiceBank，秒回；池中无匹配兜底现场两阶段生成，loading「题库见底，现场出题中…」）→ 作答卡（quiz-card + **题面 MdView 渲染** + 三级提示内存直取 `wall:practiceHint`）→ 判答（`wall:practiceAnswer`，宽松等价 + 完整讲解，一题一命判答即终局，**v1.7 回写题库终态与详情 md**）→ 结果卡（对/错 + 我的作答 + 标准答案 + **讲解内联 MdView 渲染** `.rs-explain`）+「再来一道」。换题直接再点「来一道」——弃做的题留题库 todo 可回补（提示文案 v1.7）。
+- 交互照每日一题同款：出题（`wall:practiceNew`，v1.3 优先从 wall_pool 按难度/题型筛选取题（随机=不限）——**同事务 DELETE 池行 + 入题库 wall_bank todo 态（v1.8 并轨 v1.7 入库口径，title 取池行）**后入 practiceBank，秒回；池中无匹配兜底现场两阶段生成，loading「题库见底，现场出题中…」；两条路径取题后均触发补充泵）→ 作答卡（quiz-card + **题面 MdView 渲染** + 三级提示内存直取 `wall:practiceHint`）→ 判答（`wall:practiceAnswer`，宽松等价 + 完整讲解，一题一命判答即终局，**v1.7 回写题库终态与详情 md**）→ 结果卡（对/错 + 我的作答 + 标准答案 + **讲解内联 MdView 渲染** `.rs-explain`）+「再来一道」。换题直接再点「来一道」——弃做的题留题库 todo 可回补（提示文案 v1.7）。
 - **题型自选**：难度下拉旁加题型下拉（随机题型 / 侦探断案 / 情境谜题 / 文字谜题 / 生活逻辑，**v1.6 换血**，默认随机，单次有效不持久化），`practiceNew` 第三参传入。
 - 出题/判答复用 `generateWallPuzzle` / `judgeWallAnswer`，画像注入口径不变（出题注入、判答不注入）。
 

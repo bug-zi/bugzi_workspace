@@ -5,6 +5,7 @@ import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
+import { ensureReasoningStock } from './services/reasoningStock'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -38,7 +39,7 @@ import {
   localDateStr,
   WALL_TYPE_LIST
 } from './ai/services'
-import type { TurtleSoupMaterial, WallPuzzleDraft, WallPuzzleType } from './ai/services'
+import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { beginJob, endJob, cancelJob } from './ai/jobs'
 import { getEnabledMcps } from './ai/mcp'
@@ -179,7 +180,7 @@ export function registerIpc(): void {
     | 'drafts'
   const RECYCLE_MAP: Record<
     string,
-    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game' | 'drafts'
+    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game' | 'drafts' | 'canvases'
   > = {
     mottos: 'mottos',
     wiki_entries: 'wiki',
@@ -188,7 +189,8 @@ export function registerIpc(): void {
     zhijiji_questions: 'zhijiji',
     turtle_soups: 'reasoning_soup',
     turtle_games: 'reasoning_game',
-    drafts: 'drafts'
+    drafts: 'drafts',
+    canvases: 'canvases'
   }
 
   ipcMain.handle('item:discard', (_e, table: string, id: number) => {
@@ -620,6 +622,54 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 画布（DB v25，新功能开发区 260909）：右缘第三面板的 Excalidraw 画布 ----------
+  ipcMain.handle('canvas:list', () =>
+    getDb()
+      .prepare(
+        'SELECT id, title, path, created_at, updated_at FROM canvases WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC'
+      )
+      .all()
+  )
+  /** 空白画布标准 .excalidraw JSON（主进程不依赖 Excalidraw 包；格式与官方 serializeAsJSON 一致） */
+  const EMPTY_CANVAS_JSON = JSON.stringify({
+    type: 'excalidraw',
+    version: 2,
+    source: 'bugzi_workspace',
+    elements: [],
+    appState: { viewBackgroundColor: '#ffffff', gridSize: null }
+  })
+  ipcMain.handle('canvas:create', () => {
+    const d = getDb()
+    const now = nowIso()
+    // 自动命名「未命名画布 N」：N 取存量行数+1（标题可改，重复无害）
+    const n = (d.prepare('SELECT COUNT(*) AS c FROM canvases').get() as { c: number }).c
+    const r = d
+      .prepare('INSERT INTO canvases (title, path, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run(`未命名画布 ${n + 1}`, 'PENDING', now, now)
+    const id = Number(r.lastInsertRowid)
+    const p = `canvas/${id}.excalidraw`
+    d.prepare('UPDATE canvases SET path = ? WHERE id = ?').run(p, id)
+    mdCreate(p, EMPTY_CANVAS_JSON)
+    return id
+  })
+  ipcMain.handle('canvas:rename', (_e, id: number, title: string) => {
+    // 改名不触碰 updated_at（口径同草稿/会话，列表顺序稳定）
+    getDb()
+      .prepare('UPDATE canvases SET title = ? WHERE id = ?')
+      .run(title.trim().slice(0, 50) || '未命名画布', id)
+    return true
+  })
+  ipcMain.handle('canvas:save', (_e, id: number, json: string) => {
+    const d = getDb()
+    const row = d.prepare('SELECT path FROM canvases WHERE id = ?').get(id) as
+      | { path: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    mdWrite(row.path, json)
+    d.prepare('UPDATE canvases SET updated_at = ? WHERE id = ?').run(nowIso(), id)
+    return true
+  })
+
   // ---------- 文笔坊（DB v17，文笔坊 specs §2/§3/§4）：浮生记零 AI + 写作台 + Copilot ----------
   ipcMain.handle('wenbi:journalList', () =>
     getDb()
@@ -1031,6 +1081,8 @@ export function registerIpc(): void {
         soupId
       )
       game = { id: Number(r.lastInsertRowid) }
+      // 开新局 = fresh 存量减一（v1.3 题库预生成）：后台补货（续局/终局回看不减 fresh 不触发）
+      void ensureReasoningStock()
     }
     // 恢复对局：清残留计时段——同 run 内恢复前必有 pause 已结算（清空幂等无害）；
     // 跨 run 即崩溃自愈（异常退出残留的开段直接丢弃，不把离线时间计入）
@@ -1225,8 +1277,14 @@ export function registerIpc(): void {
       )
       .all()
   )
+  // 题库补充泵触发（v1.3）：进入推理角模块时调（覆盖「LLM 事后才配置好」场景）。
+  // fire-and-forget 秒回；存量达标即 no-op，泵内部静默失败。
+  ipcMain.handle('reasoning:stockCheck', () => {
+    void ensureReasoningStock()
+    return true
+  })
 
-  // ---------- 思维墙（打开现出，无定时器；specs §2/§4；v1.2 洞察题管线） ----------
+  // ---------- 思维墙（v1.3 题库预生成：从 wall_pool 转正秒开，池空才现场出题；specs §2/§4） ----------
   ipcMain.handle('wall:ensureToday', async (_e, jobId: string) => {
     const ac = beginJob(jobId)
     try {
@@ -1237,40 +1295,73 @@ export function registerIpc(): void {
         // 出题难度由连胜推导（v1.2：答对 1 天即升一档，答错清零回 easy）
         const lv = Math.min(2, wallStreak())
         const difficulty = (['easy', 'medium', 'hard'] as const)[lv]
-        // 题型轮换：近 2 日已出题型不再出（三题型池保证至少剩一种可选）
-        const recentTypes = d
-          .prepare(
-            'SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2'
-          )
-          .all()
-          .map((r) => (r as { puzzle_type: string }).puzzle_type)
-        const candidates = WALL_TYPE_LIST.filter((t) => !recentTypes.includes(t))
-        const type = candidates[Math.floor(Math.random() * candidates.length)] ?? WALL_TYPE_LIST[0]
-        // 避免重复：近 20 题题面摘要入避免清单（防同构重出）
-        const avoid = (
+        // 题型轮换：近 2 日已出题型不再出（三题型以上池保证至少剩一种可选；池选题与兜底生成共用）
+        const recentTypes = (
           d
-            .prepare(
-              'SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20'
+            .prepare('SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2')
+            .all() as { puzzle_type: string }[]
+        ).map((r) => r.puzzle_type)
+        // v1.3：优先从池中选，四级放宽——①难度匹配且题型避近 2 日 ②仅按难度 ③池内任意
+        // ④池空（undefined）→ 兜底现场生成；命中即同事务转正，零 LLM 调用，秒开
+        const pooled =
+          pickPoolPuzzle(d, { difficulty, avoidTypes: recentTypes }) ??
+          pickPoolPuzzle(d, { difficulty }) ??
+          pickPoolPuzzle(d, {})
+        if (pooled) {
+          const now = nowIso()
+          d.exec('BEGIN')
+          try {
+            d.prepare(
+              'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).run(
+              today,
+              pooled.puzzle_text,
+              pooled.answer_standard,
+              pooled.standard_reasoning,
+              pooled.hints,
+              pooled.puzzle_type,
+              pooled.difficulty,
+              'answering',
+              now,
+              now
             )
-            .all() as { puzzle_text: string }[]
-        ).map((r) => r.puzzle_text.replace(/\s+/g, ' ').slice(0, 60))
-        const draft = await generateWallPuzzle(difficulty, { type, avoid }, ac.signal)
-        const now = nowIso()
-        d.prepare(
-          'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(
-          today,
-          draft.puzzle,
-          draft.answer,
-          draft.reasoning,
-          JSON.stringify(draft.hints),
-          draft.type,
-          draft.difficulty,
-          'answering',
-          now,
-          now
-        )
-        row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+            d.prepare('DELETE FROM wall_pool WHERE id = ?').run(pooled.id)
+            d.exec('COMMIT')
+          } catch (e) {
+            d.exec('ROLLBACK')
+            throw e
+          }
+          row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+          void ensureReasoningStock()
+        } else {
+          // 池空兜底：现场两阶段生成（现有管线原样，「题库见底，现场出题中…」loading 仅此场景出现）
+          const candidates = WALL_TYPE_LIST.filter((t) => !recentTypes.includes(t))
+          const type = candidates[Math.floor(Math.random() * candidates.length)] ?? WALL_TYPE_LIST[0]
+          // 避免重复：近 20 题题面摘要入避免清单（防同构重出）
+          const avoid = (
+            d
+              .prepare('SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20')
+              .all() as { puzzle_text: string }[]
+          ).map((r) => r.puzzle_text.replace(/\s+/g, ' ').slice(0, 60))
+          const draft = await generateWallPuzzle(difficulty, { type, avoid }, ac.signal)
+          const now = nowIso()
+          d.prepare(
+            'INSERT INTO wall_puzzles (date, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).run(
+            today,
+            draft.puzzle,
+            draft.answer,
+            draft.reasoning,
+            JSON.stringify(draft.hints),
+            draft.type,
+            draft.difficulty,
+            'answering',
+            now,
+            now
+          )
+          row = d.prepare('SELECT * FROM wall_puzzles WHERE date = ?').get(today)
+          void ensureReasoningStock()
+        }
       }
       return wallPayload(row)
     } finally {
@@ -1375,6 +1466,7 @@ export function registerIpc(): void {
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
   // 会话级作答态暂存主进程内存（practiceBank）；题目本体生成即入题库 wall_bank（todo 态，
   // 260909 优化：练习题不再用完即弃）——练习场判答回写终态与详情 md，弃做的题留在题库可回补。
+  // v1.3 题库预生成：优先从 wall_pool 按难度/题型筛选取题（随机=不限），秒回；无匹配兜底现场生成。
   ipcMain.handle('wall:practiceNew', async (_e, jobId: string, pref: string, typePref?: string) => {
     const ac = beginJob(jobId)
     try {
@@ -1382,8 +1474,65 @@ export function registerIpc(): void {
         pref === 'easy' || pref === 'medium' || pref === 'hard'
           ? pref
           : (['easy', 'medium', 'hard'] as const)[Math.floor(Math.random() * 3)] // 随机
-      // 题型自选（v1.2）：随机 | 三洞察题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落 wall_puzzles，无历史可避）
+      // 题型自选（v1.2）：随机 | 四思维游戏题型之一（防重复注入见 wall_puzzles 近题避免清单——练习不落 wall_puzzles，无历史可避）
       const type: WallPuzzleType | undefined = WALL_TYPE_LIST.find((t) => t === typePref)
+      // v1.3：池优先（pref 随机 = 不限难度）；取走即消耗——同事务 DELETE 池行 + 入题库 todo 态
+      const pooled = pickPoolPuzzle(getDb(), {
+        difficulty: pref === 'random' ? undefined : difficulty,
+        type
+      })
+      if (pooled) {
+        const d = getDb()
+        const typeZh = WALL_TYPE_ZH[pooled.puzzle_type] ?? pooled.puzzle_type
+        const diffZh = DIFFICULTY_ZH[pooled.difficulty] ?? pooled.difficulty
+        const hints = parseWallHints(pooled.hints)
+        const now = nowIso()
+        d.exec('BEGIN')
+        let bankId: number
+        try {
+          d.prepare('DELETE FROM wall_pool WHERE id = ?').run(pooled.id)
+          const r = d
+            .prepare(
+              'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )
+            .run(
+              bankTitle(pooled.title, pooled.puzzle_text),
+              typeZh,
+              pooled.difficulty,
+              pooled.puzzle_text,
+              pooled.answer_standard,
+              pooled.standard_reasoning,
+              `AI 练习场生成（${now.slice(0, 10)}）`,
+              'todo',
+              now,
+              now
+            )
+          d.exec('COMMIT')
+          bankId = Number(r.lastInsertRowid)
+        } catch (e) {
+          d.exec('ROLLBACK')
+          throw e
+        }
+        const id = ++practiceSeq
+        practiceBank.set(id, {
+          bankId,
+          puzzle: pooled.puzzle_text,
+          answer: pooled.answer_standard,
+          reasoning: pooled.standard_reasoning,
+          hints,
+          hintsUsed: 0,
+          typeZh,
+          diffZh
+        })
+        // 长会话防累积：只留最近 10 条。Map 按插入序遍历，删最旧不伤当前题（当前题必是最新插入）
+        for (const old of practiceBank.keys()) {
+          if (practiceBank.size <= 10) break
+          practiceBank.delete(old)
+        }
+        void ensureReasoningStock()
+        return { id, puzzle: pooled.puzzle_text, typeZh, diffZh, hintsTotal: hints.length }
+      }
+      // 兜底：池中无匹配（如指定题型但池里没有）→ 现场两阶段生成（现状链路）
       const draft = await generateWallPuzzle(difficulty, { type: type ?? undefined }, ac.signal)
       const typeZh = WALL_TYPE_ZH[draft.type] ?? draft.type
       // 生成即入题库（260909）：todo 态起步，与人工策展种子同表同规则（一题一命、不进回收站）
@@ -1393,7 +1542,7 @@ export function registerIpc(): void {
           'INSERT INTO wall_bank (title, tag, difficulty, puzzle_text, answer_standard, solution, source, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
-          practiceBankTitle(draft),
+          bankTitle(draft.title, draft.puzzle),
           typeZh,
           draft.difficulty,
           draft.puzzle,
@@ -1421,6 +1570,7 @@ export function registerIpc(): void {
         if (practiceBank.size <= 10) break
         practiceBank.delete(old)
       }
+      void ensureReasoningStock()
       return {
         id,
         puzzle: draft.puzzle,
@@ -1966,11 +2116,42 @@ interface PracticeEntry {
 const practiceBank = new Map<number, PracticeEntry>()
 let practiceSeq = 0
 
-/** 练习题入题库标题：LLM 短标题优先，未给时兜底取题面首行（去 md 记号截 16 字） */
-function practiceBankTitle(draft: WallPuzzleDraft): string {
-  const t = (draft.title ?? '').trim()
+/** wall_pool 行（v1.3 预生成题池：未消费的储备，无 deleted_at、不进回收站） */
+interface WallPoolRow {
+  id: number
+  title: string
+  puzzle_text: string
+  answer_standard: string
+  standard_reasoning: string
+  hints: string
+  puzzle_type: string
+  difficulty: string
+  created_at: string
+}
+
+/**
+ * 从 wall_pool 按条件随机选一道（v1.3）：难度/题型/题型避让均可省略，无匹配返回 undefined。
+ * 只选不删——池行删除与转正（每日题）/入题库（练习场）由调用方同事务完成（防半途丢失）。
+ */
+function pickPoolPuzzle(
+  d: ReturnType<typeof getDb>,
+  cond: { difficulty?: string; type?: WallPuzzleType; avoidTypes?: string[] }
+): WallPoolRow | undefined {
+  const rows = d.prepare('SELECT * FROM wall_pool').all() as unknown as WallPoolRow[]
+  const match = rows.filter(
+    (r) =>
+      (cond.difficulty === undefined || r.difficulty === cond.difficulty) &&
+      (cond.type === undefined || r.puzzle_type === cond.type) &&
+      !(cond.avoidTypes?.includes(r.puzzle_type) ?? false)
+  )
+  return match.length ? match[Math.floor(Math.random() * match.length)] : undefined
+}
+
+/** 练习题入题库标题：LLM 短标题（池行预生成或现场草稿）优先，未给时兜底取题面首行（去 md 记号截 16 字） */
+function bankTitle(title: string | undefined, puzzle: string): string {
+  const t = (title ?? '').trim()
   if (t) return t
-  const firstLine = draft.puzzle
+  const firstLine = puzzle
     .split('\n')
     .map((s) => s.trim())
     .find((s) => s !== '')

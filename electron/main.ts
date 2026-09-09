@@ -6,6 +6,7 @@ import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
 import { registerIpc, settleTurtleTimers } from './ipc'
 import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
+import { ensureReasoningStock } from './services/reasoningStock'
 import { applyDataDirAtStartup } from './services/storage'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
@@ -76,6 +77,8 @@ if (!app.requestSingleInstanceLock()) {
     startSchedulers()
     // 存量汤诡计摘要一次性回填（海龟汤质量优化 spec）：错开启动高峰，失败静默（内部自 catch）
     setTimeout(() => void backfillTrickNotes(), 10_000).unref()
+    // 推理角题库预生成泵（v1.3）：同样错开启动高峰；存量达标即 no-op，内部自 catch 永不抛错
+    setTimeout(() => void ensureReasoningStock(), 10_000).unref()
     createWindow()
 
     app.on('activate', () => {

@@ -64,6 +64,9 @@ export const SettingsKeys = {
   // 白噪音（260908 立项）：当前混音状态 + 自定义混音列表（均 JSON 字符串；重启记参数默认暂停）
   NoiseState: 'noise_state',
   NoiseCustomMixes: 'noise_custom_mixes',
+  // 画布（新功能开发区 260909）：右缘第三面板宽度 + 当前激活画布
+  CanvasWidth: 'canvas_width',
+  CanvasActiveId: 'canvas_active_id',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode'
 } as const
@@ -405,6 +408,7 @@ export interface RecycleItem {
     | 'reasoning_soup'
     | 'reasoning_game'
     | 'drafts'
+    | 'canvases'
     | 'wenbi_journal'
     | 'wenbi_article'
     | 'ledger_tx'

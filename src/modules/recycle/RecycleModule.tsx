@@ -14,6 +14,7 @@ const TABS: { key: string; label: string }[] = [
   { key: 'zhijiji', label: '致知己' },
   { key: 'reasoning', label: '推理角' },
   { key: 'drafts', label: '草稿本' },
+  { key: 'canvases', label: '画布' },
   { key: 'wenbi', label: '文笔坊' },
   { key: 'ledger', label: '记账本' }
 ]
@@ -44,6 +45,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '推理角汤库'
     case 'drafts':
       return '草稿本原频道'
+    case 'canvases':
+      return '画布面板'
     case 'wenbi_journal':
       return '浮生记时间线'
     case 'wenbi_article':
@@ -88,6 +91,7 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
     if (row.source === 'drafts') return String(p.title ?? '')
+    if (row.source === 'canvases') return String(p.title ?? '')
     if (row.source === 'wenbi_journal') {
       const d = new Date(String(p.created_at ?? ''))
       return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} 的记录`

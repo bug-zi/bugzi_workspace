@@ -1,5 +1,6 @@
 // 思维墙·练习场（design v2 备选提前落地 v1.1）：随时刷题、自选难度，不计入打卡墙/连胜。
-// 题目生成即入题库 wall_bank（260909 优化，todo 态）；作答态会话级暂存主进程内存
+// 题目优先从预生成题池 wall_pool 取（v1.3，秒回），无匹配兜底现场两阶段生成；
+// 生成/取用即入题库 wall_bank（260909 优化，todo 态）；作答态会话级暂存主进程内存
 // （wall:practiceNew / practiceHint / practiceAnswer），判答即终局并回写题库终态与详情 md；
 // 弃做的题留在题库（todo）可回补。答案与讲解内联渲染（MdView）。
 import { useState } from 'react'
@@ -162,7 +163,7 @@ export default function PracticePanel() {
             </select>
             <button className="btn btn-primary" disabled={loading} onClick={() => void newPuzzle()}>
               <span className={`material-symbols-outlined${loading ? ' spin' : ''}`}>casino</span>
-              {loading ? '出题中…' : '来一道'}
+              {loading ? '题库见底，现场出题中…' : '来一道'}
             </button>
             {newJob && (
               <button className="btn" onClick={() => void window.api.ai.cancel(newJob)} title="取消本次出题">

@@ -19,6 +19,8 @@ export interface AiSidebarProps {
   onCollapse: () => void
   /** 细条上切到草稿本 */
   onOpenDraft: () => void
+  /** 细条上切到画布 */
+  onOpenCanvas: () => void
   currentModule: string
   /** 模块动作带来的频道请求（万象问AI/辩真验证/致知己追问）：auto 时切频道后自动发送 */
   pending: { text: string; channel: AiChannel; auto: boolean } | null
@@ -88,6 +90,7 @@ export default function AiSidebar(props: AiSidebarProps) {
     onExpand,
     onCollapse,
     onOpenDraft,
+    onOpenCanvas,
     currentModule,
     pending,
     onPendingConsumed,
@@ -450,9 +453,9 @@ export default function AiSidebar(props: AiSidebarProps) {
   }
 
   if (collapsed) {
-    // 草稿本面板正展开：隐藏但保持挂载（进行中的生成任务 await 仍能回填状态，重展开即恢复）
+    // 草稿本/画布面板正展开：隐藏但保持挂载（进行中的生成任务 await 仍能回填状态，重展开即恢复）
     if (!showRail) return <aside className="ai-sidebar" style={{ display: 'none' }} aria-hidden />
-    // 都收起：右缘细条双图标入口（debugzi / 草稿本，互斥展开）
+    // 都收起：右缘细条三图标入口（debugzi / 草稿本 / 画布，互斥展开）
     return (
       <aside className="ai-sidebar collapsed">
         <button className="ai-toggle" onClick={onExpand} title={`展开 ${AI_NAME}`}>
@@ -460,6 +463,9 @@ export default function AiSidebar(props: AiSidebarProps) {
         </button>
         <button className="ai-toggle" onClick={onOpenDraft} title="展开草稿本">
           <span className="material-symbols-outlined">edit_note</span>
+        </button>
+        <button className="ai-toggle" onClick={onOpenCanvas} title="展开画布">
+          <span className="material-symbols-outlined">draw</span>
         </button>
       </aside>
     )

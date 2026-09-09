@@ -28,7 +28,8 @@ const api = {
         | 'zhijiji_questions'
         | 'turtle_soups'
         | 'turtle_games'
-        | 'drafts',
+        | 'drafts'
+        | 'canvases',
       id: number
     ): Promise<boolean> => ipcRenderer.invoke('item:discard', table, id),
     onRecycleChanged: (cb: () => void): (() => void) => {
@@ -52,6 +53,7 @@ const api = {
           | 'reasoning_soup'
           | 'reasoning_game'
           | 'drafts'
+          | 'canvases'
           | 'wenbi_journal'
           | 'wenbi_article'
           | 'ledger_tx'
@@ -248,6 +250,18 @@ const api = {
       ipcRenderer.invoke('zhijiji:renameQuestion', id, title),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id)
   },
+  reasoning: {
+    /** 题库补充泵触发（v1.3）：进入推理角模块时调；存量达标即 no-op，主进程 fire-and-forget */
+    stockCheck: (): Promise<boolean> => ipcRenderer.invoke('reasoning:stockCheck'),
+    /** 补充泵每补完一批推送（v1.3，照 recycle:changed 模式）：汤库列表渐进刷新 */
+    onStockChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('reasoning:stockChanged', listener)
+      return () => ipcRenderer.removeListener('reasoning:stockChanged', listener)
+    }
+  },
   turtle: {
     /** 「来 3 碗汤」：难度偏好可选（random 默认），3 碗三件套入库汤库 */
     generate: (
@@ -368,6 +382,22 @@ const api = {
     touch: (id: number): Promise<boolean> => ipcRenderer.invoke('draft:touch', id),
     /** 草稿入回收站（前端二次确认后调用） */
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'drafts', id)
+  },
+  canvas: {
+    /** 画布列表（updated_at 倒序） */
+    list: (): Promise<
+      { id: number; title: string; path: string; created_at: string; updated_at: string }[]
+    > => ipcRenderer.invoke('canvas:list'),
+    /** 新建画布（自动命名「未命名画布 N」），返回新画布 id */
+    create: (): Promise<number> => ipcRenderer.invoke('canvas:create'),
+    /** 改标题（不动 updated_at，列表顺序稳定） */
+    rename: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('canvas:rename', id, title),
+    /** 保存场景（.excalidraw JSON 落盘 + 触碰 updated_at 浮回列表顶部） */
+    save: (id: number, json: string): Promise<boolean> =>
+      ipcRenderer.invoke('canvas:save', id, json),
+    /** 画布入回收站（前端二次确认后调用） */
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'canvases', id)
   },
   wenbi: {
     /** 浮生记条目列表（created_at 倒序；零 AI 板块） */

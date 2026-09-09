@@ -153,6 +153,12 @@ export default function TurtlePanel() {
     }
   })
 
+  // 题库预生成（v1.3）：补充泵后台补的汤渐进出现（事件驱动刷新，无 toast 打扰；对局视图同样安全刷新列表态）
+  useEffect(() => {
+    const off = window.api.reasoning.onStockChanged(() => void loadSoups())
+    return off
+  }, [loadSoups])
+
   // 模块激活/失活跟踪（常驻挂载，初始非激活；激活/失活事件对维护）
   useEffect(() => {
     const on = (e: Event): void => {
@@ -760,7 +766,7 @@ export default function TurtlePanel() {
             {soups.length === 0 && (
               <div className="empty-state">
                 <span className="material-symbols-outlined">extension</span>
-                汤库是空的，点「来 3 碗汤」让 AI 出题
+                汤库是空的——AI 正在后台备汤，稍候即有新汤；或点「来 3 碗汤」立即补
               </div>
             )}
             {soups.map((s) => (

@@ -1,0 +1,263 @@
+/* 画布边栏（新功能开发区 260909）：结构镜像草稿本，宽度走 --canvas-width（280–900px） */
+.canvas-sidebar {
+  position: relative;
+  width: var(--canvas-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  min-height: 0;
+}
+/* 左缘拖拽调宽 */
+.canvas-resizer {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 10;
+}
+.canvas-resizer:hover {
+  background: var(--color-primary-soft);
+}
+.canvas-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+.canvas-title {
+  flex: 1;
+}
+/* ---------- 画布切换条（镜像草稿本） ---------- */
+.canvas-switchbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.canvas-switch-trigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.92em;
+}
+.canvas-switch-trigger:hover {
+  background: var(--color-primary-soft);
+}
+.canvas-switch-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.canvas-switch-trigger .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--color-text-secondary);
+}
+/* 画布区容器（浮层的定位上下文） */
+.canvas-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* ---------- 画布浮层（镜像草稿浮层） ---------- */
+.canvas-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+}
+.canvas-panel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  max-height: 70%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+.canvas-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+.canvas-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.canvas-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: inset 2px 0 0 transparent;
+}
+.canvas-item:hover {
+  background: var(--color-primary-soft);
+}
+.canvas-item.active {
+  background: var(--color-primary-soft);
+  box-shadow: inset 2px 0 0 var(--color-primary);
+}
+.canvas-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.92em;
+}
+.canvas-item-time {
+  font-size: 0.72em;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.canvas-item-act {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 2px;
+  border-radius: 4px;
+  visibility: hidden;
+  line-height: 1;
+}
+.canvas-item:hover .canvas-item-act {
+  visibility: visible;
+}
+.canvas-item-act:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+.canvas-item-act.canvas-item-del:hover {
+  color: var(--color-danger);
+}
+.canvas-item-act .material-symbols-outlined {
+  font-size: 15px;
+}
+.canvas-item-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+}
+.canvas-panel-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 0.88em;
+  line-height: 1.7;
+}
+/* ---------- 画布舞台 / 占位 / 空态 ---------- */
+.canvas-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.canvas-stage-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+}
+.canvas-bigwin-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+  text-align: center;
+  line-height: 1.8;
+  padding: 0 16px;
+}
+.canvas-bigwin-placeholder .material-symbols-outlined {
+  font-size: 28px;
+  opacity: 0.6;
+}
+.canvas-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 20%;
+  line-height: 1.8;
+  text-align: center;
+}
+.canvas-empty-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* ---------- 底部动作条 ---------- */
+.canvas-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+}
+.canvas-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.canvas-actions-hint {
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+}
+/* ---------- 大窗作画弹窗（复用全局 .dialog 骨架，加大加高） ---------- */
+.canvas-dialog {
+  width: min(1280px, 92vw);
+  height: 88vh;
+  max-height: 88vh;
+}
+.canvas-dialog .dialog-header {
+  padding: 8px 12px;
+}
+.canvas-dialog-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+}

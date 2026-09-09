@@ -1153,7 +1153,8 @@
   flex-direction: column;
 }
 .right-col > .ai-sidebar,
-.right-col > .draft-sidebar {
+.right-col > .draft-sidebar,
+.right-col > .canvas-sidebar {
   flex: 1;
   min-height: 0;
 }
@@ -1164,6 +1165,9 @@
   background: var(--color-surface);
   color: var(--color-text);
   padding: 9px;
+  /* 宽度钉死与收起细条同宽：按钮自然宽（约 42px）大于细条 36px 会撑宽 right-col，
+     导致细条右侧留缝不贴右缘（优化建议区第29轮反馈）；按钮仅在双面板收起态渲染，钉 36px 恒成立 */
+  width: var(--ai-width-collapsed);
   cursor: pointer;
   display: flex;
   align-items: center;

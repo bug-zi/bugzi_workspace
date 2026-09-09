@@ -13,6 +13,7 @@
     "smoke": "electron-vite build && electron . --smoke"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
     "@mozilla/readability": "^0.6.0",
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",

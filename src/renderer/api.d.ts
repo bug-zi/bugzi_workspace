@@ -29,6 +29,15 @@ export interface DraftRow {
   updated_at: string
 }
 
+/** 画布条目（canvases 表，DB v25；场景在 path 指向的真实 .excalidraw 文件） */
+export interface CanvasRow {
+  id: number
+  title: string
+  path: string
+  created_at: string
+  updated_at: string
+}
+
 export interface MottoRecord {
   id: number
   content: string
@@ -299,6 +308,7 @@ export interface RecycleRow {
     | 'reasoning_soup'
     | 'reasoning_game'
     | 'drafts'
+    | 'canvases'
     | 'wenbi_journal'
     | 'wenbi_article'
     | 'ledger_tx'
@@ -610,6 +620,12 @@ export interface Api {
     renameQuestion(id: number, title: string): Promise<boolean>
     discard(id: number): Promise<boolean>
   }
+  reasoning: {
+    /** 题库补充泵触发（v1.3）：进入推理角模块时调；存量达标即 no-op，主进程 fire-and-forget 秒回 */
+    stockCheck(): Promise<boolean>
+    /** 补充泵每补完一批推送（v1.3，照 recycle:changed 模式）：汤库列表渐进刷新 */
+    onStockChanged(cb: () => void): () => void
+  }
   turtle: {
     /** 「来 3 碗汤」：难度偏好可选（默认随机），三件套（汤面/汤底/裁判解析）入库汤库 */
     generate(
@@ -718,6 +734,18 @@ export interface Api {
     /** 大窗编辑（MdDialog 自行保存）后的触碰：只 bump updated_at */
     touch(id: number): Promise<boolean>
     /** 草稿入回收站（前端二次确认后调用） */
+    discard(id: number): Promise<boolean>
+  }
+  canvas: {
+    /** 画布列表（updated_at 倒序） */
+    list(): Promise<CanvasRow[]>
+    /** 新建画布（自动命名「未命名画布 N」），返回新画布 id */
+    create(): Promise<number>
+    /** 改标题（不动 updated_at，列表顺序稳定） */
+    rename(id: number, title: string): Promise<boolean>
+    /** 保存场景（.excalidraw JSON 落盘 + 触碰 updated_at 浮回列表顶部） */
+    save(id: number, json: string): Promise<boolean>
+    /** 画布入回收站（前端二次确认后调用） */
     discard(id: number): Promise<boolean>
   }
   wenbi: {

@@ -18,6 +18,7 @@ export type RecycleSource =
   | 'ledger_tx'
   | 'ledger_account'
   | 'ledger_category'
+  | 'canvases'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -32,7 +33,8 @@ const TABLES: Record<RecycleSource, string> = {
   wenbi_article: 'wenbi_articles',
   ledger_tx: 'ledger_tx',
   ledger_account: 'ledger_accounts',
-  ledger_category: 'ledger_categories'
+  ledger_category: 'ledger_categories',
+  canvases: 'canvases'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -50,7 +52,9 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   wenbi_article: 'md_path',
   ledger_tx: null,
   ledger_account: null,
-  ledger_category: null
+  ledger_category: null,
+  // 画布：path 指向 canvas/{id}.excalidraw（mdDelete 对 userData 内任意文件通用）
+  canvases: 'path'
 }
 
 export interface RecycleRow {
@@ -122,6 +126,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'drafts':
       // 回草稿本原频道：仅清标记（channel 保留，恢复后仍在原频道列表）
       d.prepare('UPDATE drafts SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'canvases':
+      // 回画布面板：仅清标记
+      d.prepare('UPDATE canvases SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
     case 'wenbi_journal':
       // 回浮生记时间线：仅清标记（分节钉在 created_at，无需复位）

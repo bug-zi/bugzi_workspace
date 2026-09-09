@@ -1,4 +1,5 @@
-// 思维墙板块（推理角 specs §2）：每日一题（打开现出，无定时器）+ 打卡月历
+// 思维墙板块（推理角 specs §2）：每日一题（v1.3 打开现取——题池转正秒开，池空才现场出题）
+// + 打卡月历
 // + 题库（v1.2 双层题源第二层，260909 由「精选题库」改名并收入练习场生成题）
 // + 练习场（v1.1，生成题自动入题库）。
 // keep-alive 常驻挂载：出题以 active（真正进入思维墙板块）为准，挂载≠进入。
@@ -190,7 +191,7 @@ export default function WallPanel(props: WallPanelProps) {
           {loading && (
             <div className="empty-state">
               <span className="material-symbols-outlined spin">progress_activity</span>
-              <div>出题中…</div>
+              <div>题库见底，现场出题中…</div>
               <button className="btn" onClick={() => void window.api.ai.cancel(ensureJob!)} title="取消本次出题">
                 <span className="material-symbols-outlined">stop_circle</span>
                 取消
