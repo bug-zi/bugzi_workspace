@@ -147,6 +147,7 @@ ${docText.slice(0, 24_000)}
     messages: [{ role: 'user', content: prompt }],
     jsonMode: true,
     temperature: 0,
+    scene: 'mcp:research',
     signal
   })
   let parsed: any
@@ -195,6 +196,7 @@ async function researchViaDocs(
     ],
     jsonMode: true,
     temperature: 0,
+    scene: 'mcp:research',
     signal
   })
   let urls: string[] = []
@@ -256,6 +258,7 @@ async function researchViaLlm(name: string, signal?: AbortSignal): Promise<McpRe
     ],
     jsonMode: true,
     temperature: 0,
+    scene: 'mcp:research',
     signal
   })
   let parsed: any

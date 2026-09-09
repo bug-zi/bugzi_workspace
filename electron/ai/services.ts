@@ -114,6 +114,7 @@ export async function compactAiSession(sessionId: number, signal?: AbortSignal):
       }
     ],
     temperature: 0.3,
+    scene: 'ai:compact',
     signal
   })
   const summary = res.content.trim()
@@ -255,6 +256,8 @@ async function chatWithProfileLookup(req: {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
   temperature: number
   signal?: AbortSignal
+  /** 场景标签（260910 记账）：随 req 透传，两轮调用同场景 */
+  scene?: string
 }): Promise<{ content: string }> {
   const first = await chatCompletion(req)
   const m = first.content.match(PROFILE_LOOKUP_RE)
@@ -305,6 +308,7 @@ export async function aiChat(
   const res = await chatWithProfileLookup({
     messages: [{ role: 'system', content: system }, ...history],
     temperature: 0.8,
+    scene: 'ai:chat',
     signal
   })
   const assistantMsg = appendAiMessage('assistant', res.content, currentModule, sessionId)
@@ -426,6 +430,7 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.9,
         jsonMode: true,
+        scene: 'motto:generate',
         signal
       })
     const res = await call()
@@ -778,6 +783,7 @@ ${avoidList}
       messages: [{ role: 'user', content: divergePrompt }],
       temperature: 0.95,
       jsonMode: true,
+      scene: 'inspiration:diverge',
       signal
     })
   let candidates: InspirationIdea[]
@@ -816,6 +822,7 @@ ${list.map((c, i) => `${i + 1}. [${c.form}] ${c.title}：${c.summary}`).join('\n
       messages: [{ role: 'user', content: reviewPrompt(list) }],
       temperature: 0.4,
       jsonMode: true,
+      scene: 'inspiration:refine',
       signal
     })
   let items: InspirationIdea[]
@@ -869,7 +876,7 @@ export async function refineInspiration(id: number, signal?: AbortSignal): Promi
   if (!row) throw new Error('NOT_FOUND')
   const body = inspirationBody(row.md_path, 4000, false) || '（正文暂空）'
   const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是我的一个项目灵感：\n标题：${row.title}\n正文：\n${body}\n\n请基于这个灵感生成扩展建议，用简体中文 Markdown 输出，只输出以下三个小节（### 三级标题），不要输出其他任何内容：\n### 思路延伸\n（2~4 个可深化的方向，每个一句话）\n### 潜在难点\n（2~3 条）\n### 下一步行动\n（2~3 条具体可执行的事）`
-  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, signal })
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, scene: 'inspiration:refine', signal })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   if (!md) throw new Error('LLM 未返回内容')
   return md
@@ -912,6 +919,7 @@ export async function copilotWriting(
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: action === 'draft' || action === 'continue' ? 0.7 : 0.4,
+    scene: 'wenbi:copilot',
     signal
   })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
@@ -960,6 +968,7 @@ export async function suggestWikiTerm(
       }
     ],
     temperature: 1.0,
+    scene: 'wiki:suggest',
     signal
   })
   const term = res.content.trim().replace(/^["'《]|["'》]$/g, '')
@@ -986,7 +995,7 @@ export async function generateWikiCard(
     .get(term)
   if (dup) throw new Error('CONFLICT:' + term)
   const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}请为词条「${term}」生成一张知识卡片，Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：\n\n# ${term}\n\n## 一句话定义\n{一句话定义}\n\n## 详细解释\n{详细解释}\n\n## 举例\n{举例}\n\n## 启示\n{启示}`
-  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, signal })
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.7, scene: 'wiki:card', signal })
   const md = res.content.replace(/^```(?:markdown|md)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
   // 一句话定义提取（模板第一个 ## 段）
   const summaryMatch = md.match(/## 一句话定义\s*\n([\s\S]*?)(?=\n## |\n*$)/)
@@ -1078,6 +1087,7 @@ export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQu
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
     jsonMode: true,
+    scene: 'wiki:quiz',
     signal
   })
   return parseQuizArray(res.content, idByTerm)
@@ -1113,6 +1123,7 @@ export async function runVerification(
       }
     ],
     temperature: 0.5,
+    scene: 'verify:check',
     signal
   })
   const keywords = kwRes.content
@@ -1148,6 +1159,7 @@ export async function runVerification(
       }
     ],
     temperature: 0.3,
+    scene: 'verify:check',
     signal
   })
   const full = analysisRes.content
@@ -1229,11 +1241,12 @@ export interface TurtleSoupDraft {
 /**
  * 「来 3 碗汤」：原创出 3 碗海龟汤入库（specs §3；海龟汤修改反馈——出题标准 v2 + 逐碗审题）。
  * 出题注入画像摘要 + 已有汤避免清单 + 近 9 碗诡计摘要清单（防跨批同构）；
- * 出题后逐碗串行审题（260907 二调：串行适配中转通道并发限制；260908 三调：审题升级
- * 五步推演式，硬伤才打回——常识门槛/现实逻辑硬伤/公平性硬伤/同构/极端报菜名），不合格
- * 碗携问题清单重出（260908 严格优先：上限 2 次），复审无硬伤即入碗（难度偏好仍不符时
- * 按审题人重评档如实落库，不弃碗）——弃碗不弃批，3 碗全灭才抛错；
- * 落库难度以最后一次通过审题的评定为准。
+ * 出题后审题（260907 二调 + 260908 三调：审题升级五步推演式，硬伤才打回——常识门槛/
+ * 现实逻辑硬伤/公平性硬伤/同构/极端报菜名），不合格碗携问题清单重出（260908 严格优先：
+ * 上限 2 次），复审无硬伤即入碗（难度偏好仍不符时按审题人重评档如实落库，不弃碗）——
+ * 弃碗不弃批，3 碗全灭才抛错；落库难度以最后一次通过审题的评定为准。
+ * 260910 效率优化：首轮 3 碗审题并行（半盲互相独立），打回重出保持串行（互避清单正确性）；
+ * 并发压力由 LLM 咽喉点的模型池溢出路由承接。
  */
 export async function generateSoups(
   preference: 'random' | 'easy' | 'medium' | 'hard',
@@ -1269,31 +1282,50 @@ export async function generateSoups(
   /** 最终入碗：落库难度一律以最后一次通过审题的评定为准 */
   const finals: { soup: TurtleSoupDraft; difficulty: 'easy' | 'medium' | 'hard' }[] = []
 
-  // 逐碗串行：审题（重试一次兜通道抖动）→ 无硬伤即入碗；有硬伤/难度不符 → 携当次问题
-  // 清单重出再审，重出上限 2 次（260908 逻辑严密性优化：严格优先），次数用尽仍不过 →
-  // 弃碗不弃批。难度偏好不符只触发重出、不单独弃碗：重出过的碗（attempt≥1）复审无硬伤
-  // 即按重评档如实落库（260907 二调口径）。全程串行，与全仓 LLM 调用惯例同构（中转
-  // 通道有账号并发上限，并行突发会触发 429 退避共振）
-  const MAX_REDO = 2
-  for (const draft of drafts) {
-    ensureNotCancelled(signal)
-    let current = draft
-    let peers = drafts.filter((o) => o !== draft).map((o) => o.trick_note)
-    for (let attempt = 0; ; attempt++) {
-      const review = await reviewSoupSafe(
-        current,
-        { recentTricks, peerTricks: peers, requiredDifficulty },
+  // 首轮审题并行（260910 效率优化）：审题互相独立（半盲、各看各题）→ Promise.all 同发；
+  // 打回重出保持串行——重出要带「同批已保留碗」互避清单，串行才能保证清单正确。
+  // 首轮即过（多数情况）时零重出等待。质量口径与原串行版完全一致：无硬伤即入碗；
+  // 有硬伤/难度不符 → 携当次问题清单重出再审，重出上限 2 次（260908 逻辑严密性优化：
+  // 严格优先），次数用尽仍不过 → 弃碗不弃批；重出过的碗（attempt≥1）复审无硬伤即按
+  // 重评档如实落库（260907 二调口径）。此改动对「来 3 碗汤」手动入口同样生效。
+  const firstReviews = await Promise.all(
+    drafts.map((draft) =>
+      reviewSoupSafe(
+        draft,
+        {
+          recentTricks,
+          peerTricks: drafts.filter((o) => o !== draft).map((o) => o.trick_note),
+          requiredDifficulty
+        },
         signal
       )
-      if (!review) break // 审题通道两次故障 → 弃碗
-      if (review.qualityOk && (review.difficultyOk || attempt >= 1)) {
-        finals.push({ soup: current, difficulty: review.ratedDifficulty })
-        break
-      }
-      if (attempt >= MAX_REDO) break // 重出次数用尽仍不过 → 弃碗不弃批
+    )
+  )
+  const redos: { draft: TurtleSoupDraft; target: 'easy' | 'medium' | 'hard'; problems: string[] }[] = []
+  drafts.forEach((draft, i) => {
+    const review = firstReviews[i]
+    if (!review) return // 审题通道两次故障 → 弃碗
+    if (review.qualityOk && review.difficultyOk) {
+      finals.push({ soup: draft, difficulty: review.ratedDifficulty })
+      return
+    }
+    // 首轮未过（质量或难度）→ 进入串行重出（原 attempt 0 语义）
+    redos.push({
+      draft,
+      target: requiredDifficulty ?? review.ratedDifficulty,
+      problems: review.problems
+    })
+  })
+
+  const MAX_REDO = 2
+  for (const r of redos) {
+    ensureNotCancelled(signal)
+    let current = r.draft
+    let target = r.target
+    let problems = r.problems
+    for (let attempt = 1; attempt <= MAX_REDO; attempt++) {
       // 重出：random 模式补位档 = 审题人重评档（维持批内错开）；指定模式 = 偏好档；
       // 携当次问题清单与已保留碗 trick_note（批内互避），不给原碗内容（防锚定修补）
-      const target = requiredDifficulty ?? review.ratedDifficulty
       try {
         const [redone] = await composeSoups(
           buildSoupPrompt({
@@ -1301,19 +1333,31 @@ export async function generateSoups(
             difficultyText: `本碗按「${DIFF_ZH[target]}」难度出题`,
             avoidList,
             recentTrickList,
-            redoProblems: review.problems,
+            redoProblems: problems,
             keepTricks: finals.map((f) => f.soup.trick_note)
           }),
           1,
           signal
         )
         current = redone
-        peers = finals.map((f) => f.soup.trick_note)
       } catch (e) {
         // 取消异常已在 composeSoups 内先抛「已取消」，此处如实上抛不被吞
         if (signal?.aborted) throw e
         break // 重出失败 → 弃碗
       }
+      const review2 = await reviewSoupSafe(
+        current,
+        { recentTricks, peerTricks: finals.map((f) => f.soup.trick_note), requiredDifficulty },
+        signal
+      )
+      if (!review2) break // 审题通道两次故障 → 弃碗
+      if (review2.qualityOk) {
+        // 重出过的碗（attempt≥1）复审无硬伤即按重评档如实落库（260907 二调口径）
+        finals.push({ soup: current, difficulty: review2.ratedDifficulty })
+        break
+      }
+      problems = review2.problems
+      target = requiredDifficulty ?? review2.ratedDifficulty
     }
   }
 
@@ -1447,7 +1491,7 @@ ${redoBlock}${keepBlock}
 /** 单趟出题调用 + 解析（解析失败自动重试一次，同 generateMottos 惯例；取消即抛「已取消」不重试；仍失败抛错不落库） */
 async function composeSoups(prompt: string, count: number, signal?: AbortSignal): Promise<TurtleSoupDraft[]> {
   const call = () =>
-    chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.9, jsonMode: true, signal })
+    chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.9, jsonMode: true, scene: 'reasoning:soup-compose', signal })
   try {
     return parseSoupArray((await call()).content, count)
   } catch (e) {
@@ -1538,6 +1582,7 @@ ${ctx.peerTricks.length ? ctx.peerTricks.map((s) => `- ${s}`).join('\n') : '（�
     ],
     temperature: 0.2,
     jsonMode: true,
+    scene: 'reasoning:soup-review',
     signal
   })
   const parsed = parseJsonObject(res.content)
@@ -1603,7 +1648,8 @@ ${rows.map((r) => `# ${r.id}《${r.title}》\n汤底：${r.bottom}`).join('\n\n'
         }
       ],
       temperature: 0.2,
-      jsonMode: true
+      jsonMode: true,
+      scene: 'reasoning:soup-backfill'
     })
     const parsed = parseJsonObject(res.content)
     if (!Array.isArray(parsed.notes)) return
@@ -1662,6 +1708,7 @@ export async function judgeSoupQuestion(
     ],
     temperature: 0.2,
     jsonMode: true,
+    scene: 'reasoning:soup-ask',
     signal
   })
   const parsed = parseJsonObject(res.content)
@@ -1714,6 +1761,7 @@ export async function judgeSoupGuess(
     ],
     temperature: 0.2,
     jsonMode: true,
+    scene: 'reasoning:soup-guess',
     signal
   })
   const parsed = parseJsonObject(res.content)
@@ -1753,6 +1801,7 @@ ${transcript || '（本局无提问）'}
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.5,
+    scene: 'reasoning:soup-report',
     signal
   })
   const md = stripMdFence(res.content)
@@ -1863,6 +1912,7 @@ async function composeWallPuzzle(
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.9,
     jsonMode: true,
+    scene: 'reasoning:wall-compose',
     signal
   })
   const parsed = parseJsonObject(res.content)
@@ -1912,6 +1962,7 @@ ${draft.answer}
     ],
     temperature: 0.2,
     jsonMode: true,
+    scene: 'reasoning:wall-review',
     signal
   })
   const parsed = parseJsonObject(res.content)
@@ -1961,6 +2012,7 @@ explanation 用简体中文 Markdown（150~400 字，不用表格）：先给判
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.1,
     jsonMode: true,
+    scene: 'reasoning:wall-judge',
     signal
   })
   const parsed = parseJsonObject(res.content)

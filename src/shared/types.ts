@@ -80,6 +80,54 @@ export interface LlmConfig {
   apiUrl: string
   apiKey: string
   model: string
+  /** 模型池溢出路由并发上限（260910）：>0 生效，缺省 = 不限（永不溢出，行为同旧版） */
+  maxConcurrent?: number
+}
+
+// ---------- LLM 使用统计（260910 推理角效率优化配套） ----------
+
+/** llmUsage:stats 单场景聚合行 */
+export interface LlmUsageSceneRow {
+  scene: string
+  calls: number
+  failures: number
+  avgMs: number
+  tokens: number
+  /** 存在估算 token 的行数（>0 时统计页 token 列带 ≈ 标记） */
+  estRows: number
+}
+
+/** llmUsage:stats 返回 */
+export interface LlmUsageStats {
+  totals: { calls: number; failures: number; tokens: number }
+  rows: LlmUsageSceneRow[]
+}
+
+/** LLM 场景中文标签（统计页与活动指示共用；未收录的 scene 直接显示原串） */
+export const LLM_SCENE_LABELS: Record<string, string> = {
+  'reasoning:wall-compose': '推理角·出题',
+  'reasoning:wall-review': '推理角·审题',
+  'reasoning:wall-judge': '推理角·判答',
+  'reasoning:soup-compose': '推理角·出汤',
+  'reasoning:soup-review': '推理角·审汤',
+  'reasoning:soup-ask': '推理角·判问',
+  'reasoning:soup-guess': '推理角·判汤底',
+  'reasoning:soup-report': '推理角·复盘',
+  'reasoning:soup-backfill': '推理角·诡计回填',
+  'ai:chat': 'debugzi·对话',
+  'ai:compact': 'AI·上下文压缩',
+  'motto:generate': '格言库·生成',
+  'wiki:card': '万象库·知识卡',
+  'wiki:suggest': '万象库·词条构思',
+  'wiki:quiz': '万象库·测一测',
+  'inspiration:diverge': '灵感泉·发散',
+  'inspiration:refine': '灵感泉·自评',
+  'verify:check': '万象库·辩真核查',
+  'zhijiji:v0': '致知己·AI 初始化',
+  'wenbi:copilot': '文笔坊·协笔',
+  'feed:summary': '信息源·总结',
+  'mcp:research': 'MCP·配置研究',
+  other: '其他'
 }
 
 // MCP 配置（存 settings.mcp_configs，JSON 数组）

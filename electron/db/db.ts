@@ -728,6 +728,27 @@ function migrate(): void {
     )`)
     d.exec('PRAGMA user_version = 26')
   }
+
+  if (version < 27) {
+    // v27：LLM 使用记账（260910 推理角效率优化）——chatCompletion 咽喉点每次逻辑调用一行；
+    // 429 重试只记最终趟（耗时含重试等待）；usage 缺失时按字符估算并打 tokens_estimated 标记。
+    // 只增不删（一天几十行，不做清理任务——设计定稿 YAGNI）。
+    d.exec(`CREATE TABLE IF NOT EXISTS llm_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      scene TEXT NOT NULL,
+      config_name TEXT NOT NULL,
+      model TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      tokens_estimated INTEGER NOT NULL DEFAULT 0,
+      error_brief TEXT
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at)')
+    d.exec('PRAGMA user_version = 27')
+  }
 }
 
 // ---------- 通用工具 ----------

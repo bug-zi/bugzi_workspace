@@ -500,6 +500,8 @@ export interface LlmConfig {
   apiUrl: string
   apiKey: string
   model: string
+  /** 模型池溢出路由并发上限（260910）：>0 生效，缺省 = 不限（永不溢出，行为同旧版） */
+  maxConcurrent?: number
 }
 
 export interface McpConfig {
@@ -928,6 +930,12 @@ export interface Api {
   llm: {
     test(jobId: string, config: LlmConfig): Promise<void>
     models(config: LlmConfig): Promise<string[]>
+  }
+  llmUsage: {
+    /** AI 使用统计（260910）：range = today | month | all */
+    stats(range: 'today' | 'month' | 'all'): Promise<import('../shared/types').LlmUsageStats>
+    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
+    onActivity(cb: (payload: { items: { scene: string; configName: string }[] }) => void): () => void
   }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>

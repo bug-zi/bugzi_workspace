@@ -555,6 +555,19 @@ const api = {
     test: (jobId: string, config: unknown): Promise<void> => ipcRenderer.invoke('llm:test', jobId, config),
     models: (config: unknown): Promise<string[]> => ipcRenderer.invoke('llm:models', config)
   },
+  llmUsage: {
+    /** AI 使用统计（260910）：range = today | month | all */
+    stats: (range: 'today' | 'month' | 'all'): Promise<import('../src/shared/types').LlmUsageStats> =>
+      ipcRenderer.invoke('llmUsage:stats', range),
+    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
+    onActivity: (cb: (payload: { items: { scene: string; configName: string }[] }) => void): (() => void) => {
+      const listener = (_e: unknown, payload: { items: { scene: string; configName: string }[] }): void => {
+        cb(payload)
+      }
+      ipcRenderer.on('llm:activity', listener)
+      return () => ipcRenderer.removeListener('llm:activity', listener)
+    }
+  },
   mcp: {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
       ipcRenderer.invoke('mcp:listEnabled'),

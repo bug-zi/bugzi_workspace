@@ -18,6 +18,7 @@ import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
 import NoisePage from './modules/noise/NoisePage'
+import LlmActivity from './components/LlmActivity'
 import { noiseEngine } from './services/noiseEngine'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
@@ -184,6 +185,8 @@ function Shell() {
             </Fragment>
           ))}
           <div className="sidebar-spacer" />
+          {/* AI 实时活动指示（260910 推理角效率优化）：左栏底部常驻，空闲不渲染 */}
+          <LlmActivity />
         </nav>
 
         {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}

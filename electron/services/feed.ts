@@ -363,6 +363,7 @@ export async function summarizeArticle(articleId: number, signal?: AbortSignal):
       { role: 'user', content: `文章标题：${row.title}\n\n正文：\n${text.slice(0, SUMMARY_INPUT_MAX)}` }
     ],
     temperature: 0.3,
+    scene: 'feed:summary',
     signal
   })
   d.prepare('UPDATE articles SET summary_text = ?, summary_at = ? WHERE id = ?').run(r.content, nowIso(), articleId)

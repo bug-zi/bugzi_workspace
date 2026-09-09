@@ -5,7 +5,8 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
-import { SettingsKeys } from '../../shared/types'
+import { LLM_SCENE_LABELS, SettingsKeys } from '../../shared/types'
+import type { LlmUsageStats } from '../../shared/types'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
 const PROFILE_CATEGORIES = [
@@ -79,6 +80,31 @@ export default function ProfileModule() {
   const [catCollapsed, setCatCollapsed] = useState<Record<string, boolean>>({})
   // 画像 zone 整体折叠：同一范式，默认展开；收起时组头/条目不渲染，计数徽标常驻
   const [zoneCollapsed, setZoneCollapsed] = useState(false)
+
+  // ---------- AI 使用统计（260910 推理角效率优化） ----------
+  const [usageRange, setUsageRange] = useState<'today' | 'month' | 'all'>('today')
+  const [usage, setUsage] = useState<LlmUsageStats | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const loadUsage = useCallback(async () => {
+    setUsageLoading(true)
+    try {
+      setUsage(await window.api.llmUsage.stats(usageRange))
+    } catch {
+      /* 静默保留上次数据 */
+    } finally {
+      setUsageLoading(false)
+    }
+  }, [usageRange])
+  useEffect(() => {
+    void loadUsage()
+  }, [loadUsage])
+  // AI 空闲时自动刷新（后台生成结束数字即新）
+  useEffect(() => {
+    return window.api.llmUsage.onActivity((p) => {
+      if (p.items.length === 0) void loadUsage()
+    })
+  }, [loadUsage])
+  const fmtTokens = (n: number): string => (n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n))
 
   /** 画像条目加载 */
   const loadFacts = useCallback(async () => {
@@ -680,6 +706,77 @@ export default function ProfileModule() {
         </div>
       </section>
 
+      {/* AI 使用统计（260910 推理角效率优化） */}
+      <section className="zone">
+        <div className="zone-header">
+          <span>AI 使用</span>
+          <div className="zone-actions llm-usage-range">
+            {(['today', 'month', 'all'] as const).map((r) => (
+              <button
+                key={r}
+                className={`btn chip${usageRange === r ? ' active' : ''}`}
+                onClick={() => setUsageRange(r)}
+              >
+                {r === 'today' ? '今日' : r === 'month' ? '本月' : '全部'}
+              </button>
+            ))}
+            <button className="btn" title="刷新" onClick={() => void loadUsage()} disabled={usageLoading}>
+              <span className="material-symbols-outlined">refresh</span>
+            </button>
+          </div>
+        </div>
+        <div className="zone-body">
+          {usage && (
+            <>
+              <div className="llm-usage-cards">
+                <div className="llm-usage-card">
+                  <div className="llm-usage-num">{usage.totals.calls}</div>
+                  <div className="llm-usage-sub">调用次数（失败 {usage.totals.failures}）</div>
+                </div>
+                <div className="llm-usage-card">
+                  <div className="llm-usage-num">{fmtTokens(usage.totals.tokens)}</div>
+                  <div className="llm-usage-sub">token 消耗</div>
+                </div>
+              </div>
+              {usage.rows.length === 0 ? (
+                <div className="empty-state">
+                  <span className="material-symbols-outlined">bar_chart</span>
+                  该时间范围还没有 AI 调用
+                </div>
+              ) : (
+                <table className="llm-usage-table">
+                  <thead>
+                    <tr>
+                      <th>场景</th>
+                      <th>次数</th>
+                      <th>失败</th>
+                      <th>平均耗时</th>
+                      <th>token</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.rows.map((r) => (
+                      <tr key={r.scene}>
+                        <td>{LLM_SCENE_LABELS[r.scene] ?? r.scene}</td>
+                        <td>{r.calls}</td>
+                        <td>{r.failures || '-'}</td>
+                        <td>
+                          {r.avgMs >= 1000 ? `${(r.avgMs / 1000).toFixed(1)}s` : `${r.avgMs}ms`}
+                        </td>
+                        <td>
+                          {fmtTokens(r.tokens)}
+                          {r.estRows > 0 ? ' ≈' : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+
       {/* MCP 配置 */}
       <section className="zone">
         <div className="zone-header">
@@ -777,6 +874,20 @@ export default function ProfileModule() {
                   ))}
                 </select>
               )}
+              <input
+                className="field"
+                type="number"
+                min={1}
+                placeholder="并发上限（选填，如 3；留空不限，满载不溢出到其他配置）"
+                value={llmForm.maxConcurrent ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value.trim()
+                  setLlmForm({
+                    ...llmForm,
+                    maxConcurrent: v && Number(v) > 0 ? Math.floor(Number(v)) : undefined
+                  })
+                }}
+              />
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => void testLlm()} disabled={testing}>

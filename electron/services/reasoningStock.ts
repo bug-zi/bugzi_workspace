@@ -1,10 +1,11 @@
 // 推理角题库预生成补充泵（v1.3 设计 260907，仿 scheduler.ts 静默惯例）：
 // 汤库 fresh 存量与 wall_pool 题池低于低水位时，后台补到目标值——消除三处取题「现场等 AI」。
+// 260910 效率优化：**题池/汤库双路并行 + 题池内两道并行**（prompt/审题/打回逻辑零改动，
+// 并发压力由 LLM 咽喉点的模型池溢出路由承接——glm 满载溢出其他配置）。
 // 全部调用点 fire-and-forget（void 调用），永不抛错、永不弹窗；单批瞬态失败（中转 5xx/网络抖动）
 // 自动重试至多 3 次（间隔 25s），仍败或质量类失败才 console.warn 跳出、待下次触发再补。
 // 三触发点：main.ts 启动延迟 10s / 每次消耗后（ipc.ts）/ 进入推理角模块（reasoning:stockCheck）。
-// 与手动「来 3 碗汤」并发无碍：手动入口不经泵，各自独立插库，最坏多 3 碗
-// （但两路并发挤同一中转通道易诱发 429/502，首填时段尽量避免手动出汤）。
+// 与手动「来 3 碗汤」并发无碍：手动入口不经泵，各自独立插库，最坏多 3 碗。
 import { BrowserWindow } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import {
@@ -126,74 +127,107 @@ async function pumpSoups(): Promise<void> {
   }
 }
 
-/** 三档难度/四题型里随机挑一个（并列稀缺时等概率） */
-function randomOf<T>(list: readonly T[]): T {
-  return list[Math.floor(Math.random() * list.length)]
+/** 并列稀缺随机化：先洗牌再稳定排序，等计数组内顺序随机（保持原单道 randomOf 语义的配对版） */
+function shuffled<T>(list: readonly T[]): T[] {
+  return list.slice().sort(() => Math.random() - 0.5)
 }
 
-/** 补题：池数 < PUZZLE_LOW 时逐道补到目标。难度 = 池内最稀缺档（保证连胜升到任何档位都有货，
- * 并列随机）；题型 = 池内 + 近 2 日历史合计最少见（保持池内题型多样）；避免清单 = 近 20 题
- * wall_puzzles 题面摘要 + 池内全部题面摘要（池 ≤10 道 ×60 字，prompt 长度无虞，防池内互相同构）。 */
-async function pumpPuzzles(): Promise<void> {
-  while (poolCount() < PUZZLE_TARGET) {
-    const d = getDb()
-    const diffCount: Record<string, number> = { easy: 0, medium: 0, hard: 0 }
-    for (const r of d
-      .prepare('SELECT difficulty, COUNT(*) AS n FROM wall_pool GROUP BY difficulty')
-      .all() as { difficulty: string; n: number }[]) {
-      diffCount[r.difficulty] = r.n
-    }
-    const minDiff = Math.min(...Object.values(diffCount))
-    const difficulty = randomOf(
-      (['easy', 'medium', 'hard'] as const).filter((x) => diffCount[x] === minDiff)
+/** 配对挑选（互异）：难度 = 池内最稀缺档、题型 = 池内 + 近 2 日最少见（口径与原单道一致），
+ *  两道强制难度与题型都不同（防两路读到同一稀缺档各出同构题） */
+function pickPairSpecs(need: number): { difficulty: 'easy' | 'medium' | 'hard'; type: WallPuzzleType }[] {
+  const d = getDb()
+  const diffCount: Record<string, number> = { easy: 0, medium: 0, hard: 0 }
+  for (const r of d
+    .prepare('SELECT difficulty, COUNT(*) AS n FROM wall_pool GROUP BY difficulty')
+    .all() as { difficulty: string; n: number }[]) {
+    diffCount[r.difficulty] = r.n
+  }
+  const diffs = shuffled(['easy', 'medium', 'hard'] as const).sort(
+    (a, b) => diffCount[a] - diffCount[b]
+  )
+  const typeCount = new Map<string, number>(WALL_TYPE_LIST.map((t) => [t, 0]))
+  for (const r of d
+    .prepare('SELECT puzzle_type, COUNT(*) AS n FROM wall_pool GROUP BY puzzle_type')
+    .all() as { puzzle_type: string; n: number }[]) {
+    typeCount.set(r.puzzle_type, (typeCount.get(r.puzzle_type) ?? 0) + r.n)
+  }
+  // 近 2 日已出题型计入（与 ensureToday 题型轮换同口径：转正时也优先避开）
+  for (const r of d
+    .prepare('SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2')
+    .all() as { puzzle_type: string }[]) {
+    typeCount.set(r.puzzle_type, (typeCount.get(r.puzzle_type) ?? 0) + 1)
+  }
+  const types = shuffled(WALL_TYPE_LIST).sort(
+    (a, b) => (typeCount.get(a) ?? 0) - (typeCount.get(b) ?? 0)
+  )
+  return Array.from({ length: need }, (_, i) => ({
+    difficulty: diffs[i % diffs.length],
+    type: types[i % types.length]
+  }))
+}
+
+/** 避免清单快照：近 20 题 wall_puzzles 题面摘要 + 池内全部题面摘要（配对前取一次，两路共用；
+ *  池 ≤10 道 ×60 字，prompt 长度无虞，防池内互相同构——并行的两路互不可见，靠题型/难度互异兜） */
+function buildAvoidList(): string[] {
+  const d = getDb()
+  const avoid = (
+    d.prepare('SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20').all() as {
+      puzzle_text: string
+    }[]
+  ).map((r) => summarize(r.puzzle_text))
+  avoid.push(
+    ...(d.prepare('SELECT puzzle_text FROM wall_pool').all() as { puzzle_text: string }[]).map((r) =>
+      summarize(r.puzzle_text)
     )
+  )
+  return avoid
+}
 
-    const typeCount = new Map<string, number>(WALL_TYPE_LIST.map((t) => [t, 0]))
-    for (const r of d
-      .prepare('SELECT puzzle_type, COUNT(*) AS n FROM wall_pool GROUP BY puzzle_type')
-      .all() as { puzzle_type: string; n: number }[]) {
-      typeCount.set(r.puzzle_type, (typeCount.get(r.puzzle_type) ?? 0) + r.n)
-    }
-    // 近 2 日已出题型计入（与 ensureToday 题型轮换同口径：转正时也优先避开）
-    for (const r of d
-      .prepare('SELECT puzzle_type FROM wall_puzzles ORDER BY date DESC LIMIT 2')
-      .all() as { puzzle_type: string }[]) {
-      typeCount.set(r.puzzle_type, (typeCount.get(r.puzzle_type) ?? 0) + 1)
-    }
-    const minType = Math.min(...typeCount.values())
-    const type = randomOf(WALL_TYPE_LIST.filter((t) => (typeCount.get(t) ?? 0) === minType))
-
-    const avoid = (
-      d
-        .prepare('SELECT puzzle_text FROM wall_puzzles ORDER BY date DESC LIMIT 20')
-        .all() as { puzzle_text: string }[]
-    ).map((r) => summarize(r.puzzle_text))
-    avoid.push(
-      ...(d.prepare('SELECT puzzle_text FROM wall_pool').all() as { puzzle_text: string }[]).map(
-        (r) => summarize(r.puzzle_text)
+/** 补题：池数 < PUZZLE_LOW 时**两道并行**补到目标（260910 效率优化）。
+ *  单道非瞬态失败不废整泵（另一道照常入库，错误携带到循环结束再上抛走现有 warn 路径）；
+ *  整配对全败 = 零进展，立即上抛防死循环。 */
+async function pumpPuzzles(): Promise<void> {
+  let carried: unknown = null
+  while (poolCount() < PUZZLE_TARGET) {
+    const specs = pickPairSpecs(Math.min(2, PUZZLE_TARGET - poolCount()))
+    const avoid = buildAvoidList()
+    const results = await Promise.allSettled(
+      specs.map((s) =>
+        retryTransient('题池生成', () => generateWallPuzzle(s.difficulty, { type: s.type, avoid }))
       )
     )
-
-    const draft = await retryTransient('题池生成', () =>
-      generateWallPuzzle(difficulty, { type, avoid })
-    )
-    d.prepare(
-      'INSERT INTO wall_pool (title, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      draft.title ?? '',
-      draft.puzzle,
-      draft.answer,
-      draft.reasoning,
-      JSON.stringify(draft.hints),
-      draft.type,
-      draft.difficulty,
-      nowIso()
-    )
-    notifyStockChanged()
-    console.info(
-      `[reasoningStock] 题池 +1（${draft.difficulty}/${draft.type}，现 ${poolCount()}）`
-    )
+    let failed = 0
+    let firstErr: unknown = null
+    results.forEach((r) => {
+      if (r.status === 'fulfilled') {
+        const draft = r.value
+        getDb()
+          .prepare(
+            'INSERT INTO wall_pool (title, puzzle_text, answer_standard, standard_reasoning, hints, puzzle_type, difficulty, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          )
+          .run(
+            draft.title ?? '',
+            draft.puzzle,
+            draft.answer,
+            draft.reasoning,
+            JSON.stringify(draft.hints),
+            draft.type,
+            draft.difficulty,
+            nowIso()
+          )
+        notifyStockChanged()
+        console.info(
+          `[reasoningStock] 题池 +1（${draft.difficulty}/${draft.type}，现 ${poolCount()}）`
+        )
+      } else {
+        failed++
+        if (firstErr === null) firstErr = r.reason
+      }
+    })
+    if (failed === specs.length) throw firstErr // 整对全败：零进展立即跳出（同原单道失败语义）
+    if (firstErr !== null && carried === null) carried = firstErr // 单道失败：继续补，结束再上抛
   }
+  if (carried !== null) throw carried
 }
 
 /**
@@ -217,19 +251,18 @@ export async function ensureReasoningStock(): Promise<void> {
       return
     }
     console.info(`[reasoningStock] 补充开始：汤库 fresh ${soups}/${SOUP_LOW} · 题池 ${puzzles}/${PUZZLE_LOW}（目标各 ${SOUP_TARGET}/${PUZZLE_TARGET}）`)
-    try {
-      await pumpPuzzles()
-    } catch (e) {
-      console.warn('[reasoningStock] 题池补充中断：', e)
-      // 通道类错误（过载/瞬断）→ 自愈重排，几分钟后自动再试；质量类失败等下次用户侧触发
-      if (isTransientLlmError(e)) schedulePostponeReRun()
-    }
-    try {
-      await pumpSoups()
-    } catch (e) {
-      console.warn('[reasoningStock] 汤库补充中断：', e)
-      if (isTransientLlmError(e)) schedulePostponeReRun()
-    }
+    // 双路并行（260910 效率优化）：题池与汤库同时补；两路各自容错互不阻断（原语义保留）
+    await Promise.all([
+      pumpPuzzles().catch((e) => {
+        console.warn('[reasoningStock] 题池补充中断：', e)
+        // 通道类错误（过载/瞬断）→ 自愈重排，几分钟后自动再试；质量类失败等下次用户侧触发
+        if (isTransientLlmError(e)) schedulePostponeReRun()
+      }),
+      pumpSoups().catch((e) => {
+        console.warn('[reasoningStock] 汤库补充中断：', e)
+        if (isTransientLlmError(e)) schedulePostponeReRun()
+      })
+    ])
     console.info(`[reasoningStock] 补充结束：汤库 fresh ${freshSoupCount()} · 题池 ${poolCount()}`)
   } finally {
     pumping = false

@@ -945,6 +945,7 @@ export function registerIpc(): void {
           const res = await chatCompletion({
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
+            scene: 'zhijiji:v0',
             signal: ac.signal
           })
           const body = res.content
@@ -1804,6 +1805,52 @@ export function registerIpc(): void {
     return testLlmConnection(config, ac.signal).finally(() => endJob(jobId))
   })
   ipcMain.handle('llm:models', (_e, config: LlmConfig) => listUpstreamModels(config))
+
+  // ---------- AI 使用统计（260910 推理角效率优化） ----------
+  ipcMain.handle('llmUsage:stats', (_e, range: 'today' | 'month' | 'all') => {
+    const now = new Date()
+    let since: string | null = null
+    if (range === 'today') {
+      since = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    } else if (range === 'month') {
+      since = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    }
+    const sql = `SELECT scene,
+        COUNT(*) AS calls,
+        SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures,
+        CAST(AVG(duration_ms) AS INTEGER) AS avg_ms,
+        SUM(prompt_tokens + completion_tokens) AS tokens,
+        SUM(tokens_estimated) AS est_rows
+      FROM llm_usage${since ? ' WHERE created_at >= ?' : ''}
+      GROUP BY scene ORDER BY tokens DESC`
+    const rows = (
+      since ? getDb().prepare(sql).all(since) : getDb().prepare(sql).all()
+    ) as {
+      scene: string
+      calls: number
+      failures: number
+      avg_ms: number
+      tokens: number
+      est_rows: number
+    }[]
+    const mapped = rows.map((r) => ({
+      scene: r.scene,
+      calls: r.calls,
+      failures: r.failures,
+      avgMs: r.avg_ms,
+      tokens: r.tokens,
+      estRows: r.est_rows
+    }))
+    return {
+      totals: {
+        calls: mapped.reduce((n, r) => n + r.calls, 0),
+        failures: mapped.reduce((n, r) => n + r.failures, 0),
+        tokens: mapped.reduce((n, r) => n + r.tokens, 0)
+      },
+      rows: mapped
+    }
+  })
+
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())
   // AI 辅助 MCP 配置（问题疑惑区方案）：研究配置元数据 / 测试连接
   ipcMain.handle('mcp:research', (_e, jobId: string, name: string) => {
