@@ -103,17 +103,34 @@ export interface LlmUsageStats {
   rows: LlmUsageSceneRow[]
 }
 
-/** LLM 场景中文标签（统计页与活动指示共用；未收录的 scene 直接显示原串） */
+/** llmUsage:records 单条调用明细（UI 滚动展示最近 30 条；库内全量保留不清理） */
+export interface LlmUsageRecord {
+  id: number
+  createdAt: string
+  scene: string
+  configName: string
+  model: string
+  ok: boolean
+  durationMs: number
+  promptTokens: number
+  completionTokens: number
+  tokensEstimated: boolean
+  errorBrief: string | null
+}
+
+/** LLM 场景中文标签（统计页与活动指示共用；未收录的 scene 直接显示原串）。
+ *  260910 修订：推理角场景前缀按板块区分（海龟汤/思维墙），不再统一「推理角·」——
+ *  用量页能直接看出是哪边在生成（开发者指令）。 */
 export const LLM_SCENE_LABELS: Record<string, string> = {
-  'reasoning:wall-compose': '推理角·出题',
-  'reasoning:wall-review': '推理角·审题',
-  'reasoning:wall-judge': '推理角·判答',
-  'reasoning:soup-compose': '推理角·出汤',
-  'reasoning:soup-review': '推理角·审汤',
-  'reasoning:soup-ask': '推理角·判问',
-  'reasoning:soup-guess': '推理角·判汤底',
-  'reasoning:soup-report': '推理角·复盘',
-  'reasoning:soup-backfill': '推理角·诡计回填',
+  'reasoning:wall-compose': '思维墙·出题',
+  'reasoning:wall-review': '思维墙·审题',
+  'reasoning:wall-judge': '思维墙·判答',
+  'reasoning:soup-compose': '海龟汤·出题',
+  'reasoning:soup-review': '海龟汤·审题',
+  'reasoning:soup-ask': '海龟汤·判问',
+  'reasoning:soup-guess': '海龟汤·判汤底',
+  'reasoning:soup-report': '海龟汤·复盘',
+  'reasoning:soup-backfill': '海龟汤·诡计回填',
   'ai:chat': 'debugzi·对话',
   'ai:compact': 'AI·上下文压缩',
   'motto:generate': '格言库·生成',

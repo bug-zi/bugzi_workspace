@@ -236,7 +236,12 @@ export default function TurtlePanel() {
         jobId,
         preference as 'random' | 'easy' | 'medium' | 'hard'
       )
-      toast(`已出 ${r.inserted} 碗汤`)
+      // 存货直取（260910）：fresh ≥3 时主进程秒回不调 LLM——汤库里的新鲜汤就是后台已出好的
+      toast(
+        r.stockServed != null
+          ? `汤库已有 ${r.stockServed} 碗新鲜汤，点一碗即可开局`
+          : `已出 ${r.inserted} 碗汤`
+      )
       await loadSoups()
     } catch (e) {
       const msg = String((e as Error).message)

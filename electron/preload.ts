@@ -263,11 +263,12 @@ const api = {
     }
   },
   turtle: {
-    /** 「来 3 碗汤」：难度偏好可选（random 默认），3 碗三件套入库汤库 */
+    /** 「来 3 碗汤」：汤库 fresh 存货 ≥3 时秒回不调 LLM（stockServed=存量，点汤即开局）；
+     *  不足才现场生成 3 碗三件套入库汤库（难度偏好仅现场生成生效） */
     generate: (
       jobId: string,
       preference?: 'random' | 'easy' | 'medium' | 'hard'
-    ): Promise<{ generated: number; inserted: number }> =>
+    ): Promise<{ generated: number; inserted: number; stockServed?: number }> =>
       ipcRenderer.invoke('turtle:generate', jobId, preference ?? 'random'),
     listSoups: (difficulty?: string): Promise<unknown[]> =>
       ipcRenderer.invoke('turtle:listSoups', difficulty),
@@ -559,6 +560,9 @@ const api = {
     /** AI 使用统计（260910）：range = today | month | all */
     stats: (range: 'today' | 'month' | 'all'): Promise<import('../src/shared/types').LlmUsageStats> =>
       ipcRenderer.invoke('llmUsage:stats', range),
+    /** 调用记录（260910 明细）：最近 30 条，与时间范围无关 */
+    records: (): Promise<import('../src/shared/types').LlmUsageRecord[]> =>
+      ipcRenderer.invoke('llmUsage:records'),
     /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
     onActivity: (cb: (payload: { items: { scene: string; configName: string }[] }) => void): (() => void) => {
       const listener = (_e: unknown, payload: { items: { scene: string; configName: string }[] }): void => {

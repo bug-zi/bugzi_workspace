@@ -92,8 +92,9 @@ function notifyStockChanged(): void {
   BrowserWindow.getAllWindows()[0]?.webContents.send('reasoning:stockChanged')
 }
 
-/** 汤库存量：fresh 且未软删（回收站软删的不算；恢复回收站 fresh 汤使存量回升，无碍） */
-function freshSoupCount(): number {
+/** 汤库存量：fresh 且未软删（回收站软删的不算；恢复回收站 fresh 汤使存量回升，无碍）。
+ *  260910 导出：「来 3 碗汤」按钮存货充足判定复用同一口径（ipc.ts）。 */
+export function freshSoupCount(): number {
   return (
     getDb()
       .prepare(
@@ -188,6 +189,9 @@ function buildAvoidList(): string[] {
  *  整配对全败 = 零进展，立即上抛防死循环。 */
 async function pumpPuzzles(): Promise<void> {
   let carried: unknown = null
+  // 整对全灭连续计数（260910 排障）：审题连败/解析双杀偶发时多试一轮兜住，
+  // 连续两轮全灭视为通道/质量系统性问题才跳出——待下次触发再补，防题池饿死
+  let allFailRounds = 0
   while (poolCount() < PUZZLE_TARGET) {
     const specs = pickPairSpecs(Math.min(2, PUZZLE_TARGET - poolCount()))
     const avoid = buildAvoidList()
@@ -224,7 +228,11 @@ async function pumpPuzzles(): Promise<void> {
         if (firstErr === null) firstErr = r.reason
       }
     })
-    if (failed === specs.length) throw firstErr // 整对全败：零进展立即跳出（同原单道失败语义）
+    if (failed === specs.length) {
+      if (++allFailRounds >= 2) throw firstErr // 连续两轮全灭：零进展跳出（同原整对全败语义）
+      continue // 单轮全灭：再试一对，不废整泵
+    }
+    allFailRounds = 0
     if (firstErr !== null && carried === null) carried = firstErr // 单道失败：继续补，结束再上抛
   }
   if (carried !== null) throw carried

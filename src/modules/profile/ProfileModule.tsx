@@ -1,12 +1,12 @@
 // 个人中心模块（个人中心 specs 全量 + 我的画像：致知己 specs §3）
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { LlmConfig, McpConfig, McpResearch, ProfileFactRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { LLM_SCENE_LABELS, SettingsKeys } from '../../shared/types'
-import type { LlmUsageStats } from '../../shared/types'
+import type { LlmUsageRecord, LlmUsageStats } from '../../shared/types'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
 const PROFILE_CATEGORIES = [
@@ -76,15 +76,19 @@ export default function ProfileModule() {
   const [facts, setFacts] = useState<ProfileFactRow[]>([])
   const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
   const [delFact, setDelFact] = useState<ProfileFactRow | null>(null)
-  // 分组折叠：类别 → 是否收起；默认全展开，内存态不持久化（同格言库区折叠范式）
+  // 分组折叠：类别 → 是否收起；默认全收起（260910 开发者指令：新开项目画像条目默认收起），
+  // 显式展开过的类别当次会话记住；内存态不持久化（同格言库区折叠范式）
   const [catCollapsed, setCatCollapsed] = useState<Record<string, boolean>>({})
-  // 画像 zone 整体折叠：同一范式，默认展开；收起时组头/条目不渲染，计数徽标常驻
-  const [zoneCollapsed, setZoneCollapsed] = useState(false)
+  // 画像 zone 整体折叠（260910 指令改默认收起：新开项目只留「我的画像」大标题，计数徽标常驻）；
+  // 展开后小分类仍默认收起（见上 catCollapsed），点开当次会话记住；内存态不持久化
+  const [zoneCollapsed, setZoneCollapsed] = useState(true)
 
   // ---------- AI 使用统计（260910 推理角效率优化） ----------
   const [usageRange, setUsageRange] = useState<'today' | 'month' | 'all'>('today')
   const [usage, setUsage] = useState<LlmUsageStats | null>(null)
   const [usageLoading, setUsageLoading] = useState(false)
+  // AI 使用 zone 整体折叠（260910 追加）：画像 zone 同范式，默认展开，收起时计数徽标常驻（当前范围调用次数）
+  const [usageZoneCollapsed, setUsageZoneCollapsed] = useState(false)
   const loadUsage = useCallback(async () => {
     setUsageLoading(true)
     try {
@@ -98,13 +102,49 @@ export default function ProfileModule() {
   useEffect(() => {
     void loadUsage()
   }, [loadUsage])
-  // AI 空闲时自动刷新（后台生成结束数字即新）
+  // 调用记录（260910 明细，同日修订为模式切换）：AI 使用区「按类别/按时间」两视图——
+  // 按类别=原有场景聚合（随今日/本月/全部），按时间=最近 30 条滚动明细（与时间范围无关）；
+  // 视图内存态不持久化（切模块重置），默认按类别
+  const [usageView, setUsageView] = useState<'scene' | 'time'>('scene')
+  const [usageRecords, setUsageRecords] = useState<LlmUsageRecord[]>([])
+  // 加载失败可见化（260910 修订）：区分「无记录」与「加载失败」，不再静默伪装成空态
+  const [recordsError, setRecordsError] = useState<string | null>(null)
+  const loadRecords = useCallback(async () => {
+    try {
+      setUsageRecords(await window.api.llmUsage.records())
+      setRecordsError(null)
+    } catch (e) {
+      setRecordsError(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
+  useEffect(() => {
+    void loadRecords()
+  }, [loadRecords])
+  // 切到按时间视图自动拉一次（挂载早于 IPC 就绪时的失败自愈重试；30 行轻查询）
+  useEffect(() => {
+    if (usageView === 'time') void loadRecords()
+  }, [usageView, loadRecords])
+  // AI 空闲时自动刷新（后台生成结束数字即新）；记录与统计一起重拉
   useEffect(() => {
     return window.api.llmUsage.onActivity((p) => {
-      if (p.items.length === 0) void loadUsage()
+      if (p.items.length === 0) {
+        void loadUsage()
+        void loadRecords()
+      }
     })
-  }, [loadUsage])
+  }, [loadUsage, loadRecords])
   const fmtTokens = (n: number): string => (n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n))
+  /** 记录时间：今天 HH:mm:ss，更早 MM-dd HH:mm（滚动 30 条可能跨天，本地时区） */
+  const fmtRecordTime = (iso: string): string => {
+    const d = new Date(iso)
+    const now = new Date()
+    const two = (n: number): string => String(n).padStart(2, '0')
+    const sameDay =
+      d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    return sameDay
+      ? `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+      : `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`
+  }
 
   /** 画像条目加载 */
   const loadFacts = useCallback(async () => {
@@ -511,7 +551,8 @@ export default function ProfileModule() {
             </div>
           )}
           {groupedFacts.map((g) => {
-            const collapsed = !!catCollapsed[g.category]
+            // 260910 默认收起：未显式展开（undefined）视为收起，点开置 false 当次会话记住
+            const collapsed = catCollapsed[g.category] !== false
             return (
               <div key={g.category}>
                 <div
@@ -706,28 +747,57 @@ export default function ProfileModule() {
         </div>
       </section>
 
-      {/* AI 使用统计（260910 推理角效率优化） */}
+      {/* AI 使用统计（260910 推理角效率优化；zone 折叠 260910 追加） */}
       <section className="zone">
-        <div className="zone-header">
+        <div className="zone-header" onClick={() => setUsageZoneCollapsed((v) => !v)}>
+          <span className="material-symbols-outlined">
+            {usageZoneCollapsed ? 'expand_more' : 'expand_less'}
+          </span>
           <span>AI 使用</span>
-          <div className="zone-actions llm-usage-range">
-            {(['today', 'month', 'all'] as const).map((r) => (
-              <button
-                key={r}
-                className={`btn chip${usageRange === r ? ' active' : ''}`}
-                onClick={() => setUsageRange(r)}
-              >
-                {r === 'today' ? '今日' : r === 'month' ? '本月' : '全部'}
-              </button>
-            ))}
-            <button className="btn" title="刷新" onClick={() => void loadUsage()} disabled={usageLoading}>
+          {usage && <span className="zone-count">{usage.totals.calls}</span>}
+          <div className="zone-actions" onClick={(e) => e.stopPropagation()}>
+            <div className="llm-usage-range">
+              {(['scene', 'time'] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`btn chip${usageView === m ? ' active' : ''}`}
+                  onClick={() => setUsageView(m)}
+                >
+                  {m === 'scene' ? '按类别' : '按时间'}
+                </button>
+              ))}
+            </div>
+            {usageView === 'scene' && (
+              <div className="llm-usage-range">
+                {(['today', 'month', 'all'] as const).map((r) => (
+                  <button
+                    key={r}
+                    className={`btn chip${usageRange === r ? ' active' : ''}`}
+                    onClick={() => setUsageRange(r)}
+                  >
+                    {r === 'today' ? '今日' : r === 'month' ? '本月' : '全部'}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className="btn"
+              title="刷新"
+              onClick={() => {
+                void loadUsage()
+                void loadRecords()
+              }}
+              disabled={usageLoading}
+            >
               <span className="material-symbols-outlined">refresh</span>
             </button>
           </div>
         </div>
+        {!usageZoneCollapsed && (
         <div className="zone-body">
-          {usage && (
-            <>
+          {usageView === 'scene' &&
+            usage && (
+              <>
               <div className="llm-usage-cards">
                 <div className="llm-usage-card">
                   <div className="llm-usage-num">{usage.totals.calls}</div>
@@ -774,7 +844,66 @@ export default function ProfileModule() {
               )}
             </>
           )}
+          {/* 调用记录（260910 明细，同日修订为模式切换）：按时间视图 = 最近 30 条，与时间范围无关 */}
+          {usageView === 'time' &&
+            (recordsError ? (
+              <div className="empty-state">
+                <span className="material-symbols-outlined">cloud_off</span>
+                调用记录加载失败：{recordsError}（点击右上角「刷新」重试）
+              </div>
+            ) : usageRecords.length === 0 ? (
+              <div className="empty-state">
+                <span className="material-symbols-outlined">history</span>
+                还没有 AI 调用记录
+              </div>
+            ) : (
+              <table className="llm-usage-table llm-usage-records-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>场景</th>
+                    <th>模型</th>
+                    <th>结果</th>
+                    <th>耗时</th>
+                    <th>token</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usageRecords.map((r) => (
+                    <Fragment key={r.id}>
+                      <tr>
+                        <td className="llm-usage-rec-time">{fmtRecordTime(r.createdAt)}</td>
+                        <td>{LLM_SCENE_LABELS[r.scene] ?? r.scene}</td>
+                        <td className="llm-usage-rec-model" title={`${r.configName} · ${r.model}`}>
+                          {r.model}
+                        </td>
+                        <td>
+                          {r.ok ? (
+                            <span className="llm-usage-rec-ok">成功</span>
+                          ) : (
+                            <span className="llm-usage-rec-fail">失败</span>
+                          )}
+                        </td>
+                        <td>
+                          {r.durationMs >= 1000 ? `${(r.durationMs / 1000).toFixed(1)}s` : `${r.durationMs}ms`}
+                        </td>
+                        <td title={`输入 ${r.promptTokens} / 输出 ${r.completionTokens}`}>
+                          {fmtTokens(r.promptTokens + r.completionTokens)}
+                          {r.tokensEstimated ? ' ≈' : ''}
+                        </td>
+                      </tr>
+                      {!r.ok && r.errorBrief && (
+                        <tr className="llm-usage-record-error">
+                          <td colSpan={6}>{r.errorBrief}</td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            ))}
         </div>
+        )}
       </section>
 
       {/* MCP 配置 */}

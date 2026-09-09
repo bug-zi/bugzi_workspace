@@ -5,7 +5,7 @@ import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
-import { ensureReasoningStock } from './services/reasoningStock'
+import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -1032,6 +1032,11 @@ export function registerIpc(): void {
 
   // ---------- 推理角（DB v12，推理角 specs §2/§4） ----------
   ipcMain.handle('turtle:generate', async (_e, jobId: string, preference: string) => {
+    // v1.3 配套（260910）：存货充足（fresh ≥ 3 碗，按钮批数）秒回不调 LLM——汤库列表里的
+    // fresh 汤即后台泵已出好的题，点汤开局本就零等待；存量不足才现场生成（难度偏好仅对
+    // 现场生成生效，存货为泵随机难度——偏好严格的用户等存量耗尽自然回落现场生成）。
+    const fresh = freshSoupCount()
+    if (fresh >= 3) return { generated: 0, inserted: 0, stockServed: fresh }
     const ac = beginJob(jobId)
     try {
       return await generateSoups(
@@ -1849,6 +1854,41 @@ export function registerIpc(): void {
       },
       rows: mapped
     }
+  })
+
+  // 调用记录（260910 AI 使用明细）：最近 30 条；库内全量保留，仅 UI 截断，与时间范围无关
+  ipcMain.handle('llmUsage:records', () => {
+    const rows = getDb()
+      .prepare(
+        `SELECT id, created_at, scene, config_name, model, ok, duration_ms, prompt_tokens, completion_tokens, tokens_estimated, error_brief
+        FROM llm_usage ORDER BY id DESC LIMIT 30`
+      )
+      .all() as {
+      id: number
+      created_at: string
+      scene: string
+      config_name: string
+      model: string
+      ok: number
+      duration_ms: number
+      prompt_tokens: number
+      completion_tokens: number
+      tokens_estimated: number
+      error_brief: string | null
+    }[]
+    return rows.map((r) => ({
+      id: r.id,
+      createdAt: r.created_at,
+      scene: r.scene,
+      configName: r.config_name,
+      model: r.model,
+      ok: r.ok === 1,
+      durationMs: r.duration_ms,
+      promptTokens: r.prompt_tokens,
+      completionTokens: r.completion_tokens,
+      tokensEstimated: r.tokens_estimated === 1,
+      errorBrief: r.error_brief
+    }))
   })
 
   ipcMain.handle('mcp:listEnabled', () => getEnabledMcps())

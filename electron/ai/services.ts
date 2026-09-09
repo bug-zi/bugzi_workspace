@@ -430,6 +430,7 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.9,
         jsonMode: true,
+        thinking: 'disabled', // 260910 提速：glm 默认深度思考 6k~10k token 解码占 95% 耗时，关掉 250s → ~8s；质量靠代码侧三道闸兜底（句式/口语化/查重）
         scene: 'motto:generate',
         signal
       })
@@ -1205,14 +1206,37 @@ export interface TurtleSoupMaterial {
   analysis: string
 }
 
-/** 解析 LLM 返回的 JSON 对象（兼容 ```json 包裹；json_object 模式顶层必为对象） */
+/** 解析 LLM 返回的 JSON 对象（兼容 ```json 包裹；json_object 模式顶层必为对象）。
+ *  260910 排障加固：思考型模型偶尔在 content 里夹带思考/前言/尾注（未走 reasoning_content
+ *  通道时），整串 JSON.parse 即炸——当晚题池补充泵曾整对死在审题解析环节（题池饿死、
+ *  练习场/每日一题只能现场等出题）。加固三步：剥 <think> 块（成对/未闭合）→ 围栏剥离
+ *  （原有）→「首 { 到尾 }」截取重试；仍失败才抛错。 */
 function parseJsonObject(raw: string): Record<string, unknown> {
-  const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
-  const parsed: unknown = JSON.parse(text)
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('LLM 未返回 JSON 对象')
+  const text = raw
+    .replace(/<think>[\s\S]*?<\/think>\s*/gi, '') // 思考块（成对）
+    .replace(/<think>[\s\S]*$/i, '') // 思考块（未闭合，其后皆思考无正文）
+    .replace(/^[\s\S]*?```(?:json)?\s*\n?/, '')
+    .replace(/\n?```\s*[\s\S]*$/, '')
+    .trim()
+  const tryParse = (s: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(s)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null
+    } catch {
+      return null
+    }
   }
-  return parsed as Record<string, unknown>
+  const direct = tryParse(text)
+  if (direct) return direct
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start >= 0 && end > start) {
+    const sliced = tryParse(text.slice(start, end + 1))
+    if (sliced) return sliced
+  }
+  throw new Error('LLM 未返回 JSON 对象')
 }
 
 /** 剥除 LLM 回复外层 md 代码围栏 */

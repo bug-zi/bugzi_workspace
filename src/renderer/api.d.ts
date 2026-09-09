@@ -629,11 +629,11 @@ export interface Api {
     onStockChanged(cb: () => void): () => void
   }
   turtle: {
-    /** 「来 3 碗汤」：难度偏好可选（默认随机），三件套（汤面/汤底/裁判解析）入库汤库 */
+    /** 「来 3 碗汤」：汤库 fresh 存货 ≥3 时秒回不调 LLM（stockServed=存量）；不足现场生成 3 碗 */
     generate(
       jobId: string,
       preference?: 'random' | 'easy' | 'medium' | 'hard'
-    ): Promise<{ generated: number; inserted: number }>
+    ): Promise<{ generated: number; inserted: number; stockServed?: number }>
     listSoups(difficulty?: string): Promise<TurtleSoupRow[]>
     /** 开局/续局：fresh 建新局、playing 返回现有局；终态汤抛 SOUP_FINISHED */
     openSoup(soupId: number): Promise<TurtleGamePayload>
@@ -934,6 +934,8 @@ export interface Api {
   llmUsage: {
     /** AI 使用统计（260910）：range = today | month | all */
     stats(range: 'today' | 'month' | 'all'): Promise<import('../shared/types').LlmUsageStats>
+    /** 调用记录（260910 明细）：最近 30 条，与时间范围无关 */
+    records(): Promise<import('../shared/types').LlmUsageRecord[]>
     /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
     onActivity(cb: (payload: { items: { scene: string; configName: string }[] }) => void): () => void
   }

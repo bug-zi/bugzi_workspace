@@ -185,8 +185,6 @@ function Shell() {
             </Fragment>
           ))}
           <div className="sidebar-spacer" />
-          {/* AI 实时活动指示（260910 推理角效率优化）：左栏底部常驻，空闲不渲染 */}
-          <LlmActivity />
         </nav>
 
         {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
@@ -238,6 +236,9 @@ function Shell() {
             <DraftSidebar onCollapse={() => switchRightPanel(null)} turtleGame={turtleGame} />
           )}
           {rightPanel === 'canvas' && <CanvasSidebar onCollapse={() => switchRightPanel(null)} />}
+          {/* AI 实时活动指示（第31轮反馈修订：自左栏底部迁来右下角主题按钮上方——左栏留给未来新模块；
+              同主题按钮规则：三面板任一展开即不渲染，收起态才显示；空闲（无在途调用）也不渲染） */}
+          {rightPanel === null && <LlmActivity />}
           {rightPanel === null && (
             <button
               className="right-col-theme"

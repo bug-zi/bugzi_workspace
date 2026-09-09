@@ -107,6 +107,9 @@ export interface ChatOptions {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
   temperature?: number
   jsonMode?: boolean
+  /** 思维链控制（260910 格言提速）：缺省 = 不发参数（上游默认行为，现有场景零变化）。
+   *  仅 glm 系模型实际生效（chatWithConfig 内映射），见下。 */
+  thinking?: 'enabled' | 'disabled'
   signal?: AbortSignal
   /** 场景标签（260910 记账/活动指示用，两段式 模块:动作；缺省 other） */
   scene?: string
@@ -202,6 +205,9 @@ async function chatWithConfig(
   }
   if (opts.temperature != null) body.temperature = opts.temperature
   if (opts.jsonMode) body.response_format = { type: 'json_object' }
+  // 思维链按模型家族映射（260910 格言提速）：glm 系 → 智谱 thinking 参数；其余模型一律不发送
+  // ——防 OpenAI 严格端点对未知参数 400，防溢出路由把调用甩给非 glm 配置时炸请求（甩到即按其默认行为跑）
+  if (opts.thinking && /^glm/i.test(cfg.model)) body.thinking = { type: opts.thinking }
 
   let res: Response
   for (let attempt = 0; ; attempt++) {
