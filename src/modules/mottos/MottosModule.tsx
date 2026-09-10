@@ -7,11 +7,14 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
-import { SettingsKeys } from '../../shared/types'
+import { SettingsKeys, type AiChannel } from '../../shared/types'
 
 export interface MottosModuleProps {
-  /** opts.auto：模块动作直发（切频道后自动发送），同 App.openAiWith */
-  onOpenAi: (prefill?: string, opts?: { auto?: boolean }) => void
+  /** 文笔坊 tab 激活态：从写作台/浮生记切回格言库 tab 时刷新列表 */
+  active?: boolean
+  /** opts.auto：模块动作直发（切频道后自动发送），同 App.openAiWith；
+   *  channel 由格言面板显式传 'motto' 直达「格言·解读」频道（当前模块已变 wenbi，模块级映射不再命中） */
+  onOpenAi: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
   bumpAi: () => void
 }
 
@@ -104,8 +107,12 @@ export default function MottosModule(props: MottosModuleProps) {
     })
   }, [load])
 
-  // keep-alive：切回格言库时刷新（定时任务可能在后台已生成）
-  useModuleActivated('mottos', () => void load())
+  // keep-alive：格言库已并入文笔坊——切回文笔坊模块时刷新（定时任务可能在后台已生成）
+  useModuleActivated('wenbi', () => void load())
+  // tab 激活：从写作台/浮生记切回格言库 tab 时刷新（与模块激活两路径重叠时幂等查询，无副作用）
+  useEffect(() => {
+    if (props.active) void load()
+  }, [props.active, load])
 
   // ---------- v2.0：标签聚合 + 过滤（§7.1/§7.2） ----------
   /** 全部标签（按使用条数降序，同数按名称），筛选条数据源 */
@@ -310,7 +317,7 @@ export default function MottosModule(props: MottosModuleProps) {
   const interpretMotto = (m: MottoRecord): void => {
     const body = m.content.trim()
     const text = m.source.trim() ? `请解读这条格言：「${body}」 —— ${m.source.trim()}` : `请解读这条格言：「${body}」`
-    props.onOpenAi(text, { auto: true })
+    props.onOpenAi(text, { auto: true, channel: 'motto' })
   }
 
   /** 功能气泡菜单项（按区拼装；顺序：AI 解读 / 编辑 / 标签 / 复制 / 区特有 ∥ 丢弃） */
@@ -425,13 +432,7 @@ export default function MottosModule(props: MottosModuleProps) {
   }
 
   return (
-    <div className="module-page mottos-page">
-      <div className="module-header">
-        <span className="material-symbols-outlined">format_quote</span>
-        <span className="module-title">格言库</span>
-        <span className="module-sub">三级流转：草稿 → 沉淀 → 正式</span>
-      </div>
-
+    <div className="mottos-page">
       {/* 吸顶导航栏（优化建议区 + v2.0）：左侧区导航跳转，右侧标签筛选 + 搜索，滚动时常驻可用 */}
       <div className="zone-nav">
         {ZONES.map((z) => (

@@ -4,7 +4,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import ePub from 'epubjs'
 import type { Book, Contents, NavItem, Rendition } from 'epubjs'
-import type { BooksNote, BooksRecord, Theme } from '../../shared/types'
+import type { BooksNote, BooksRecord, BooksReadingBg, Theme } from '../../shared/types'
 import { parseReaderKey, dirOfKey, createHoldScroller, type ReadingMode } from './readerKeys'
 import { flattenToc, type ReaderLocate, type ReaderTocItem } from './ReaderSidebar'
 import { BUNDLED_FONTS } from '../../theme/fonts'
@@ -40,6 +40,8 @@ interface Props {
   fontScale: number | null
   /** 书级字体族 CSS 串（null=跟随全局；字体选择轮 §1.3） */
   fontFamily: string | null
+  /** 阅读背景偏好（全局一份；260911 阅读背景设计 §七） */
+  bg: BooksReadingBg
 }
 
 /** 目录 href → spine 序号（去锚点解析；解析失败 undefined → 区间判定跳过该项。书签优化轮 §一） */
@@ -67,22 +69,41 @@ function convertToc(items: NavItem[] | undefined, spine: Book['spine'], depth = 
     .filter((it) => it.label || it.children.length > 0)
 }
 
+/** 阅读背景正文字色（260911 阅读背景设计 §三）：深色字柔和近黑 / 浅色字柔和米白 */
+const BG_TEXT_DARK = '#2b2b2b'
+const BG_TEXT_LIGHT = '#d8d8d3'
+
 /** 主题注入：iframe 内用不了外层 CSS 变量，取具体色值写入 rendition（主题切换时重注入）。
  *  优化第1轮 §8.1/§8.6：护栏防横向溢出 + ::selection 主题色。
- *  （分页模式的内部滚动由 epub.js 自管——contents.columns 设 overflow-y hidden，无需注入） */
+ *  260911 阅读背景：color 模式注入预设色值与配对字色；image 模式 body 背景透明（宿主底图透出）；
+ *  theme 模式现状跟 CSS 变量。（分页模式的内部滚动由 epub.js 自管——contents.columns 设
+ *  overflow-y hidden，无需注入） */
 function applyTheme(
   rendition: Rendition | null,
   fontScale: number | null,
-  fontFamily: string | null
+  fontFamily: string | null,
+  bg: BooksReadingBg
 ): void {
   if (!rendition) return
   const cs = getComputedStyle(document.documentElement)
   const body = getComputedStyle(document.body)
   const basePx = parseFloat(body.fontSize) || 16
+  const customBg = bg.kind !== 'theme'
+  const bodyBg =
+    bg.kind === 'color' && bg.color
+      ? bg.color
+      : bg.kind === 'image'
+        ? 'transparent'
+        : cs.getPropertyValue('--color-surface-strong').trim() || '#fff'
+  const bodyColor = customBg
+    ? bg.textColor === 'light'
+      ? BG_TEXT_LIGHT
+      : BG_TEXT_DARK
+    : cs.getPropertyValue('--color-text').trim() || '#1f1f1f'
   rendition.themes.default({
     body: {
-      color: cs.getPropertyValue('--color-text').trim() || '#1f1f1f',
-      background: cs.getPropertyValue('--color-surface-strong').trim() || '#fff',
+      color: bodyColor,
+      background: bodyBg,
       'font-family': fontFamily ?? body.fontFamily,
       'font-size': fontScale != null ? `${Math.round(basePx * fontScale * 100) / 100}px` : body.fontSize,
       'font-weight': body.fontWeight,
@@ -160,7 +181,7 @@ function contentBoxSize(host: HTMLElement): { w: number; h: number } {
 }
 
 const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props, ref) {
-  const { book, theme, mode, notes, fontScale, fontFamily } = props
+  const { book, theme, mode, notes, fontScale, fontFamily, bg } = props
   const hostRef = useRef<HTMLDivElement>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const bookRef = useRef<Book | null>(null)
@@ -338,7 +359,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     })
     renditionRef.current = rendition
     renderedRef.current.clear() // 新实例标注为空
-    applyTheme(rendition, fontScale, fontFamily)
+    applyTheme(rendition, fontScale, fontFamily, bg)
     void rendition.display(curCfiRef.current ?? book.progress_cfi ?? undefined).then(() => {
       // 首帧展示后再挂标注（render hook 依赖视图就绪）
       syncAnnotations()
@@ -514,16 +535,16 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
 
   // 主题切换重注入（不重载书）；标注重涂由 syncAnnotations 检测色值变化完成
   useEffect(() => {
-    applyTheme(renditionRef.current, fontScale, fontFamily)
+    applyTheme(renditionRef.current, fontScale, fontFamily, bg)
     syncAnnotations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme])
 
-  // 字号/字体族变化即时重注入（不重挂不丢进度；epub.js 自动重排——书架 v2.0 §四 + 字体选择轮 §1.3）
+  // 字号/字体族/阅读背景变化即时重注入（不重挂不丢进度；epub.js 自动重排——书架 v2.0 §四 + 字体选择轮 §1.3 + 260911 阅读背景）
   useEffect(() => {
-    applyTheme(renditionRef.current, fontScale, fontFamily)
+    applyTheme(renditionRef.current, fontScale, fontFamily, bg)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fontScale, fontFamily])
+  }, [fontScale, fontFamily, bg])
 
   // notes 变化 → 标注 diff（book 未就绪时由 createRendition 完成后补挂）
   useEffect(() => {

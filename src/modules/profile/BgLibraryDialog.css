@@ -1,0 +1,68 @@
+/* 背景素材库弹窗（优化建议区第36轮）：浅/深两组网格，当前使用主题色描边 */
+.bg-lib-dialog .recycle-tabs {
+  margin-bottom: 12px;
+}
+
+.bg-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.bg-lib-item {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border: 2px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bg-lib-item.using {
+  border-color: var(--color-primary);
+}
+
+.bg-lib-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  cursor: pointer;
+}
+
+.bg-lib-using {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72em;
+  color: var(--color-primary-deep);
+  background: var(--color-primary-soft);
+  pointer-events: none;
+}
+
+.bg-lib-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  padding: 2px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.bg-lib-item:hover .bg-lib-del {
+  display: inline-flex;
+}
+
+.bg-lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 0;
+  opacity: 0.75;
+}

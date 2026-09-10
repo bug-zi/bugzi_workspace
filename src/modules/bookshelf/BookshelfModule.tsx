@@ -1,7 +1,7 @@
 // 书架（书架 specs §3 + 优化第1轮 §8.3-8.5 + v2.0）：封面网格 + 导入 + 主栏内阅读切换
 // （阅读编排：双模式每书记忆 + 目录/笔记/书签侧栏 + 划词笔记闭环 + 字号每书独立 + 阅读统计；零 AI 模块）
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BookMark, BooksNote, BooksRecord, ReadStats } from '../../shared/types'
+import type { BookMark, BooksNote, BooksReadingBg, BooksRecord, ReadStats } from '../../shared/types'
 import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import MdDialog from '../../components/MdDialog'
@@ -22,6 +22,35 @@ function progressLabel(b: BooksRecord): string {
   if (!b.last_read_at) return '未读'
   if (b.progress_percent > 0) return `${Math.round(b.progress_percent)}%`
   return '在读'
+}
+
+/** 阅读背景纯色预设（260911 阅读背景设计 §三）：低饱和纸感色 + 配对正文字色 */
+const READER_BG_PRESETS: { id: string; label: string; color: string; textColor: 'dark' | 'light' }[] = [
+  { id: 'paper', label: '纸黄', color: '#f5ecd7', textColor: 'dark' },
+  { id: 'cream', label: '米白', color: '#f7f3ea', textColor: 'dark' },
+  { id: 'green', label: '护眼绿', color: '#cde6c8', textColor: 'dark' },
+  { id: 'celadon', label: '青瓷', color: '#d3e3e0', textColor: 'dark' },
+  { id: 'warm', label: '暖灰', color: '#e8e2da', textColor: 'dark' },
+  { id: 'night', label: '夜读黑', color: '#1e2226', textColor: 'light' }
+]
+
+/** 图片平均亮度采样（0~1；设计 §六）：32×32 缩略图 Rec.709 加权均值，< 0.5 判深图配浅字 */
+async function sampleImageBrightness(url: string): Promise<number> {
+  const blob = await (await fetch(url)).blob()
+  const bmp = await createImageBitmap(blob)
+  const size = 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return 1 // 拿不到 2d 上下文按浅图处理（配深字，安全侧）
+  ctx.drawImage(bmp, 0, 0, size, size)
+  const { data } = ctx.getImageData(0, 0, size, size)
+  let sum = 0
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.2125 * data[i] + 0.7154 * data[i + 1] + 0.0721 * data[i + 2]
+  }
+  return sum / (data.length / 4) / 255
 }
 
 /** 秒 → 分钟文案（统计条/面板共用；>0 不足 1 分显「<1 分钟」；书架 v2.0 §五） */
@@ -76,6 +105,56 @@ export default function BookshelfModule() {
   notesRef.current = notes ?? []
   /** 字体浮层锚点（null=关） */
   const [fontAnchor, setFontAnchor] = useState<HTMLButtonElement | null>(null)
+  // ----- 阅读背景（全局一份，所有书共用；260911 阅读背景设计） -----
+  const [readingBg, setReadingBg] = useState<BooksReadingBg>({ kind: 'theme' })
+  /** 自定义图文件名（null=无图；文件在 userData/bg/，bzres://bg/ 加载） */
+  const [readerBgImage, setReaderBgImage] = useState<string | null>(null)
+  /** 背景菜单锚点（null=关） */
+  const [bgAnchor, setBgAnchor] = useState<HTMLButtonElement | null>(null)
+
+  // 背景偏好启动恢复（坏 JSON 静默保持默认）
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.BooksReadingBg).then((raw) => {
+      if (!raw) return
+      try {
+        const v = JSON.parse(raw) as BooksReadingBg
+        if (v && (v.kind === 'theme' || v.kind === 'color' || v.kind === 'image')) setReadingBg(v)
+      } catch {
+        /* 坏数据保持默认 */
+      }
+    })
+    void window.api.settings.get(SettingsKeys.ReaderBgImage).then((v) => setReaderBgImage(v || null))
+  }, [])
+
+  /** 背景偏好应用（即落库） */
+  const applyReadingBg = (next: BooksReadingBg): void => {
+    setReadingBg(next)
+    void window.api.settings.set(SettingsKeys.BooksReadingBg, JSON.stringify(next))
+  }
+
+  /** 上传自定义背景图：pick → 读回文件名 → 亮度采样定字色 → kind=image（设计 §六） */
+  const uploadReaderBg = async (): Promise<void> => {
+    const ok = await window.api.image.pick('reader-bg')
+    if (!ok) return // null=取消 / false=异常，均不动作
+    const file = await window.api.settings.get(SettingsKeys.ReaderBgImage)
+    setReaderBgImage(file || null)
+    let textColor: 'dark' | 'light' = 'dark'
+    if (file) {
+      try {
+        textColor = (await sampleImageBrightness(`bzres://bg/${file}`)) < 0.5 ? 'light' : 'dark'
+      } catch {
+        /* 采样失败按浅色图深字处理（安全侧） */
+      }
+    }
+    applyReadingBg({ kind: 'image', textColor })
+  }
+
+  /** 清除自定义图：清引用回落主题，文件由下次上传覆盖清理（设计 §四） */
+  const clearReaderBgImage = (): void => {
+    applyReadingBg({ kind: 'theme' })
+    setReaderBgImage(null)
+    void window.api.settings.set(SettingsKeys.ReaderBgImage, '')
+  }
 
   const load = useCallback(async () => {
     setItems(await window.api.books.list())
@@ -362,6 +441,19 @@ export default function BookshelfModule() {
 
   // ----- 阅读视图（主栏整体切换） -----
   if (reading) {
+    // 阅读区容器背景（260911 阅读背景设计 §七）：color=纯色 / image=底图（cover 居中）；
+    // theme=undefined 走 CSS 默认（--color-surface-strong）。epub/pdf 共用（pdf 页面白底 canvas 不受影响）
+    const readerBodyStyle =
+      readingBg.kind === 'color' && readingBg.color
+        ? { background: readingBg.color }
+        : readingBg.kind === 'image' && readerBgImage
+          ? {
+              backgroundImage: `url(bzres://bg/${readerBgImage})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat'
+            }
+          : undefined
     return (
       <div ref={readerPageRef} className={`module-page bk-reader-page${reading.format === 'epub' ? ' bk-reader-wide' : ''}`}>
         <div className="bk-reader-bar">
@@ -414,6 +506,13 @@ export default function BookshelfModule() {
               </button>
             </>
           )}
+          <button
+            className="btn bk-bar-btn"
+            onClick={(e) => setBgAnchor(e.currentTarget)}
+            title="阅读背景（全局，所有书共用）"
+          >
+            <span className="material-symbols-outlined">palette</span>
+          </button>
           <button className="btn bk-bar-btn" onClick={addBookmark} title="收藏当前位置为书签">
             <span className="material-symbols-outlined">bookmark_add</span>
           </button>
@@ -451,6 +550,50 @@ export default function BookshelfModule() {
             ]}
           />
         )}
+        {bgAnchor && (
+          <ActionMenu
+            anchorEl={bgAnchor}
+            onClose={() => setBgAnchor(null)}
+            items={[
+              {
+                key: 'theme',
+                icon: readingBg.kind === 'theme' ? 'check' : undefined,
+                label: '跟随主题',
+                onClick: () => applyReadingBg({ kind: 'theme' })
+              },
+              ...READER_BG_PRESETS.map((p) => ({
+                key: p.id,
+                icon: readingBg.kind === 'color' && readingBg.color === p.color ? 'check_circle' : 'circle',
+                iconStyle: { color: p.color },
+                label: p.label,
+                onClick: () => applyReadingBg({ kind: 'color', color: p.color, textColor: p.textColor })
+              })),
+              {
+                key: 'upload',
+                icon: 'upload',
+                label: '上传自定义图片…',
+                separatorAbove: true,
+                onClick: () => void uploadReaderBg()
+              },
+              ...(readerBgImage
+                ? [
+                    {
+                      key: 'use-image',
+                      icon: readingBg.kind === 'image' ? 'check_circle' : 'circle',
+                      label: '自定义图片',
+                      onClick: () => applyReadingBg({ kind: 'image', textColor: readingBg.textColor ?? 'dark' })
+                    },
+                    {
+                      key: 'clear-image',
+                      icon: 'delete',
+                      label: '清除自定义图片',
+                      onClick: clearReaderBgImage
+                    }
+                  ]
+                : [])
+            ]}
+          />
+        )}
         <div className={`bk-reader-flex${side.open ? ' with-side' : ''}`}>
           {side.open && (
             <ReaderSidebar
@@ -470,7 +613,7 @@ export default function BookshelfModule() {
               onCollapse={() => setSide((s) => ({ ...s, open: false }))}
             />
           )}
-          <div className="bk-reader-body">
+          <div className="bk-reader-body" style={readerBodyStyle}>
             {reading.format === 'epub' ? (
               <EpubReader
                 key={`${reading.id}-${mode}`}
@@ -481,6 +624,7 @@ export default function BookshelfModule() {
                 notes={notes ?? []}
                 fontScale={reading.font_scale}
                 fontFamily={reading.font_family}
+                bg={readingBg}
                 onProgress={setReaderLabel}
                 onToc={onToc}
                 onLocate={onLocateCb}

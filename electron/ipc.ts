@@ -105,7 +105,7 @@ import {
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
-import { copyFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
@@ -146,8 +146,56 @@ export function registerIpc(): void {
     return true
   })
 
-  // ---------- 头像/背景图上传 ----------
-  ipcMain.handle('image:pick', async (_e, kind: 'avatar' | 'bg-light' | 'bg-dark') => {
+  // ---------- 背景素材库（优化建议区第36轮：文件系统为真相源，light/dark 两组独立） ----------
+  const BG_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']
+  /** 每组素材上限 */
+  const BG_MAX_PER_GROUP = 20
+
+  const bgGroupDir = (group: 'light' | 'dark'): string => join(userDataDir(), 'bg', group)
+
+  /** 列出某组素材文件名（新上传在前；只认图片扩展；目录缺失自动创建） */
+  function bgListFiles(group: 'light' | 'dark'): string[] {
+    const dir = bgGroupDir(group)
+    mkdirSync(dir, { recursive: true })
+    return readdirSync(dir)
+      .filter((f) => BG_EXTS.includes(f.split('.').pop()?.toLowerCase() ?? ''))
+      .sort((a, b) => b.localeCompare(a))
+  }
+
+  /** 一次性迁移（幂等，registerIpc 注册时执行）：旧单图 bg/bg-light.ext → bg/light/bg-light.ext，dark 同理；
+   *  文件名保持原名（settings 已指向它，零额外改动）；组目录已有文件即跳过；失败静默（旧图原地不动，现有行为不受影响） */
+  function migrateBgLibrary(): void {
+    for (const group of ['light', 'dark'] as const) {
+      const dir = bgGroupDir(group)
+      try {
+        if (readdirSync(dir).length > 0) continue
+      } catch {
+        /* 目录不存在 → 继续迁移 */
+      }
+      for (const ext of BG_EXTS) {
+        const oldFile = `bg-${group}.${ext}`
+        try {
+          mkdirSync(dir, { recursive: true })
+          renameSync(join(userDataDir(), 'bg', oldFile), join(dir, oldFile))
+          break // 每组最多一个旧文件
+        } catch {
+          /* 无此扩展旧文件，试下一个 */
+        }
+      }
+    }
+  }
+
+  // 背景素材库一次性迁移（幂等；失败静默不影响任何现有行为——须在上方工具 const 初始化后调用，防 TDZ）
+  try {
+    migrateBgLibrary()
+  } catch {
+    /* 静默 */
+  }
+
+  // ---------- 头像上传 / 背景素材库 ----------
+  ipcMain.handle(
+    'image:pick',
+    async (_e, kind: 'avatar' | 'reader-bg') => {
     const r = await dialog.showOpenDialog(win()!, {
       title: '选择图片',
       filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
@@ -160,7 +208,7 @@ export function registerIpc(): void {
     if (kind === 'avatar') {
       dest = join(userDataDir(), `avatar.${ext}`)
       // 清旧头像（不同扩展名）
-      for (const old of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']) {
+      for (const old of BG_EXTS) {
         if (old !== ext) {
           try {
             unlinkSync(join(userDataDir(), `avatar.${old}`))
@@ -171,23 +219,73 @@ export function registerIpc(): void {
       }
       setSetting(SettingsKeys.UserAvatar, `avatar.${ext}`)
     } else {
-      // 背景图带扩展名存（settings 记文件名，bzres://bg/<file> 引用）
-      dest = join(userDataDir(), 'bg', `${kind}.${ext}`)
-      copyFileSync(src, dest)
-      setSetting(`bg_${kind}`, `${kind}.${ext}`)
+      // reader-bg 为藏书架阅读背景单槽位（260911 阅读背景设计 §四），settings 键走常量；
+      // 项目背景图 bg-light/bg-dark 已升级为素材库（image:bg* 四通道），不再走本通道
+      dest = join(userDataDir(), 'bg', `reader-bg.${ext}`)
+      setSetting(SettingsKeys.ReaderBgImage, `reader-bg.${ext}`)
       // 删掉旧的其他扩展版本
-      for (const old of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']) {
+      for (const old of BG_EXTS) {
         if (old !== ext) {
           try {
-            unlinkSync(join(userDataDir(), 'bg', `${kind}.${old}`))
+            unlinkSync(join(userDataDir(), 'bg', `reader-bg.${old}`))
           } catch {
             /* 无旧文件 */
           }
         }
       }
     }
+    copyFileSync(src, dest)
+    return true
+    }
+  )
+
+  ipcMain.handle('image:bgList', (_e, group: 'light' | 'dark'): string[] => bgListFiles(group))
+
+  // 多选上传入组；单张自动设为当前背景（applied=文件名），多张只入库（applied=null）
+  ipcMain.handle(
+    'image:bgUpload',
+    async (_e, group: 'light' | 'dark'): Promise<{ list: string[]; applied: string | null } | null> => {
+      const r = await dialog.showOpenDialog(win()!, {
+        title: '选择背景图片（可多选）',
+        filters: [{ name: '图片', extensions: BG_EXTS }],
+        properties: ['openFile', 'multiSelections']
+      })
+      if (r.canceled || r.filePaths.length === 0) return null
+      const dir = bgGroupDir(group)
+      if (bgListFiles(group).length + r.filePaths.length > BG_MAX_PER_GROUP) {
+        throw new Error(`素材库已达上限（每组 ${BG_MAX_PER_GROUP} 张），请先删除部分素材`)
+      }
+      let applied: string | null = null
+      for (const src of r.filePaths) {
+        const ext = src.split('.').pop()?.toLowerCase() ?? 'png'
+        const name = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`
+        copyFileSync(src, join(dir, name))
+        if (r.filePaths.length === 1) applied = name
+      }
+      if (applied) setSetting(`bg_bg-${group}`, applied)
+      return { list: bgListFiles(group), applied }
+    }
+  )
+
+  // 设某张为当前使用（校验在库 + 文件名安全）
+  ipcMain.handle('image:bgUse', (_e, group: 'light' | 'dark', file: string): boolean => {
+    if (!/^[\w.-]+$/.test(file)) return false
+    if (!bgListFiles(group).includes(file)) return false
+    setSetting(`bg_bg-${group}`, file)
     return true
   })
+
+  // 删某张；删的是当前使用图时置空 settings 回退纯色（wasUsing 供渲染层 refreshBg）
+  ipcMain.handle(
+    'image:bgDelete',
+    (_e, group: 'light' | 'dark', file: string): { list: string[]; wasUsing: boolean } => {
+      if (!/^[\w.-]+$/.test(file)) throw new Error('非法文件名')
+      unlinkSync(join(bgGroupDir(group), file))
+      const wasUsing = getSetting(`bg_bg-${group}`) === file
+      if (wasUsing) setSetting(`bg_bg-${group}`, '')
+      return { list: bgListFiles(group), wasUsing }
+    }
+  )
 
   // ---------- 通用条目操作（各模块列表共用模式） ----------
   type ItemKind =

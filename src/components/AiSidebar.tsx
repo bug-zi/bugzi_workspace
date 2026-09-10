@@ -687,9 +687,8 @@ export default function AiSidebar(props: AiSidebarProps) {
 }
 
 function moduleLabel(m: string): string {
-  // 260908：辩真阁并入万象库（verify 移除）；账本→记账本、个人中心→个人档
+  // 260908：辩真阁并入万象库（verify 移除）；账本→记账本、个人中心→个人档；260911 格言库并入文笔坊（mottos 移除）
   const map: Record<string, string> = {
-    mottos: '格言库',
     wiki: '万象库',
     inspirations: '灵感泉',
     zhijiji: '致知己',

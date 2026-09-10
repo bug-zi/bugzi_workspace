@@ -1,6 +1,5 @@
-// 渲染层全局 window.api 类型（preload 桥）
+// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除
 export type ModuleId =
-  | 'mottos'
   | 'wiki'
   | 'inspirations'
   | 'verify'
@@ -640,7 +639,11 @@ export interface Api {
     delete(path: string): Promise<boolean>
   }
   image: {
-    pick(kind: 'avatar' | 'bg-light' | 'bg-dark'): Promise<boolean | null>
+    pick(kind: 'avatar' | 'reader-bg'): Promise<boolean | null>
+    bgList(group: 'light' | 'dark'): Promise<string[]>
+    bgUpload(group: 'light' | 'dark'): Promise<{ list: string[]; applied: string | null } | null>
+    bgUse(group: 'light' | 'dark', file: string): Promise<boolean>
+    bgDelete(group: 'light' | 'dark', file: string): Promise<{ list: string[]; wasUsing: boolean }>
   }
   item: {
     discard(

@@ -14,9 +14,20 @@ const api = {
     delete: (path: string): Promise<boolean> => ipcRenderer.invoke('md:delete', path)
   },
   image: {
-    /** 选择并落盘图片；kind: avatar | bg-light | bg-dark */
-    pick: (kind: 'avatar' | 'bg-light' | 'bg-dark'): Promise<boolean | null> =>
-      ipcRenderer.invoke('image:pick', kind)
+    /** 选择并落盘图片；kind: avatar | reader-bg（项目背景图已升级为素材库，走 bg* 四通道） */
+    pick: (kind: 'avatar' | 'reader-bg'): Promise<boolean | null> =>
+      ipcRenderer.invoke('image:pick', kind),
+    /** 背景素材库（第36轮）：列出某组素材文件名（新在前） */
+    bgList: (group: 'light' | 'dark'): Promise<string[]> => ipcRenderer.invoke('image:bgList', group),
+    /** 对话框多选上传入组；单张自动设为当前（applied=文件名），多张 applied=null；取消返回 null */
+    bgUpload: (group: 'light' | 'dark'): Promise<{ list: string[]; applied: string | null } | null> =>
+      ipcRenderer.invoke('image:bgUpload', group),
+    /** 设某张为当前使用 */
+    bgUse: (group: 'light' | 'dark', file: string): Promise<boolean> =>
+      ipcRenderer.invoke('image:bgUse', group, file),
+    /** 删某张；wasUsing=删的是当前使用图（已回退纯色） */
+    bgDelete: (group: 'light' | 'dark', file: string): Promise<{ list: string[]; wasUsing: boolean }> =>
+      ipcRenderer.invoke('image:bgDelete', group, file)
   },
   item: {
     discard: (

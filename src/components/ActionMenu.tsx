@@ -11,6 +11,8 @@ export interface ActionMenuItem {
   separatorAbove?: boolean
   /** 项级样式透传（字体选择轮：fontFamily 自渲染预览） */
   style?: CSSProperties
+  /** 图标级样式透传（260911 阅读背景：色块预设只染图标不染文字） */
+  iconStyle?: CSSProperties
   onClick: () => void
 }
 
@@ -81,7 +83,11 @@ export default function ActionMenu(props: ActionMenuProps) {
               it.onClick()
             }}
           >
-            {it.icon && <span className="material-symbols-outlined">{it.icon}</span>}
+            {it.icon && (
+              <span className="material-symbols-outlined" style={it.iconStyle}>
+                {it.icon}
+              </span>
+            )}
             {it.label}
           </button>
         </div>

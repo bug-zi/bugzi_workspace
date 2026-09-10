@@ -1,8 +1,7 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
-// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；数据层 verify_records/回收站 source/AI verify 频道均保留）
+// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除）
 export type ModuleId =
-  | 'mottos'
   | 'wiki'
   | 'inspirations'
   | 'zhijiji'
@@ -70,6 +69,9 @@ export const SettingsKeys = {
   CanvasActiveId: 'canvas_active_id',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode',
+  // 藏书架阅读背景（260911 新功能开发区）：背景偏好 JSON + 自定义图文件名（存 userData/bg/，bzres://bg/ 加载）
+  BooksReadingBg: 'books_reading_bg',
+  ReaderBgImage: 'reader_bg_image',
   // 万象库待学习区（260910）：每日批次最近执行日（本地日期 YYYY-MM-DD，幂等标记）
   WikiDailyLearnDate: 'wiki_daily_learn_date'
 } as const
@@ -305,6 +307,16 @@ export interface VerifyRecord {
   md_path: string
   created_at: string
   deleted_at: string | null
+}
+
+/** 藏书架阅读背景偏好（260911 新功能开发区）：全局一份，存 settings books_reading_bg（JSON 串） */
+export interface BooksReadingBg {
+  /** theme=跟随主题（默认现状）/ color=纯色预设 / image=自定义图片 */
+  kind: 'theme' | 'color' | 'image'
+  /** kind=color 时的预设色值 */
+  color?: string
+  /** 正文字色（dark=深色字 / light=浅色字）：color 模式为预设配对值，image 模式为上传时亮度采样值 */
+  textColor?: 'dark' | 'light'
 }
 
 /** 书架书籍（books 表，书架 specs §1）：文件在 books/<id>.<ext>、封面在 covers/（bzres://root/ 加载）；删除为物理删除不入回收站 */

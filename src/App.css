@@ -1177,6 +1177,29 @@
   background: var(--color-primary-soft);
 }
 
+/* ===== 白噪音快捷播放按钮（260911 新功能开发区）：右下角主题按钮上方 =====
+   显隐同主题按钮（仅右侧三面板收起的右缘细条态）；同款钉宽防撑宽 right-col；
+   播放中图标主题色高亮（与左栏白噪音入口同一规则） */
+.right-col-noise {
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ai-width-collapsed);
+}
+.right-col-noise:hover {
+  background: var(--color-primary-soft);
+}
+.right-col-noise .material-symbols-outlined.noise-playing {
+  color: var(--color-primary);
+}
+
 /* ===== AI 使用统计（260910 推理角效率优化）：个人档 zone 内卡片/表格/范围 pill ===== */
 .llm-usage-range {
   display: flex;

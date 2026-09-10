@@ -308,6 +308,120 @@ class NoiseEngine {
       tg.connect(inst.gain)
       src.start(t, Math.random() * 3)
       src.stop(t + 0.05)
+    } else if (def.spawn === 'chirp') {
+      // 鸟鸣/鸥鸣（260911 新场景）：1..chirpsMax 个音节，每音节 = 正弦滑音（起止频率独立随机、方向随机）
+      // + 快起缓落包络；音节间 50~110ms 间隔。鸥鸣用 spawnCfg 换低频长下滑。
+      const cfg = def.spawnCfg
+      const fMin = cfg?.freqMin ?? 2200
+      const fMax = cfg?.freqMax ?? 4200
+      const dMin = cfg?.durMin ?? 0.07
+      const dMax = cfg?.durMax ?? 0.16
+      const n = Math.max(1, 1 + Math.floor(Math.random() * (cfg?.chirpsMax ?? 3)))
+      let t0 = t
+      for (let i = 0; i < n; i++) {
+        const f1 = fMin + Math.random() * (fMax - fMin)
+        const f2 = fMin + Math.random() * (fMax - fMin)
+        const up = f2 >= f1
+        const dur = dMin + Math.random() * (dMax - dMin)
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(f1, t0)
+        osc.frequency.exponentialRampToValueAtTime(Math.max(80, f2), t0 + dur)
+        const g = ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t0)
+        g.gain.exponentialRampToValueAtTime(0.7, t0 + dur * 0.25)
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+        osc.connect(g)
+        g.connect(inst.gain)
+        osc.start(t0)
+        osc.stop(t0 + dur + 0.02)
+        t0 += dur + 0.05 + Math.random() * 0.06
+        if (t0 - t > 2) break // 参数异常兜底：整串不超过 2s
+      }
+    } else if (def.spawn === 'wave') {
+      // 浪涌（海浪场景）：棕噪 bandpass（中心随机）+ 慢起慢落包络（1.2~3s 涌起、3~6s 退去）
+      const cfg = def.spawnCfg
+      const fLo = cfg?.freqMin ?? 400
+      const fHi = cfg?.freqMax ?? 900
+      const src = ctx.createBufferSource()
+      src.buffer = this.sharedBuffer('brown')
+      src.loop = true
+      const f = ctx.createBiquadFilter()
+      f.type = 'bandpass'
+      f.frequency.value = fLo + Math.random() * (fHi - fLo)
+      f.Q.value = 0.8
+      const g = ctx.createGain()
+      const attack = 1.2 + Math.random() * 1.8
+      const release = 3 + Math.random() * 3
+      g.gain.setValueAtTime(0.0001, t)
+      g.gain.exponentialRampToValueAtTime(0.9, t + attack)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + attack + release)
+      src.connect(f)
+      f.connect(g)
+      g.connect(inst.gain)
+      src.start(t, Math.random() * 3)
+      src.stop(t + attack + release + 0.1)
+    } else if (def.spawn === 'crackle') {
+      // 噼啪爆裂（篝火场景）：高通白噪极短脉冲（5~30ms），约四成概率 20~50ms 后跟第二响
+      const src = ctx.createBufferSource()
+      src.buffer = this.sharedBuffer('white')
+      const f = ctx.createBiquadFilter()
+      f.type = 'highpass'
+      f.frequency.value = def.spawnCfg?.freqMin ?? 4000
+      const g = ctx.createGain()
+      const dur = 0.005 + Math.random() * 0.025
+      g.gain.setValueAtTime(1, t)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+      src.connect(f)
+      f.connect(g)
+      g.connect(inst.gain)
+      src.start(t, Math.random() * 3)
+      src.stop(t + dur + 0.02)
+      if (Math.random() < 0.4) {
+        const src2 = ctx.createBufferSource()
+        src2.buffer = this.sharedBuffer('white')
+        const g2 = ctx.createGain()
+        const dur2 = 0.005 + Math.random() * 0.02
+        const t2 = t + dur + 0.02 + Math.random() * 0.03
+        g2.gain.setValueAtTime(0.7, t2)
+        g2.gain.exponentialRampToValueAtTime(0.0001, t2 + dur2)
+        src2.connect(f)
+        f.connect(g2)
+        g2.connect(inst.gain)
+        src2.start(t2, Math.random() * 3)
+        src2.stop(t2 + dur2 + 0.02)
+      }
+    } else if (def.spawn === 'clink') {
+      // 杯盘轻碰（咖啡馆场景）：高频谐振 ping（指数衰减）+ 少量高频噪声瞬态（drip 的金属版）
+      const cfg = def.spawnCfg
+      const fMin = cfg?.freqMin ?? 2000
+      const fMax = cfg?.freqMax ?? 4500
+      const dMin = cfg?.durMin ?? 0.1
+      const dMax = cfg?.durMax ?? 0.3
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = fMin + Math.random() * (fMax - fMin)
+      const g = ctx.createGain()
+      const dur = dMin + Math.random() * (dMax - dMin)
+      g.gain.setValueAtTime(0.6, t)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+      osc.connect(g)
+      g.connect(inst.gain)
+      osc.start(t)
+      osc.stop(t + dur + 0.02)
+      const src = ctx.createBufferSource()
+      src.buffer = this.sharedBuffer('white')
+      const hf = ctx.createBiquadFilter()
+      hf.type = 'highpass'
+      hf.frequency.value = 6000
+      const tg = ctx.createGain()
+      tg.gain.setValueAtTime(0.25, t)
+      tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.02)
+      src.connect(hf)
+      hf.connect(tg)
+      tg.connect(inst.gain)
+      src.start(t, Math.random() * 3)
+      src.stop(t + 0.05)
     } else {
       // tap：bandpass 白噪声短脉冲
       const src = ctx.createBufferSource()

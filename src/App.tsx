@@ -5,7 +5,6 @@ import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
 import CanvasSidebar from './components/CanvasSidebar'
-import MottosModule from './modules/mottos/MottosModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
@@ -21,13 +20,14 @@ import WelcomeGuide from './modules/profile/WelcomeGuide'
 import NoisePage from './modules/noise/NoisePage'
 import LlmActivity from './components/LlmActivity'
 import { noiseEngine } from './services/noiseEngine'
+import { sceneById } from './services/noiseScenes'
+import { useToast } from './components/Toast'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 开发者指令重排 + 辩真阁并入万象库 + 三模块改名：书架→藏书架、账本→记账本、个人中心→个人档）
+// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊，左栏 12 → 11 项、启动默认万象库）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
-  { id: 'mottos', label: '格言库', icon: 'format_quote' },
   { id: 'wiki', label: '万象库', icon: 'public' },
   { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
   { id: 'favorites', label: '收藏夹', icon: 'bookmark' },
@@ -42,9 +42,9 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
 ]
 
 /** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道；
- *  辩真阁已并入万象库，'verify' 频道由万象库辩真板块经 openAiWith 的 channel 覆盖直达 */
+ *  辩真阁已并入万象库，'verify' 频道由万象库辩真板块经 openAiWith 的 channel 覆盖直达；
+ *  格言库已并入文笔坊，'motto' 频道由文笔坊格言面板显式传 channel 覆盖直达 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
-  mottos: 'motto',
   wiki: 'wiki',
   zhijiji: 'zhijiji'
 }
@@ -69,9 +69,10 @@ export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
 
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
-  const [module, setModule] = useState<MainView>('mottos')
+  const { toast } = useToast()
+  const [module, setModule] = useState<MainView>('wiki')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
-  const moduleRef = useRef<MainView>('mottos')
+  const moduleRef = useRef<MainView>('wiki')
   useEffect(() => {
     moduleRef.current = module
   }, [module])
@@ -154,6 +155,7 @@ function Shell() {
   // 白噪音播放态（引擎版本号驱动：图标高亮与页面播放按钮同步）
   useSyncExternalStore(noiseEngine.subscribe, noiseEngine.getSnapshot)
   const noisePlaying = noiseEngine.isPlaying()
+  const noiseSceneLabel = sceneById(noiseEngine.getState().sceneId)?.label ?? ''
 
   return (
     <>
@@ -197,7 +199,6 @@ function Shell() {
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
               aria-hidden={m.id !== module}
             >
-              {m.id === 'mottos' && <MottosModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />}
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
@@ -206,7 +207,9 @@ function Shell() {
                 <ZhijijiModule onNavigateToProfile={() => activateModule('profile')} />
               )}
               {m.id === 'reasoning' && <ReasoningModule />}
-              {m.id === 'wenbi' && <WenbiModule />}
+              {m.id === 'wenbi' && (
+                <WenbiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
+              )}
               {m.id === 'bookshelf' && <BookshelfModule />}
               {m.id === 'favorites' && <FavoritesModule />}
               {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
@@ -242,6 +245,19 @@ function Shell() {
           {/* AI 实时活动指示（第31轮反馈修订：自左栏底部迁来右下角主题按钮上方——左栏留给未来新模块；
               同主题按钮规则：三面板任一展开即不渲染，收起态才显示；空闲（无在途调用）也不渲染） */}
           {rightPanel === null && <LlmActivity />}
+          {/* 白噪音快捷播放/暂停（260911 新功能开发区）：主题按钮上方，显隐同款（三面板收起）；
+              点击 toggle，播放中图标主题色高亮（同左栏入口） */}
+          {rightPanel === null && (
+            <button
+              className="right-col-noise"
+              onClick={() => void noiseEngine.toggle().catch(() => toast('音频初始化失败'))}
+              title={`白噪音 · ${noiseSceneLabel} · ${noisePlaying ? '播放中，点击暂停' : '已暂停，点击播放'}`}
+            >
+              <span className={`material-symbols-outlined${noisePlaying ? ' noise-playing' : ''}`}>
+                graphic_eq
+              </span>
+            </button>
+          )}
           {rightPanel === null && (
             <button
               className="right-col-theme"

@@ -8,6 +8,7 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { FONT_FAMILIES } from '../../theme/fonts'
 import { LLM_SCENE_LABELS, SettingsKeys } from '../../shared/types'
 import type { LlmUsageRecord, LlmUsageStats } from '../../shared/types'
+import BgLibraryDialog from './BgLibraryDialog'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
 const PROFILE_CATEGORIES = [
@@ -31,7 +32,7 @@ function uid(): string {
 
 export default function ProfileModule() {
   const { toast } = useToast()
-  const { settings, setSetting, refreshBg, theme, setTheme } = useAppSettings()
+  const { settings, setSetting, theme, setTheme } = useAppSettings()
   const [name, setName] = useState('')
   const [bio, setBio] = useState('')
   const [avatar, setAvatar] = useState('')
@@ -413,13 +414,8 @@ export default function ProfileModule() {
     toast('MCP 已添加')
   }
 
-  const pickBg = async (kind: 'bg-light' | 'bg-dark'): Promise<void> => {
-    const r = await window.api.image.pick(kind)
-    if (r) {
-      await refreshBg()
-      toast('背景图已更新')
-    }
-  }
+  // 背景素材库弹窗（优化建议区第36轮：原「背景图（浅/深）」两行升级为素材库管理）
+  const [bgLibOpen, setBgLibOpen] = useState(false)
 
   // ---------- 我的画像（致知己 specs §3） ----------
   const saveFact = async (): Promise<void> => {
@@ -638,17 +634,10 @@ export default function ProfileModule() {
             </select>
           </div>
           <div className="setting-row">
-            <span className="setting-label">背景图（浅色）</span>
-            <button className="btn" onClick={() => void pickBg('bg-light')}>
-              <span className="material-symbols-outlined">image</span>
-              更换
-            </button>
-          </div>
-          <div className="setting-row">
-            <span className="setting-label">背景图（深色）</span>
-            <button className="btn" onClick={() => void pickBg('bg-dark')}>
-              <span className="material-symbols-outlined">image</span>
-              更换
+            <span className="setting-label">背景素材库</span>
+            <button className="btn" onClick={() => setBgLibOpen(true)}>
+              <span className="material-symbols-outlined">wallpaper</span>
+              管理素材库
             </button>
           </div>
         </div>
@@ -1300,6 +1289,8 @@ export default function ProfileModule() {
       >
         确认删除「{delMcp?.name}」？
       </ConfirmDialog>
+      {/* 背景素材库管理弹窗（优化建议区第36轮） */}
+      <BgLibraryDialog open={bgLibOpen} onClose={() => setBgLibOpen(false)} />
     </div>
   )
 }
