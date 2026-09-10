@@ -8,6 +8,7 @@ export type ModuleId =
   | 'reasoning'
   | 'wenbi'
   | 'bookshelf'
+  | 'favorites'
   | 'feed'
   | 'ledger'
   | 'recycle'
@@ -139,6 +140,10 @@ export interface BooksRecord {
   added_at: string
   /** NULL=从未读过（排序用） */
   last_read_at: string | null
+  /** 书级阅读模式（书架 v2.0）；NULL=跟随全局默认（settings books_reading_mode） */
+  reading_mode: 'scroll' | 'page' | null
+  /** epub 字号倍率 0.75~1.5；NULL=跟随个人档全局字体大小 */
+  font_scale: number | null
 }
 
 /** 书架导入结果：duplicate 由前端弹确认后 force 重导 */
@@ -158,6 +163,77 @@ export interface BooksNote {
   /** 批注内容；空字符串 = 纯高光 */
   note: string
   created_at: string
+}
+
+/** 书架手动书签（book_marks 表，书架 v2.0）：epub 存 cfi、pdf 存 page（1 基）；label 自动生成 */
+export interface BookMark {
+  id: number
+  book_id: number
+  /** epub 定位（epub 行非空） */
+  cfi: string | null
+  /** pdf 页码（1 基；pdf 行非空） */
+  page: number | null
+  /** 显示名 */
+  label: string
+  created_at: string
+}
+
+/** 书架阅读统计每书行（书架 v2.0） */
+export interface ReadStatsRow {
+  id: number
+  title: string
+  /** 全书累计阅读秒数 */
+  totalSeconds: number
+  /** 0-100 */
+  percent: number
+  last_read_at: string | null
+}
+
+/** 书架阅读统计聚合（书架 v2.0）：todaySeconds 当地当日秒和；streakDays 连续天数（今天无记录从昨天起算）；readingCount 读过且未读完 */
+export interface ReadStats {
+  todaySeconds: number
+  streakDays: number
+  readingCount: number
+  /** 读过的书（最近阅读在前；v2.0 前读过的书 totalSeconds 为 0） */
+  rows: ReadStatsRow[]
+}
+
+/** 收藏夹分类（fav_categories 表，DB v28）：parent_id NULL=大类，两级约束由服务层保证 */
+export interface FavoriteCategory {
+  id: number
+  parent_id: number | null
+  name: string
+  sort: number
+  /** 1 = 「未分类」锁定大类：禁删/改名/排序，固定末位 */
+  is_system: boolean
+  created_at: string
+}
+
+/** 收藏夹条目（fav_items 表）：纯链接收藏，简介为 md 文本（存 DB 非 md 文件） */
+export interface FavoriteItem {
+  id: number
+  category_id: number
+  name: string
+  url: string
+  desc_md: string
+  pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** favorites:list 返回体：分类 + 条目全量（个人收藏百级量级，不分页） */
+export interface FavoriteList {
+  categories: FavoriteCategory[]
+  items: FavoriteItem[]
+}
+
+/** favorites:updateItem 局部更新补丁（任一可选；服务层每次回写 updated_at） */
+export interface FavoriteItemPatch {
+  name?: string
+  url?: string
+  desc_md?: string
+  pinned?: boolean
+  category_id?: number
 }
 
 /** 信息源源（feeds 表，DB v20）：fetch_error 空=上次拉取成功 */
@@ -804,6 +880,23 @@ export interface Api {
     noteUpdate(noteId: number, note: string): Promise<boolean>
     /** 彻底删除单条笔记（前端二次确认后调用） */
     noteRemove(noteId: number): Promise<boolean>
+    // ----- 书架 v2.0（DB v29）：书签 / 每书偏好 / 阅读统计 / 笔记总览 -----
+    /** 书签列表（created_at 倒序，epub/pdf 都有） */
+    marksList(bookId: number): Promise<BookMark[]>
+    /** 新增书签（前端已查重同位置） */
+    markAdd(bookId: number, m: { cfi?: string | null; page?: number | null; label: string }): Promise<BookMark>
+    /** 彻底删除书签（前端二次确认后调用） */
+    markRemove(markId: number): Promise<boolean>
+    /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
+    setReadingPref(bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }): Promise<boolean>
+    /** 阅读时长累计（30 秒批量 flush） */
+    addReadTime(bookId: number, seconds: number): Promise<boolean>
+    /** 阅读统计聚合 */
+    readStats(): Promise<ReadStats>
+    /** 笔记总览 md（按需生成，不落盘） */
+    notesOverviewMd(bookId: number): Promise<string>
+    /** 导出读书笔记（保存对话框在主进程；取消返回 null） */
+    exportNotes(bookId: number): Promise<string | null>
   }
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -828,6 +921,26 @@ export interface Api {
     markAllRead(feedId: number | null): Promise<boolean>
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
     summarize(jobId: string, id: number): Promise<string>
+  }
+  favorites: {
+    /** 全量列表（幂等 seed「未分类」）：categories 按序 + items 置顶优先/时间倒序 */
+    list(): Promise<FavoriteList>
+    /** 新增收藏（服务层校验失败抛带 message Error） */
+    addItem(name: string, url: string, descMd: string, categoryId: number): Promise<FavoriteItem>
+    /** 局部更新（每次回写 updated_at） */
+    updateItem(id: number, patch: FavoriteItemPatch): Promise<FavoriteItem>
+    /** 删收藏（前端二次确认后调用，直接删不入回收站） */
+    deleteItem(id: number): Promise<boolean>
+    /** 新建分类（parentId=null 大类；子类下再建抛错——两级硬限制） */
+    addCategory(name: string, parentId: number | null): Promise<FavoriteCategory>
+    /** 改名（「未分类」抛错） */
+    renameCategory(id: number, name: string): Promise<boolean>
+    /** 同级上下移（交换 sort；到头幂等成功） */
+    moveCategory(id: number, dir: 'up' | 'down'): Promise<boolean>
+    /** 删分类（单事务级联，返回去向计数 { movedItems, movedChildren }） */
+    deleteCategory(id: number): Promise<{ movedItems: number; movedChildren: number }>
+    /** 抓取页面 meta（任何失败返回空对象，不抛错） */
+    fetchMeta(url: string): Promise<{ title: string; desc: string }>
   }
   ledger: {
     /** 账户列表（含实时余额） */

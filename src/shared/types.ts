@@ -9,6 +9,7 @@ export type ModuleId =
   | 'reasoning'
   | 'wenbi'
   | 'bookshelf'
+  | 'favorites'
   | 'feed'
   | 'ledger'
   | 'recycle'
@@ -324,6 +325,10 @@ export interface BooksRecord {
   added_at: string
   /** NULL=从未读过（排序用） */
   last_read_at: string | null
+  /** 书级阅读模式（书架 v2.0 §四）；NULL=跟随全局默认（settings books_reading_mode） */
+  reading_mode: 'scroll' | 'page' | null
+  /** epub 字号倍率 0.75~1.5（书架 v2.0 §四）；NULL=跟随个人档全局字体大小 */
+  font_scale: number | null
 }
 
 /** 书架导入结果（书架 specs §2.1）：duplicate 由渲染层弹确认后 force 重导 */
@@ -343,6 +348,77 @@ export interface BooksNote {
   /** 批注内容；空字符串 = 纯高光 */
   note: string
   created_at: string
+}
+
+/** 书架手动书签（book_marks 表，书架 v2.0 §二）：epub 存 cfi、pdf 存 page（1 基）；label 自动生成（章节名兜底「第 N 页 / 约 X%」） */
+export interface BookMark {
+  id: number
+  book_id: number
+  /** epub 定位（epub 行非空） */
+  cfi: string | null
+  /** pdf 页码（1 基；pdf 行非空） */
+  page: number | null
+  /** 显示名 */
+  label: string
+  created_at: string
+}
+
+/** 书架阅读统计每书行（书架 v2.0 §五） */
+export interface ReadStatsRow {
+  id: number
+  title: string
+  /** 全书累计阅读秒数 */
+  totalSeconds: number
+  /** 0-100 */
+  percent: number
+  last_read_at: string | null
+}
+
+/** 书架阅读统计聚合（书架 v2.0 §五）：todaySeconds 当地当日秒和；streakDays 连续天数（今天无记录从昨天起算）；readingCount 读过且未读完 */
+export interface ReadStats {
+  todaySeconds: number
+  streakDays: number
+  readingCount: number
+  /** 读过的书（最近阅读在前；v2.0 前读过的书 totalSeconds 为 0） */
+  rows: ReadStatsRow[]
+}
+
+/** 收藏夹分类（fav_categories 表，收藏夹 specs §1）：parent_id NULL=大类，两级约束由服务层保证 */
+export interface FavoriteCategory {
+  id: number
+  parent_id: number | null
+  name: string
+  sort: number
+  /** 1 = 「未分类」锁定大类：禁删/改名/排序，固定末位 */
+  is_system: boolean
+  created_at: string
+}
+
+/** 收藏夹条目（fav_items 表）：纯链接收藏，简介为 md 文本（存 DB 非 md 文件） */
+export interface FavoriteItem {
+  id: number
+  category_id: number
+  name: string
+  url: string
+  desc_md: string
+  pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** favorites:list 返回体：分类 + 条目全量（个人收藏百级量级，不分页） */
+export interface FavoriteList {
+  categories: FavoriteCategory[]
+  items: FavoriteItem[]
+}
+
+/** favorites:updateItem 局部更新补丁（任一可选；服务层每次回写 updated_at） */
+export interface FavoriteItemPatch {
+  name?: string
+  url?: string
+  desc_md?: string
+  pinned?: boolean
+  category_id?: number
 }
 
 /** 信息源源（feeds 表，信息源 specs §1）：fetch_error 空=上次拉取成功 */

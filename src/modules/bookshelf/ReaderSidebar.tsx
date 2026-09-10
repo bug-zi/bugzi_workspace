@@ -1,5 +1,6 @@
-// 阅读侧栏（书架优化第1轮 §8.4/§8.5）：目录 | 笔记 双页签展示组件（引擎无关，跳转/删除经回调上行）
-import type { BooksNote } from '../../shared/types'
+// 阅读侧栏（书架优化第1轮 §8.4/§8.5 + v2.0 §二/§三）：目录 | 笔记 | 书签 三页签展示组件
+// （引擎无关，跳转/删除经回调上行；笔记总览入口仅 epub）
+import type { BookMark, BooksNote } from '../../shared/types'
 
 /** 目录树节点（epub href 跳转 / pdf 页码跳转，二选一有值） */
 export interface ReaderTocItem {
@@ -17,7 +18,7 @@ export interface ReaderLocate {
   page?: number
 }
 
-export type SidebarTab = 'toc' | 'notes'
+export type SidebarTab = 'toc' | 'notes' | 'marks'
 
 export interface ReaderSidebarProps {
   tab: SidebarTab
@@ -26,14 +27,20 @@ export interface ReaderSidebarProps {
   locate: ReaderLocate | null
   /** pdf 传 null → 笔记页签占位 */
   notes: BooksNote[] | null
+  /** 手动书签（epub/pdf 都支持；书架 v2.0 §二） */
+  marks: BookMark[]
   onJumpToc: (item: ReaderTocItem) => void
   onJumpNote: (note: BooksNote) => void
   onDeleteNote: (note: BooksNote) => void
+  onJumpMark: (m: BookMark) => void
+  onDeleteMark: (m: BookMark) => void
+  /** 笔记总览入口（仅 epub 传；不传不显示按钮——书架 v2.0 §三） */
+  onOverview?: () => void
   onCollapse: () => void
 }
 
-/** 相对时间（口径同草稿本/AI 边栏） */
-function relTime(iso: string): string {
+/** 相对时间（口径同草稿本/AI 边栏；BookshelfModule 统计面板复用） */
+export function relTime(iso: string): string {
   const t = new Date(iso).getTime()
   if (!Number.isFinite(t)) return ''
   const diff = Date.now() - t
@@ -93,7 +100,7 @@ function TocTree(props: {
 }
 
 export default function ReaderSidebar(props: ReaderSidebarProps) {
-  const { tab, onTabChange, toc, locate, notes, onJumpToc, onJumpNote, onDeleteNote, onCollapse } = props
+  const { tab, onTabChange, toc, locate, notes, marks, onJumpToc, onJumpNote, onDeleteNote, onJumpMark, onDeleteMark, onOverview, onCollapse } = props
   // pdf 区间判定：当前页落在的目录节点（按 label 匹配标 active）；epub 用 href 精确匹配
   const anchor = locate?.page != null ? tocAnchorAt(toc, locate.page) : null
   const activeLabel = locate?.href ? (toc.find((t) => t.href === locate.href)?.label ?? null) : anchor?.label ?? null
@@ -107,13 +114,49 @@ export default function ReaderSidebar(props: ReaderSidebarProps) {
           <button className={`bk-sidebar-tab${tab === 'notes' ? ' active' : ''}`} onClick={() => onTabChange('notes')}>
             笔记{notes && notes.length > 0 ? `(${notes.length})` : ''}
           </button>
+          <button className={`bk-sidebar-tab${tab === 'marks' ? ' active' : ''}`} onClick={() => onTabChange('marks')}>
+            书签{marks.length > 0 ? `(${marks.length})` : ''}
+          </button>
         </div>
+        {tab === 'notes' && onOverview && (
+          <button
+            className="btn btn-ghost bk-side-overview"
+            onClick={onOverview}
+            disabled={!notes || notes.length === 0}
+            title="打开整书笔记总览（md）"
+          >
+            <span className="material-symbols-outlined">article</span>
+          </button>
+        )}
         <button className="btn btn-ghost bk-sidebar-close" onClick={onCollapse} title="收起侧栏">
           <span className="material-symbols-outlined">chevron_left</span>
         </button>
       </div>
       <div className="bk-sidebar-body">
-        {tab === 'toc' ? (
+        {tab === 'marks' ? (
+          marks.length === 0 ? (
+            <div className="bk-sidebar-empty">点阅读条的书签按钮，收藏当前位置</div>
+          ) : (
+            marks.map((m) => (
+              <div key={m.id} className="bk-note-item" onClick={() => onJumpMark(m)} title="点击跳回书签位置">
+                <div className="bk-note-quote">{m.label}</div>
+                <div className="bk-note-foot">
+                  <span>书签 · {relTime(m.created_at)}</span>
+                  <button
+                    className="bk-note-del"
+                    title="删除书签"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onDeleteMark(m)
+                    }}
+                  >
+                    <span className="material-symbols-outlined">delete</span>
+                  </button>
+                </div>
+              </div>
+            ))
+          )
+        ) : tab === 'toc' ? (
           toc.length === 0 ? (
             <div className="bk-sidebar-empty">本书无目录</div>
           ) : (

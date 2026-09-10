@@ -749,6 +749,56 @@ function migrate(): void {
     d.exec('CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at)')
     d.exec('PRAGMA user_version = 27')
   }
+
+  if (version < 28) {
+    // v28：收藏夹（260910 立项，收藏夹 specs §1）——纯链接收藏：两级分类 + 条目（URL+名称+简介 md）。
+    // 不入回收站（二次确认直接删）；简介存 DB 非 md 文件；url 无唯一约束（允许重复收藏）。
+    // 「未分类」is_system=1 锁定大类：禁删/改名/排序，sort=1e9 固定末位，删除非空分类时条目的去处。
+    d.exec(`CREATE TABLE IF NOT EXISTS fav_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_id INTEGER,
+      name TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE IF NOT EXISTS fav_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      desc_md TEXT NOT NULL DEFAULT '',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_fav_items_cat ON fav_items(category_id, created_at DESC)')
+    d.exec('PRAGMA user_version = 28')
+  }
+
+  if (version < 29) {
+    // v29：书架 v2.0（2026-09-10-书架v2-design.md §一）——书级偏好两列（模式/字号，
+    // NULL=回落全局默认，存量书零迁移）+ 手动书签表（epub/pdf 都支持）+ 阅读统计按书按日累秒表。
+    // （设计写 v28，被并行会话收藏夹占用 v28，实际落 v29——版本号实况条款同 v18/v19 先例。）
+    d.exec(`ALTER TABLE books ADD COLUMN reading_mode TEXT`)
+    d.exec(`ALTER TABLE books ADD COLUMN font_scale REAL`)
+    d.exec(`CREATE TABLE book_marks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      cfi TEXT,
+      page INTEGER,
+      label TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE book_read_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      day TEXT NOT NULL,
+      seconds INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(book_id, day)
+    )`)
+    d.exec('PRAGMA user_version = 29')
+  }
 }
 
 // ---------- 通用工具 ----------

@@ -190,3 +190,52 @@ CREATE TABLE books (
 - [x] 目录侧栏双引擎跳转准确、当前章节高亮、无目录占位
 - [x] epub 划词→高光/批注→重开书仍在；笔记页签跳回定位准；编辑/删除闭环（删除二次确认）
 - [x] 划词色/高亮色随双主题切换；删书清笔记；typecheck/build 通过
+
+## 9. 书架 v2.0（260910 立项实施；设计记录同目录 `2026-09-10-书架v2-design.md`，实施计划 `2026-09-10-书架v2-plan.md`）
+
+> 五功能一轮落地：手动书签 / 笔记总览 md（只读弹窗 + 导出）/ epub 字号每书独立 / 阅读统计 / 每书模式记忆。pdf 划词与第 1 轮旧否决项维持不做。
+> **版本号实况**：设计写 DB v28，被并行会话收藏夹占用，实际落 **v29**（v18/v19 先例同款条款）。
+> 改动面：`src/modules/bookshelf/`（含新建 useReadingTimer.ts）+ MdDialog.tsx 三可选 prop + db.ts（v29）+ books.ts + ipc/preload/api + shared/types；书架网格/导入/删除主流程不动。
+
+### 9.1 数据（DB v29）
+
+- `books` 加 `reading_mode TEXT`（'scroll'|'page'，NULL=回落全局 settings 键，存量书零迁移）、`font_scale REAL`（0.75~1.5，NULL=回落个人档全局字体）。
+- 新表 `book_marks`（id/book_id/cfi/page/label/created_at；epub 行 cfi 非空、pdf 行 page 非空）与 `book_read_log`（book_id+day UNIQUE，seconds 累加）。
+- `deleteBook` 级联清 book_notes / book_marks / book_read_log；偏好两列随 books 行删除。类型同步 shared/types.ts + api.d.ts 两处（BooksRecord 两字段 + BookMark/ReadStatsRow/ReadStats）。
+
+### 9.2 手动书签（设计 §二）
+
+- 加：阅读条 `bookmark_add` 按钮（epub/pdf 都显）→ EpubReader `getCurrent()` 句柄取当前 CFI+百分比（pdf 用模块 locate.page 兜底 progress_page）→ label 取章节名（epub 按 locate.href 查 flattenToc / pdf 按 tocAnchorAt），兜底「约 X%」「第 N 页」；同 CFI/同页渲染层查重 toast「已有书签」。
+- 侧栏三页签（目录|笔记|书签）：倒序列表 label+相对时间+删除；点击跳回（epub display(cfi) / pdf jumpToPage）；删除 ConfirmDialog 二次确认彻底删。
+
+### 9.3 笔记总览 md 与导出（设计 §三）
+
+- MdDialog 渐进扩三可选 prop：`content`（直传内容不读文件，filePath 转可选）、`readOnly`（隐藏编辑提示+双击不进编辑态）、`headerAction`（头部动作按钮）——既有调用方零改动；实施修正：prop 解构为 `content: directContent` 防与组件 content state 重名，md.write 分支加 filePath 守卫。
+- 入口：侧栏笔记页签头部「总览」icon 按钮（仅 epub、空笔记禁用）→ `books:notesOverviewMd` 取主进程按需生成 md（created_at 正序、quote 折叠换行、`<sub>` 时间戳、`---` 分隔、头含 H1+作者·N 条·生成于）→ MdDialog readOnly 打开（内容即快照）。
+- 导出：弹窗 headerAction「导出」→ `books:exportNotes`（主进程 showSaveDialog 默认名《书名》读书笔记.md、书名清洗非法字符、写盘返回路径；取消 null 静默）→ toast 已导出到路径。
+
+### 9.4 每书独立偏好（设计 §四）
+
+- 统一通道 `books:setReadingPref(bookId, {mode?, fontScale?})` 部分更新；fontScale null 清除。
+- 模式记忆：openBook 取 `book.reading_mode ?? settings(BooksReadingMode) ?? scroll`；toggleMode 双写（书级列 + 全局键「最近使用」，NULL 书跟随最近习惯）；epub 全量重挂流程不变。
+- 字号（仅 epub）：阅读条 [A-][100%][A+]（NULL 显 100%），0.75~1.5 步 0.05 钳制；非 NULL 时出现「默认」按钮清除回落全局。EpubReader applyTheme 收 fontScale 参数（body font-size = 全局计算值 × scale），scale 变化即时重注入不重挂（[fontScale] effect）。
+
+### 9.5 阅读统计（设计 §五）
+
+- `useReadingTimer.ts`（新建）：挂阅读视图层（active=reading 非空，锚 readerPageRef），每秒 tick 检查三条件——document 可见 + 窗口聚焦 + 宿主 rect 高度>0（防 keep-alive 切走模块 display:none 虚计）；满 30 秒 flush `books:addReadTime`（UPSERT 按书按日递增），退出 flush 余量，强杀丢 ≤30 秒。
+- 书架 header 下统计条（icon schedule）：今日 X 分钟 · 连续 N 天 · 在读 M 本；三项全零整行隐藏；点击展开主栏面板（每书「累计时长·进度%·最近阅读」最近在前 + 合计行）。
+- 口径：今日=当日秒和（分钟向下取整，>0 不足 1 分显「<1 分钟」）；连续天数=从今天（无记录从昨天）往前连续有记录天数；在读=读过且未读完（last_read_at 非空且 percent<100）；`books:readStats` 主进程一次聚合。
+
+### 9.6 IPC 汇总（8 通道，三处同步）
+
+`books:marksList / markAdd / markRemove / setReadingPref / addReadTime / readStats / notesOverviewMd / exportNotes`——签名与行为见设计 §六表。
+
+### 9.7 验收（待开发者手测）
+
+- [ ] DB v29 两列两表、删书级联清三表（notes/marks/read_log）
+- [ ] 书签：epub/pdf 加/跳/删闭环、同位置去重、label 章节名/兜底正确、删除二次确认
+- [ ] 总览：正序格式、readOnly 双击不编辑、导出默认名/成功 toast/取消静默；MdDialog 既有模块零回归
+- [ ] 模式记忆：切过的书固定、NULL 书跟随最近使用、存量书零迁移、双写生效
+- [ ] 字号：A±即时生效不丢进度、边界钳制、「默认」回落全局、每书互不影响、pdf 无控件
+- [ ] 统计：失焦/最小化/切模块暂停、30 秒 flush、今日/连续/在读口径、面板每书累计
+- [ ] 双主题新 UI 合规、无 emoji、typecheck/build 通过

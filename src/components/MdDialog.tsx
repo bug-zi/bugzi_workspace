@@ -11,8 +11,14 @@ export interface MdDialogProps {
   subtitle?: string
   /** 标题右侧小 pill（万象卡片：所属板块名；不传则不渲染，其余模块行为不变） */
   titleTag?: string
-  /** md 相对路径（userData 下） */
-  filePath: string
+  /** md 相对路径（userData 下）；content 直传时不需（书架笔记总览） */
+  filePath?: string
+  /** 直接给 md 内容（提供则不读文件——书架笔记总览按需生成，不落盘；书架 v2.0 §三） */
+  content?: string
+  /** 纯查看模式：不显示「双击正文编辑」、双击不进编辑态（内容数据源不在文件） */
+  readOnly?: boolean
+  /** 头部「关闭」旁动作按钮（书架笔记总览：导出） */
+  headerAction?: { label: string; icon?: string; onClick: () => void }
   /** 关闭弹窗（关闭键/遮罩调用；若正处于编辑态会先保存） */
   onClose: () => void
   onChanged?: () => void
@@ -51,7 +57,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, onClose, onChanged, selectionActions, onTitleChange, review, versioned, eventToggle, autoEdit, sidePanel } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, versioned, eventToggle, autoEdit, sidePanel } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -68,12 +74,21 @@ export default function MdDialog(props: MdDialogProps) {
     setTitleDraft(title)
   }, [title])
 
-  // 打开/换文件时加载
+  // 打开/换文件时加载（content 直传优先——书架笔记总览按需生成不落盘）
   useEffect(() => {
-    if (!open || !filePath) {
+    if (!open) {
       wasOpenRef.current = false
       return
     }
+    if (directContent !== undefined) {
+      wasOpenRef.current = true
+      setLoading(false)
+      setEditing(false)
+      setOverwrite(false)
+      setContent(directContent)
+      return
+    }
+    if (!filePath) return
     const firstOpen = !wasOpenRef.current
     wasOpenRef.current = true
     setLoading(true)
@@ -90,7 +105,7 @@ export default function MdDialog(props: MdDialogProps) {
       })
       .catch(() => setContent('（读取失败）'))
       .finally(() => setLoading(false))
-  }, [open, filePath, autoEdit])
+  }, [open, filePath, directContent, autoEdit])
 
   // ==text== → <mark>（渲染后处理，避免 marked 不识别）
   // deps 含 loading：加载中 bodyRef 被 loading 分支卸载，读完 setContent 时 ref 还是 null 会早退；
@@ -117,7 +132,7 @@ export default function MdDialog(props: MdDialogProps) {
         await versioned.onSave(draft, overwrite)
         setContent(draft)
         onChanged?.()
-      } else {
+      } else if (filePath) {
         await window.api.md.write(filePath, draft)
         setContent(draft)
         onChanged?.()
@@ -243,7 +258,7 @@ export default function MdDialog(props: MdDialogProps) {
               </span>
             )}
           </div>
-          {!editing && (
+          {!editing && !readOnly && (
             <span className="edit-hint">双击正文编辑</span>
           )}
           {editing ? (
@@ -275,13 +290,21 @@ export default function MdDialog(props: MdDialogProps) {
               </button>
             </>
           ) : review ? null : (
-            <button
-              className="btn btn-ghost close-btn"
-              onClick={close}
-              title="关闭"
-            >
-              关闭
-            </button>
+            <>
+              {headerAction && (
+                <button className="btn btn-ghost" onClick={headerAction.onClick} title={headerAction.label}>
+                  {headerAction.icon && <span className="material-symbols-outlined">{headerAction.icon}</span>}
+                  {headerAction.label}
+                </button>
+              )}
+              <button
+                className="btn btn-ghost close-btn"
+                onClick={close}
+                title="关闭"
+              >
+                关闭
+              </button>
+            </>
           )}
         </div>
         {/* 版本切换条 + 让 AI 追问（致知己）：一次呈现一个版本，点击切换 */}
@@ -315,7 +338,7 @@ export default function MdDialog(props: MdDialogProps) {
         )}
         {/* 正文区 + 右侧内嵌栏（优化建议区第13轮）：sidePanel 存在时双栏并排，交互不出弹窗 */}
         <div className="dialog-split">
-          <div className="dialog-body" onDoubleClick={() => !editing && startEditing()}>
+          <div className="dialog-body" onDoubleClick={() => !editing && !readOnly && startEditing()}>
             {loading ? (
               <div>加载中…</div>
             ) : editing ? (

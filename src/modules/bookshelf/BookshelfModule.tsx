@@ -1,15 +1,17 @@
-// 书架（书架 specs §3 + 优化第1轮 §8.3-8.5）：封面网格 + 导入 + 主栏内阅读切换
-// （阅读编排：双模式全局记忆 + 目录/笔记侧栏 + 划词笔记闭环；零 AI 模块，无 LLM/边栏联动）
+// 书架（书架 specs §3 + 优化第1轮 §8.3-8.5 + v2.0）：封面网格 + 导入 + 主栏内阅读切换
+// （阅读编排：双模式每书记忆 + 目录/笔记/书签侧栏 + 划词笔记闭环 + 字号每书独立 + 阅读统计；零 AI 模块）
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BooksNote, BooksRecord } from '../../shared/types'
+import type { BookMark, BooksNote, BooksRecord, ReadStats } from '../../shared/types'
 import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
+import MdDialog from '../../components/MdDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import EpubReader, { type EpubReaderHandle } from './EpubReader'
 import PdfReader, { type PdfReaderHandle } from './PdfReader'
-import ReaderSidebar, { type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
+import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
+import { useReadingTimer } from './useReadingTimer'
 import type { ReadingMode } from './readerKeys'
 import './bookshelf.css'
 
@@ -18,6 +20,24 @@ function progressLabel(b: BooksRecord): string {
   if (!b.last_read_at) return '未读'
   if (b.progress_percent > 0) return `${Math.round(b.progress_percent)}%`
   return '在读'
+}
+
+/** 秒 → 分钟文案（统计条/面板共用；>0 不足 1 分显「<1 分钟」；书架 v2.0 §五） */
+function fmtMinutes(seconds: number): string {
+  if (seconds <= 0) return '0 分钟'
+  const m = Math.floor(seconds / 60)
+  if (m < 1) return '<1 分钟'
+  if (m < 60) return `${m} 分钟`
+  const h = Math.floor(m / 60)
+  const rest = m % 60
+  return rest > 0 ? `${h} 小时 ${rest} 分钟` : `${h} 小时`
+}
+
+/** 当前时刻 → YYYY-MM-DD HH:mm（总览副标题「生成于」） */
+function fmtNow(): string {
+  const t = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`
 }
 
 export default function BookshelfModule() {
@@ -38,6 +58,15 @@ export default function BookshelfModule() {
   const [notes, setNotes] = useState<BooksNote[] | null>(null)
   const [side, setSide] = useState<{ open: boolean; tab: SidebarTab }>({ open: false, tab: 'toc' })
   const [confirmNote, setConfirmNote] = useState<BooksNote | null>(null)
+  // ----- v2.0 编排：书签 / 统计 / 笔记总览 -----
+  const [marks, setMarks] = useState<BookMark[]>([])
+  const [confirmMark, setConfirmMark] = useState<BookMark | null>(null)
+  const [stats, setStats] = useState<ReadStats | null>(null)
+  const [statsOpen, setStatsOpen] = useState(false)
+  /** 非空 = 打开笔记总览弹窗（内容快照） */
+  const [overview, setOverview] = useState<string | null>(null)
+  /** 阅读视图根节点（计时器组件可见性判定锚点） */
+  const readerPageRef = useRef<HTMLDivElement>(null)
   const epubRef = useRef<EpubReaderHandle>(null)
   const pdfRef = useRef<PdfReaderHandle>(null)
   /** 笔记最新值（EpubReader 挂载 effect 捕获的回调里做查重用） */
@@ -50,7 +79,24 @@ export default function BookshelfModule() {
   useEffect(() => {
     void load()
   }, [load])
-  useModuleActivated('bookshelf', () => void load())
+  useModuleActivated('bookshelf', () => {
+    void load()
+    void refreshStats()
+  })
+
+  /** 阅读统计加载（失败静默，不阻断书架；书架 v2.0 §五） */
+  const refreshStats = useCallback(async () => {
+    try {
+      setStats(await window.api.books.readStats())
+    } catch {
+      /* 静默 */
+    }
+  }, [])
+  useEffect(() => {
+    void refreshStats()
+  }, [refreshStats])
+  // 阅读计时（三条件口径 + 30 秒 flush；书架 v2.0 §五）
+  useReadingTimer(reading != null, reading?.id ?? null, readerPageRef)
 
   /** 导入：对话框 → 复制解析 → duplicate 弹确认可 force 重导 */
   const doImport = async (paths?: string[], force?: boolean): Promise<void> => {
@@ -86,14 +132,16 @@ export default function BookshelfModule() {
     await load()
   }
 
-  /** 打开书：读模式设置 + 重置阅读编排状态 + epub 载笔记 */
+  /** 打开书：书级模式优先（NULL 回落全局「最近使用」）+ 重置编排状态 + epub 载笔记 + 载书签（书架 v2.0 §四） */
   const openBook = async (b: BooksRecord): Promise<void> => {
-    let m: ReadingMode = 'scroll'
-    try {
-      const saved = await window.api.settings.get(SettingsKeys.BooksReadingMode)
-      if (saved === 'page') m = 'page'
-    } catch {
-      /* 读失败用默认 */
+    let m: ReadingMode = b.reading_mode ?? 'scroll'
+    if (b.reading_mode == null) {
+      try {
+        const saved = await window.api.settings.get(SettingsKeys.BooksReadingMode)
+        if (saved === 'page') m = 'page'
+      } catch {
+        /* 读失败用默认 */
+      }
     }
     setMode(m)
     setToc([])
@@ -101,7 +149,13 @@ export default function BookshelfModule() {
     setReaderLabel('')
     setSide({ open: false, tab: 'toc' })
     setNotes(null)
+    setMarks([])
     setReading(b)
+    try {
+      setMarks(await window.api.books.marksList(b.id))
+    } catch {
+      setMarks([])
+    }
     if (b.format === 'epub') {
       try {
         setNotes(await window.api.books.notesList(b.id))
@@ -111,12 +165,12 @@ export default function BookshelfModule() {
     }
   }
 
-  /** 模式切换：即时生效 + 全局记忆。
-   *  epub 走全量重挂（key 含 mode）——先取最新进度行防回跳到开书位置（DB 每 3 秒节流落库）；
-   *  pdf 阅读器内部重建视图，无需重挂。 */
+  /** 模式切换：写书级偏好（每书独立）+ 全局键刷「最近使用」（NULL 书跟随）——书架 v2.0 §四；
+   *  epub 全量重挂前取最新进度行防回跳（specs §8.3 机制不变） */
   const toggleMode = async (): Promise<void> => {
+    if (!reading) return
     const next: ReadingMode = mode === 'scroll' ? 'page' : 'scroll'
-    if (reading?.format === 'epub') {
+    if (reading.format === 'epub') {
       try {
         const fresh = await window.api.books.list()
         setReading((r) => (r ? (fresh.find((b) => b.id === r.id) ?? r) : r))
@@ -125,6 +179,10 @@ export default function BookshelfModule() {
       }
     }
     setMode(next)
+    const bid = reading.id
+    void window.api.books.setReadingPref(bid, { mode: next }).then(() => {
+      setReading((r) => (r && r.id === bid ? { ...r, reading_mode: next } : r))
+    })
     try {
       await window.api.settings.set(SettingsKeys.BooksReadingMode, next)
     } catch {
@@ -162,6 +220,94 @@ export default function BookshelfModule() {
     if (target) setConfirmNote(target)
   }, [])
 
+  /** 加书签：当前位置 + 章节名 label；同位置去重 toast（书架 v2.0 §二） */
+  const addBookmark = (): void => {
+    if (!reading) return
+    if (reading.format === 'epub') {
+      const cur = epubRef.current?.getCurrent()
+      if (!cur?.cfi) {
+        toast('正在加载，稍后再试')
+        return
+      }
+      if (marks.some((m) => m.cfi === cur.cfi)) {
+        toast('已有书签')
+        return
+      }
+      const label =
+        flattenToc(toc).find((it) => it.href === locate?.href)?.label || `约 ${Math.round(cur.percent * 100)}%`
+      void window.api.books.markAdd(reading.id, { cfi: cur.cfi, label }).then((row) => {
+        setMarks((prev) => [row, ...prev])
+        toast('已加书签')
+      })
+    } else {
+      const page = locate?.page ?? reading.progress_page ?? 1
+      if (marks.some((m) => m.page === page)) {
+        toast('已有书签')
+        return
+      }
+      const label = tocAnchorAt(toc, page)?.label || `第 ${page} 页`
+      void window.api.books.markAdd(reading.id, { page, label }).then((row) => {
+        setMarks((prev) => [row, ...prev])
+        toast('已加书签')
+      })
+    }
+  }
+
+  /** 书签跳回（epub 按 CFI / pdf 按页码） */
+  const jumpMark = (m: BookMark): void => {
+    if (reading?.format === 'epub' && m.cfi) epubRef.current?.jumpToCfi(m.cfi)
+    else if (reading?.format === 'pdf' && m.page != null) pdfRef.current?.jumpToPage(m.page)
+  }
+
+  /** 书签删除确认后执行（彻底删除不入回收站） */
+  const doDeleteMark = async (): Promise<void> => {
+    const target = confirmMark
+    if (!target) return
+    setConfirmMark(null)
+    await window.api.books.markRemove(target.id)
+    setMarks((prev) => prev.filter((m) => m.id !== target.id))
+  }
+
+  /** 字号步进（0.75~1.5 步 0.05 钳制；NULL 视作 1.0；书架 v2.0 §四） */
+  const stepFont = (delta: number): void => {
+    if (!reading || reading.format !== 'epub') return
+    const cur = reading.font_scale ?? 1
+    const next = Math.round(Math.min(1.5, Math.max(0.75, cur + delta)) * 100) / 100
+    if (next === cur) return
+    void window.api.books.setReadingPref(reading.id, { fontScale: next }).then(() => {
+      setReading((r) => (r && r.id === reading.id ? { ...r, font_scale: next } : r))
+    })
+  }
+
+  /** 字号回落全局（清除书级值） */
+  const resetFont = (): void => {
+    if (!reading) return
+    void window.api.books.setReadingPref(reading.id, { fontScale: null }).then(() => {
+      setReading((r) => (r && r.id === reading.id ? { ...r, font_scale: null } : r))
+    })
+  }
+
+  /** 笔记总览：按需生成内容快照开弹窗（书架 v2.0 §三） */
+  const openOverview = async (): Promise<void> => {
+    if (!reading) return
+    try {
+      setOverview(await window.api.books.notesOverviewMd(reading.id))
+    } catch {
+      toast('生成失败')
+    }
+  }
+
+  /** 导出读书笔记（主进程对话框 + 写盘；取消静默） */
+  const doExportNotes = async (): Promise<void> => {
+    if (!reading) return
+    try {
+      const saved = await window.api.books.exportNotes(reading.id)
+      if (saved) toast(`已导出到 ${saved}`)
+    } catch {
+      toast('导出失败')
+    }
+  }
+
   /** 笔记删除确认后执行（彻底删除不入回收站） */
   const doDeleteNote = async (): Promise<void> => {
     const target = confirmNote
@@ -183,13 +329,14 @@ export default function BookshelfModule() {
   // ----- 阅读视图（主栏整体切换） -----
   if (reading) {
     return (
-      <div className={`module-page bk-reader-page${reading.format === 'epub' ? ' bk-reader-wide' : ''}`}>
+      <div ref={readerPageRef} className={`module-page bk-reader-page${reading.format === 'epub' ? ' bk-reader-wide' : ''}`}>
         <div className="bk-reader-bar">
           <button
             className="btn"
             onClick={() => {
               setReading(null)
               void load() // 回书架刷新进度角标
+              void refreshStats() // 与统计（书架 v2.0 §五）
             }}
           >
             <span className="material-symbols-outlined">arrow_back</span>藏书架
@@ -198,6 +345,37 @@ export default function BookshelfModule() {
             {reading.title}
           </div>
           <div className="bk-reader-progress">{readerLabel}</div>
+          {reading.format === 'epub' && (
+            <>
+              <button
+                className="btn bk-bar-btn bk-font-btn"
+                onClick={() => stepFont(-0.05)}
+                title="减小字号（每书独立记忆）"
+              >
+                A-
+              </button>
+              <span className="bk-font-scale">{Math.round((reading.font_scale ?? 1) * 100)}%</span>
+              <button
+                className="btn bk-bar-btn bk-font-btn"
+                onClick={() => stepFont(0.05)}
+                title="增大字号（每书独立记忆）"
+              >
+                A+
+              </button>
+              {reading.font_scale != null && (
+                <button
+                  className="btn bk-bar-btn"
+                  onClick={resetFont}
+                  title="清除书级字号，回落个人档全局字体"
+                >
+                  默认
+                </button>
+              )}
+            </>
+          )}
+          <button className="btn bk-bar-btn" onClick={addBookmark} title="收藏当前位置为书签">
+            <span className="material-symbols-outlined">bookmark_add</span>
+          </button>
           <button
             className={`btn bk-bar-btn${side.open ? ' active' : ''}`}
             onClick={() => setSide((s) => ({ ...s, open: !s.open }))}
@@ -218,9 +396,13 @@ export default function BookshelfModule() {
               toc={toc}
               locate={locate}
               notes={reading.format === 'epub' ? notes : null}
+              marks={marks}
               onJumpToc={jumpToc}
               onJumpNote={jumpNote}
               onDeleteNote={(n) => setConfirmNote(n)}
+              onJumpMark={jumpMark}
+              onDeleteMark={(m) => setConfirmMark(m)}
+              onOverview={reading.format === 'epub' ? () => void openOverview() : undefined}
               onCollapse={() => setSide((s) => ({ ...s, open: false }))}
             />
           )}
@@ -233,6 +415,7 @@ export default function BookshelfModule() {
                 theme={theme}
                 mode={mode}
                 notes={notes ?? []}
+                fontScale={reading.font_scale}
                 onProgress={setReaderLabel}
                 onToc={onToc}
                 onLocate={onLocateCb}
@@ -265,6 +448,31 @@ export default function BookshelfModule() {
         >
           将删除这条{confirmNote?.note ? '批注' : '高光'}及其书内标记，不可恢复。
         </ConfirmDialog>
+
+        {/* 删除书签：二次确认（彻底删除不入回收站；书架 v2.0 §二） */}
+        <ConfirmDialog
+          open={!!confirmMark}
+          title="删除书签"
+          danger
+          confirmText="彻底删除"
+          onCancel={() => setConfirmMark(null)}
+          onConfirm={() => void doDeleteMark()}
+        >
+          将删除书签「{confirmMark?.label}」，不可恢复。
+        </ConfirmDialog>
+
+        {/* 笔记总览：按需生成内容直传（readOnly），导出走主进程保存对话框（书架 v2.0 §三） */}
+        {overview != null && (
+          <MdDialog
+            open
+            title={`《${reading.title}》读书笔记`}
+            subtitle={`${reading.author || '佚名'} · ${notes?.length ?? 0} 条 · 生成于 ${fmtNow()}`}
+            content={overview}
+            readOnly
+            headerAction={{ label: '导出', icon: 'download', onClick: () => void doExportNotes() }}
+            onClose={() => setOverview(null)}
+          />
+        )}
       </div>
     )
   }
@@ -281,6 +489,41 @@ export default function BookshelfModule() {
           </button>
         </div>
       </div>
+
+      {/* 阅读统计条 + 展开面板（三项全零整行隐藏；书架 v2.0 §五） */}
+      {stats != null && (stats.todaySeconds > 0 || stats.streakDays > 0 || stats.readingCount > 0) && (
+        <div className="bk-stats-bar" onClick={() => setStatsOpen((v) => !v)} title="点击展开 / 收起阅读统计">
+          <span className="material-symbols-outlined">schedule</span>
+          今日 {fmtMinutes(stats.todaySeconds)} · 连续 {stats.streakDays} 天 · 在读 {stats.readingCount} 本
+          <span className="material-symbols-outlined bk-stats-caret">
+            {statsOpen ? 'expand_less' : 'expand_more'}
+          </span>
+        </div>
+      )}
+      {statsOpen && stats != null && (
+        <div className="bk-stats-panel">
+          {stats.rows.length === 0 ? (
+            <div className="bk-stats-row">
+              <span className="bk-stats-title">还没有阅读记录</span>
+            </div>
+          ) : (
+            stats.rows.map((r) => (
+              <div key={r.id} className="bk-stats-row">
+                <span className="bk-stats-title" title={r.title}>
+                  {r.title}
+                </span>
+                <span className="bk-stats-nums">
+                  {fmtMinutes(r.totalSeconds)} · {Math.round(r.percent)}%
+                  {r.last_read_at ? ` · ${relTime(r.last_read_at)}` : ''}
+                </span>
+              </div>
+            ))
+          )}
+          <div className="bk-stats-total">
+            合计 {fmtMinutes(stats.rows.reduce((s, r) => s + r.totalSeconds, 0))}
+          </div>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <div className="empty-state">

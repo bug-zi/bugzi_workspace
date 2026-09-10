@@ -13,6 +13,8 @@ export interface EpubReaderHandle {
   jumpToCfi: (cfi: string) => void
   /** 跳到目录章节 */
   jumpToToc: (href: string) => void
+  /** 当前位置（加书签用：CFI + 百分比；书架 v2.0 §二） */
+  getCurrent: () => { cfi: string | null; percent: number }
 }
 
 interface Props {
@@ -33,6 +35,8 @@ interface Props {
   onUpdateNote: (id: number, note: string) => void
   /** 删除笔记（模块二次确认后执行） */
   onRemoveNote: (id: number) => void
+  /** 书级字号倍率（null=跟随全局字体；书架 v2.0 §四） */
+  fontScale: number | null
 }
 
 /** NavItem → 侧栏目录树（subitems 递归，深于 4 层剪枝） */
@@ -50,16 +54,17 @@ function convertToc(items: NavItem[] | undefined, depth = 0): ReaderTocItem[] {
 /** 主题注入：iframe 内用不了外层 CSS 变量，取具体色值写入 rendition（主题切换时重注入）。
  *  优化第1轮 §8.1/§8.6：护栏防横向溢出 + ::selection 主题色。
  *  （分页模式的内部滚动由 epub.js 自管——contents.columns 设 overflow-y hidden，无需注入） */
-function applyTheme(rendition: Rendition | null): void {
+function applyTheme(rendition: Rendition | null, fontScale: number | null): void {
   if (!rendition) return
   const cs = getComputedStyle(document.documentElement)
   const body = getComputedStyle(document.body)
+  const basePx = parseFloat(body.fontSize) || 16
   rendition.themes.default({
     body: {
       color: cs.getPropertyValue('--color-text').trim() || '#1f1f1f',
       background: cs.getPropertyValue('--color-surface-strong').trim() || '#fff',
       'font-family': body.fontFamily,
-      'font-size': body.fontSize,
+      'font-size': fontScale != null ? `${Math.round(basePx * fontScale * 100) / 100}px` : body.fontSize,
       'font-weight': body.fontWeight,
       'line-height': '1.9'
     },
@@ -118,7 +123,7 @@ function contentBoxSize(host: HTMLElement): { w: number; h: number } {
 }
 
 const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props, ref) {
-  const { book, theme, mode, notes } = props
+  const { book, theme, mode, notes, fontScale } = props
   const hostRef = useRef<HTMLDivElement>(null)
   const renditionRef = useRef<Rendition | null>(null)
   const bookRef = useRef<Book | null>(null)
@@ -294,7 +299,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     })
     renditionRef.current = rendition
     renderedRef.current.clear() // 新实例标注为空
-    applyTheme(rendition)
+    applyTheme(rendition, fontScale)
     void rendition.display(curCfiRef.current ?? book.progress_cfi ?? undefined).then(() => {
       // 首帧展示后再挂标注（render hook 依赖视图就绪）
       syncAnnotations()
@@ -405,10 +410,16 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
 
   // 主题切换重注入（不重载书）；标注重涂由 syncAnnotations 检测色值变化完成
   useEffect(() => {
-    applyTheme(renditionRef.current)
+    applyTheme(renditionRef.current, fontScale)
     syncAnnotations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme])
+
+  // 字号变化即时重注入（不重挂不丢进度；epub.js 自动重排——书架 v2.0 §四）
+  useEffect(() => {
+    applyTheme(renditionRef.current, fontScale)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fontScale])
 
   // notes 变化 → 标注 diff（book 未就绪时由 createRendition 完成后补挂）
   useEffect(() => {
@@ -494,7 +505,11 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
 
   useImperativeHandle(ref, () => ({
     jumpToCfi: (cfi: string) => void renditionRef.current?.display(cfi),
-    jumpToToc: (href: string) => void renditionRef.current?.display(href)
+    jumpToToc: (href: string) => void renditionRef.current?.display(href),
+    getCurrent: () => ({
+      cfi: curCfiRef.current,
+      percent: pendingRef.current?.percent ?? (book.progress_percent || 0) / 100
+    })
   }))
 
   return (

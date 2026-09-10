@@ -12,6 +12,7 @@ import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
 import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
 import BookshelfModule from './modules/bookshelf/BookshelfModule'
+import FavoritesModule from './modules/favorites/FavoritesModule'
 import FeedModule from './modules/feed/FeedModule'
 import LedgerModule from './modules/ledger/LedgerModule'
 import RecycleModule from './modules/recycle/RecycleModule'
@@ -29,6 +30,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'mottos', label: '格言库', icon: 'format_quote' },
   { id: 'wiki', label: '万象库', icon: 'public' },
   { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
+  { id: 'favorites', label: '收藏夹', icon: 'bookmark' },
   { id: 'feed', label: '信息源', icon: 'rss_feed' },
   { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
@@ -47,7 +49,7 @@ const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
   zhijiji: 'zhijiji'
 }
 
-/** 主栏视图：十二模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1） */
+/** 主栏视图：十三模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1） */
 type MainView = ModuleId | 'noise'
 
 export default function App() {
@@ -206,6 +208,7 @@ function Shell() {
               {m.id === 'reasoning' && <ReasoningModule />}
               {m.id === 'wenbi' && <WenbiModule />}
               {m.id === 'bookshelf' && <BookshelfModule />}
+              {m.id === 'favorites' && <FavoritesModule />}
               {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
               {m.id === 'ledger' && <LedgerModule />}
               {m.id === 'recycle' && <RecycleModule />}

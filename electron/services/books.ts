@@ -4,7 +4,7 @@ import { basename, dirname, extname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import { getDb, nowIso, userDataDir } from '../db/db'
-import type { BooksImportResult, BooksNote, BooksRecord } from '../../src/shared/types'
+import type { BooksImportResult, BooksNote, BooksRecord, BookMark, ReadStats, ReadStatsRow } from '../../src/shared/types'
 
 /** XML 解析器（OPF/container.xml；属性带 @_ 前缀） */
 const xml = new XMLParser({ ignoreAttributes: false })
@@ -217,6 +217,8 @@ export function deleteBook(id: number): void {
     | undefined
   getDb().prepare('DELETE FROM books WHERE id = ?').run(id)
   getDb().prepare('DELETE FROM book_notes WHERE book_id = ?').run(id)
+  getDb().prepare('DELETE FROM book_marks WHERE book_id = ?').run(id)
+  getDb().prepare('DELETE FROM book_read_log WHERE book_id = ?').run(id)
   if (!row) return
   for (const p of [row.file_path, row.cover_path]) {
     if (p) {
@@ -259,4 +261,138 @@ export function updateNote(id: number, note: string): void {
 /** 彻底删除单条笔记（渲染层二次确认后调用） */
 export function removeNote(id: number): void {
   getDb().prepare('DELETE FROM book_notes WHERE id = ?').run(id)
+}
+
+// ---------- 书架 v2.0（2026-09-10-书架v2-design.md）：书签 / 每书偏好 / 阅读统计 / 笔记总览 ----------
+
+/** 本地时区当日 YYYY-MM-DD（阅读统计按日累秒的 day 键） */
+function localDay(t: Date = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+}
+
+/** ISO 时间 → 本地 YYYY-MM-DD HH:mm（总览 md 时间戳显示） */
+function fmtLocal(iso: string): string {
+  const t = new Date(iso)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`
+}
+
+/** 某书全部书签（created_at 倒序） */
+export function listMarks(bookId: number): BookMark[] {
+  return getDb()
+    .prepare('SELECT * FROM book_marks WHERE book_id = ? ORDER BY created_at DESC, id DESC')
+    .all(bookId) as unknown as BookMark[]
+}
+
+/** 新增书签（渲染层已查重：epub 同 CFI / pdf 同页不再调；书架 v2.0 §二） */
+export function addMark(
+  bookId: number,
+  m: { cfi?: string | null; page?: number | null; label: string }
+): BookMark {
+  const r = getDb()
+    .prepare('INSERT INTO book_marks (book_id, cfi, page, label, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(bookId, m.cfi ?? null, m.page ?? null, m.label, nowIso())
+  return getDb()
+    .prepare('SELECT * FROM book_marks WHERE id = ?')
+    .get(Number(r.lastInsertRowid)) as unknown as BookMark
+}
+
+/** 彻底删除书签（渲染层二次确认后调用） */
+export function removeMark(markId: number): void {
+  getDb().prepare('DELETE FROM book_marks WHERE id = ?').run(markId)
+}
+
+/** 书级阅读偏好（书架 v2.0 §四）：只传要改的字段；fontScale 传 null 清除（回落全局字体） */
+export function setReadingPref(
+  bookId: number,
+  p: { mode?: 'scroll' | 'page'; fontScale?: number | null }
+): void {
+  if (p.mode != null) {
+    getDb().prepare('UPDATE books SET reading_mode = ? WHERE id = ?').run(p.mode, bookId)
+  }
+  if (p.fontScale !== undefined) {
+    getDb().prepare('UPDATE books SET font_scale = ? WHERE id = ?').run(p.fontScale, bookId)
+  }
+}
+
+/** 阅读时长累计（渲染层 30 秒批量 flush；UPSERT 按书按日递增） */
+export function addReadTime(bookId: number, seconds: number): void {
+  const s = Math.max(0, Math.round(seconds))
+  if (s <= 0) return
+  getDb()
+    .prepare(
+      `INSERT INTO book_read_log (book_id, day, seconds) VALUES (?, ?, ?)
+       ON CONFLICT(book_id, day) DO UPDATE SET seconds = seconds + excluded.seconds`
+    )
+    .run(bookId, localDay(), s)
+}
+
+/** 阅读统计聚合（书架 v2.0 §五口径：在读 = 读过且未读完；面板行 = 最近阅读在前） */
+export function readStats(): ReadStats {
+  const today = localDay()
+  const todayRow = getDb()
+    .prepare('SELECT COALESCE(SUM(seconds), 0) AS s FROM book_read_log WHERE day = ?')
+    .get(today) as { s: number }
+  // 连续天数：今天有记录从今天起算，否则从昨天（白天没读数字不掉档）
+  const days = new Set(
+    (
+      getDb().prepare('SELECT DISTINCT day FROM book_read_log WHERE seconds > 0').all() as {
+        day: string
+      }[]
+    ).map((r) => r.day)
+  )
+  let streakDays = 0
+  const cur = new Date()
+  if (!days.has(localDay(cur))) cur.setDate(cur.getDate() - 1)
+  while (days.has(localDay(cur))) {
+    streakDays++
+    cur.setDate(cur.getDate() - 1)
+  }
+  const rows = getDb()
+    .prepare(
+      `SELECT b.id, b.title, b.progress_percent AS percent, b.last_read_at,
+              COALESCE((SELECT SUM(seconds) FROM book_read_log WHERE book_id = b.id), 0) AS totalSeconds
+       FROM books b
+       WHERE b.last_read_at IS NOT NULL
+       ORDER BY b.last_read_at DESC, b.id DESC`
+    )
+    .all() as unknown as ReadStatsRow[]
+  return {
+    todaySeconds: todayRow.s,
+    streakDays,
+    readingCount: rows.filter((r) => r.percent < 100).length,
+    rows
+  }
+}
+
+/** 笔记总览 md（created_at 正序 = 阅读顺序；书架 v2.0 §三）——弹窗展示与导出共用 */
+export function notesOverview(bookId: number): { title: string; md: string } {
+  const book = getDb().prepare('SELECT title, author FROM books WHERE id = ?').get(bookId) as
+    | { title: string; author: string }
+    | undefined
+  if (!book) throw new Error('NOT_FOUND')
+  const notes = getDb()
+    .prepare('SELECT * FROM book_notes WHERE book_id = ? ORDER BY created_at ASC, id ASC')
+    .all(bookId) as unknown as BooksNote[]
+  const head = [
+    `# 《${book.title}》读书笔记`,
+    '',
+    `> ${book.author || '佚名'} · ${notes.length} 条 · 生成于 ${fmtLocal(nowIso())}`,
+    ''
+  ]
+  if (notes.length === 0) return { title: book.title, md: [...head, '（暂无笔记）'].join('\n') }
+  const body = notes.map((n) => {
+    const quote = n.quote.replace(/\s*\n+\s*/g, ' ').trim()
+    const parts = [`> ${quote}`, '']
+    if (n.note) parts.push(n.note, '')
+    parts.push(`<sub>${fmtLocal(n.created_at)}</sub>`)
+    return parts.join('\n')
+  })
+  return { title: book.title, md: `${head.join('\n')}\n${body.join('\n\n---\n\n')}\n` }
+}
+
+/** 导出读书笔记到指定路径（ipc 层完成保存对话框后调用） */
+export function exportNotesFile(bookId: number, targetPath: string): void {
+  writeFileSync(targetPath, notesOverview(bookId).md, 'utf-8')
 }

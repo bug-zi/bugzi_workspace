@@ -53,7 +53,15 @@ import {
   listNotes,
   addNote,
   updateNote,
-  removeNote
+  removeNote,
+  listMarks,
+  addMark,
+  removeMark,
+  setReadingPref,
+  addReadTime,
+  readStats,
+  notesOverview,
+  exportNotesFile
 } from './services/books'
 import {
   listFeeds,
@@ -68,7 +76,18 @@ import {
   summarizeArticle,
   cleanupOldArticleBodies
 } from './services/feed'
-import type { FeedView } from '../src/shared/types'
+import {
+  listFavorites,
+  addFavoriteItem,
+  updateFavoriteItem,
+  deleteFavoriteItem,
+  addCategory,
+  renameCategory,
+  moveCategory,
+  deleteCategory,
+  fetchMeta as fetchFavoriteMeta
+} from './services/favorites'
+import type { FeedView, FavoriteItemPatch } from '../src/shared/types'
 import {
   listAccounts,
   saveAccount,
@@ -807,6 +826,43 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 书架 v2.0（DB v29，2026-09-10-书架v2-design.md）：书签 / 每书偏好 / 阅读统计 / 笔记总览 ----------
+  ipcMain.handle('books:marksList', (_e, bookId: number) => listMarks(bookId))
+  ipcMain.handle(
+    'books:markAdd',
+    (_e, bookId: number, m: { cfi?: string | null; page?: number | null; label: string }) =>
+      addMark(bookId, m)
+  )
+  ipcMain.handle('books:markRemove', (_e, markId: number) => {
+    removeMark(markId)
+    return true
+  })
+  ipcMain.handle(
+    'books:setReadingPref',
+    (_e, bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }) => {
+      setReadingPref(bookId, p)
+      return true
+    }
+  )
+  ipcMain.handle('books:addReadTime', (_e, bookId: number, seconds: number) => {
+    addReadTime(bookId, seconds)
+    return true
+  })
+  ipcMain.handle('books:readStats', () => readStats())
+  ipcMain.handle('books:notesOverviewMd', (_e, bookId: number) => notesOverview(bookId).md)
+  ipcMain.handle('books:exportNotes', async (_e, bookId: number) => {
+    const { title, md } = notesOverview(bookId)
+    const safe = title.replace(/[\\/:*?"<>|]/g, '_')
+    const r = await dialog.showSaveDialog(win()!, {
+      title: '导出读书笔记',
+      defaultPath: `《${safe}》读书笔记.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (r.canceled || !r.filePath) return null
+    exportNotesFile(bookId, r.filePath)
+    return r.filePath
+  })
+
   // ---------- 信息源（DB v20，信息源 specs §2/§3/§4）：RSS 聚合 + AI 总结按需缓存 ----------
   /** 源列表 + 未读数（首次幂等 seed 三源，probe 真名） */
   ipcMain.handle('feeds:list', async () => listFeeds())
@@ -845,6 +901,38 @@ export function registerIpc(): void {
       endJob(jobId)
     }
   })
+
+  // ---------- 收藏夹（DB v28，收藏夹 specs §2-§4）：纯链接收藏，纯本地零 AI ----------
+  /** 全量列表（幂等 seed「未分类」）：categories 按序 + items 置顶优先/时间倒序 */
+  ipcMain.handle('favorites:list', async () => listFavorites())
+  /** 新增收藏（服务层校验 URL/名称/分类，失败抛带 message Error） */
+  ipcMain.handle(
+    'favorites:addItem',
+    (_e, name: string, url: string, descMd: string, categoryId: number) => addFavoriteItem(name, url, descMd, categoryId)
+  )
+  /** 局部更新（每次回写 updated_at） */
+  ipcMain.handle('favorites:updateItem', (_e, id: number, patch: FavoriteItemPatch) => updateFavoriteItem(id, patch))
+  /** 删收藏（前端二次确认后调用，直接删不入回收站） */
+  ipcMain.handle('favorites:deleteItem', (_e, id: number) => {
+    deleteFavoriteItem(id)
+    return true
+  })
+  /** 新建分类（parentId=null 大类；子类下再建抛错——两级硬限制） */
+  ipcMain.handle('favorites:addCategory', (_e, name: string, parentId: number | null) => addCategory(name, parentId))
+  /** 改名（「未分类」抛错） */
+  ipcMain.handle('favorites:renameCategory', (_e, id: number, name: string) => {
+    renameCategory(id, name)
+    return true
+  })
+  /** 同级上下移（交换 sort；到头幂等成功） */
+  ipcMain.handle('favorites:moveCategory', (_e, id: number, dir: 'up' | 'down') => {
+    moveCategory(id, dir)
+    return true
+  })
+  /** 删分类（单事务：子类上移一级 + 直属条目入未分类；返回去向计数供文案） */
+  ipcMain.handle('favorites:deleteCategory', (_e, id: number) => deleteCategory(id))
+  /** 抓取页面 meta（任何失败返回空对象不抛错，渲染层手填兜底） */
+  ipcMain.handle('favorites:fetchMeta', (_e, url: string) => fetchFavoriteMeta(url))
 
   // ---------- 账本（DB v21，账本 specs §2-§4）：纯本地零 AI ----------
   /** 账户列表（含实时余额） */

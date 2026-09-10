@@ -470,7 +470,32 @@ const api = {
     noteUpdate: (noteId: number, note: string): Promise<boolean> =>
       ipcRenderer.invoke('books:noteUpdate', noteId, note),
     /** 彻底删除单条笔记（前端二次确认后调用） */
-    noteRemove: (noteId: number): Promise<boolean> => ipcRenderer.invoke('books:noteRemove', noteId)
+    noteRemove: (noteId: number): Promise<boolean> => ipcRenderer.invoke('books:noteRemove', noteId),
+    // ----- 书架 v2.0（DB v29）：书签 / 每书偏好 / 阅读统计 / 笔记总览 -----
+    /** 书签列表（created_at 倒序，epub/pdf 都有） */
+    marksList: (bookId: number): Promise<import('../src/shared/types').BookMark[]> =>
+      ipcRenderer.invoke('books:marksList', bookId),
+    /** 新增书签（前端已查重同位置） */
+    markAdd: (
+      bookId: number,
+      m: { cfi?: string | null; page?: number | null; label: string }
+    ): Promise<import('../src/shared/types').BookMark> => ipcRenderer.invoke('books:markAdd', bookId, m),
+    /** 彻底删除书签（前端二次确认后调用） */
+    markRemove: (markId: number): Promise<boolean> => ipcRenderer.invoke('books:markRemove', markId),
+    /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
+    setReadingPref: (
+      bookId: number,
+      p: { mode?: 'scroll' | 'page'; fontScale?: number | null }
+    ): Promise<boolean> => ipcRenderer.invoke('books:setReadingPref', bookId, p),
+    /** 阅读时长累计（30 秒批量 flush） */
+    addReadTime: (bookId: number, seconds: number): Promise<boolean> =>
+      ipcRenderer.invoke('books:addReadTime', bookId, seconds),
+    /** 阅读统计聚合 */
+    readStats: (): Promise<import('../src/shared/types').ReadStats> => ipcRenderer.invoke('books:readStats'),
+    /** 笔记总览 md（按需生成，不落盘） */
+    notesOverviewMd: (bookId: number): Promise<string> => ipcRenderer.invoke('books:notesOverviewMd', bookId),
+    /** 导出读书笔记（保存对话框在主进程；取消返回 null） */
+    exportNotes: (bookId: number): Promise<string | null> => ipcRenderer.invoke('books:exportNotes', bookId)
   },
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -502,6 +527,43 @@ const api = {
     markAllRead: (feedId: number | null): Promise<boolean> => ipcRenderer.invoke('articles:markAllRead', feedId),
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
     summarize: (jobId: string, id: number): Promise<string> => ipcRenderer.invoke('articles:summarize', jobId, id)
+  },
+  favorites: {
+    /** 全量列表（幂等 seed「未分类」）：categories 按序 + items 置顶优先/时间倒序 */
+    list: (): Promise<import('../src/shared/types').FavoriteList> => ipcRenderer.invoke('favorites:list'),
+    /** 新增收藏（服务层校验失败抛带 message Error） */
+    addItem: (
+      name: string,
+      url: string,
+      descMd: string,
+      categoryId: number
+    ): Promise<import('../src/shared/types').FavoriteItem> =>
+      ipcRenderer.invoke('favorites:addItem', name, url, descMd, categoryId),
+    /** 局部更新（每次回写 updated_at） */
+    updateItem: (
+      id: number,
+      patch: import('../src/shared/types').FavoriteItemPatch
+    ): Promise<import('../src/shared/types').FavoriteItem> => ipcRenderer.invoke('favorites:updateItem', id, patch),
+    /** 删收藏（前端二次确认后调用，直接删不入回收站） */
+    deleteItem: (id: number): Promise<boolean> => ipcRenderer.invoke('favorites:deleteItem', id),
+    /** 新建分类（parentId=null 大类；子类下再建抛错——两级硬限制） */
+    addCategory: (
+      name: string,
+      parentId: number | null
+    ): Promise<import('../src/shared/types').FavoriteCategory> =>
+      ipcRenderer.invoke('favorites:addCategory', name, parentId),
+    /** 改名（「未分类」抛错） */
+    renameCategory: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('favorites:renameCategory', id, name),
+    /** 同级上下移（交换 sort；到头幂等成功） */
+    moveCategory: (id: number, dir: 'up' | 'down'): Promise<boolean> =>
+      ipcRenderer.invoke('favorites:moveCategory', id, dir),
+    /** 删分类（单事务级联，返回去向计数 { movedItems, movedChildren }） */
+    deleteCategory: (id: number): Promise<{ movedItems: number; movedChildren: number }> =>
+      ipcRenderer.invoke('favorites:deleteCategory', id),
+    /** 抓取页面 meta（任何失败返回空对象，不抛错） */
+    fetchMeta: (url: string): Promise<{ title: string; desc: string }> =>
+      ipcRenderer.invoke('favorites:fetchMeta', url)
   },
   ledger: {
     /** 账户列表（含实时余额） */
