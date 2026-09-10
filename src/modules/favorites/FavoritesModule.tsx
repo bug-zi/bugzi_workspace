@@ -1,4 +1,5 @@
 // 收藏夹（收藏夹 specs §3.1）：大类 tab + 直属/子类分组列表 + 拖拽移动 + 跨分类搜索 + 三弹窗
+// 可发现性优化：tab 行尾「+」一键建大类、按钮「分类管理」、零分类引导行
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FavoriteCategory, FavoriteItem } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -44,6 +45,13 @@ export default function FavoritesModule() {
   const dragIdRef = useRef<number | null>(null)
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  // tab 行尾「+」一键建大类（可发现性：建好即成 tab 并切换过去）
+  const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const [quickName, setQuickName] = useState('')
+  const quickRef = useRef<HTMLSpanElement>(null)
+  // 主视图大类分组区尾「＋ 新增子类」行内入口
+  const [addSubOpen, setAddSubOpen] = useState(false)
+  const [subName, setSubName] = useState('')
 
   const load = useCallback(async () => {
     const lv = await window.api.favorites.list()
@@ -55,6 +63,16 @@ export default function FavoritesModule() {
     void load()
   }, [load])
   useModuleActivated('favorites', () => void load())
+
+  // 一键建大类输入框打开时，点击外部关闭
+  useEffect(() => {
+    if (!quickAddOpen) return
+    const onDoc = (ev: MouseEvent): void => {
+      if (quickRef.current && !quickRef.current.contains(ev.target as Node)) setQuickAddOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [quickAddOpen])
 
   const topCats = useMemo(() => categories.filter((c) => c.parent_id === null), [categories])
   const catById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
@@ -96,12 +114,57 @@ export default function FavoritesModule() {
     : []
   const detailItem = items.find((i) => i.id === detailId) ?? null
 
+  // 切大类 tab 时收起行内新增子类输入
+  useEffect(() => {
+    setAddSubOpen(false)
+    setSubName('')
+  }, [curTop?.id])
+
   const togglePin = async (item: FavoriteItem): Promise<void> => {
     try {
       await window.api.favorites.updateItem(item.id, { pinned: !item.pinned })
       await load()
     } catch (err) {
       toast(err instanceof Error ? err.message : '操作失败')
+    }
+  }
+
+  /** tab 行尾「+」：一键建大类并切到新 tab */
+  const doQuickAdd = async (): Promise<void> => {
+    const name = quickName.trim()
+    if (!name) {
+      toast('大类名不能为空')
+      return
+    }
+    try {
+      const cat = await window.api.favorites.addCategory(name, null)
+      setQuickAddOpen(false)
+      setQuickName('')
+      setSearch('')
+      setActiveTop(cat.id)
+      await load()
+      toast(`已创建大类「${cat.name}」`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '创建失败')
+    }
+  }
+
+  /** 主视图分组区尾：当前大类下新建子类 */
+  const doAddSub = async (): Promise<void> => {
+    const name = subName.trim()
+    if (!name) {
+      toast('子类名不能为空')
+      return
+    }
+    if (!curTop || curTop.is_system) return
+    try {
+      await window.api.favorites.addCategory(name, curTop.id)
+      setAddSubOpen(false)
+      setSubName('')
+      await load()
+      toast(`已在「${curTop.name}」下创建子类「${name}」`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '创建失败')
     }
   }
 
@@ -229,6 +292,37 @@ export default function FavoritesModule() {
             </button>
           ))}
         </div>
+        {/* tab 行尾「+」：一键建大类（弹小输入框，建好即成 tab 并切换过去） */}
+        <span className="fav-tab-add" ref={quickRef}>
+          <button
+            className="fav-tab-add-btn"
+            title="新建大类"
+            onClick={() => {
+              setQuickAddOpen((v) => !v)
+              setQuickName('')
+            }}
+          >
+            <span className="material-symbols-outlined">add</span>
+          </button>
+          {quickAddOpen && (
+            <div className="fav-quick-add">
+              <input
+                className="field"
+                placeholder="新大类名"
+                value={quickName}
+                autoFocus
+                onChange={(e) => setQuickName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void doQuickAdd()
+                  if (e.key === 'Escape') setQuickAddOpen(false)
+                }}
+              />
+              <button className="btn btn-primary" onClick={() => void doQuickAdd()}>
+                创建
+              </button>
+            </div>
+          )}
+        </span>
         <input
           className="field fav-search"
           placeholder="搜索全部收藏"
@@ -238,7 +332,7 @@ export default function FavoritesModule() {
         />
         <button className="btn" onClick={() => setManagerOpen(true)} title="分类管理">
           <span className="material-symbols-outlined">category</span>
-          分类
+          分类管理
         </button>
         <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
           <span className="material-symbols-outlined">add</span>
@@ -275,10 +369,21 @@ export default function FavoritesModule() {
               <span className="material-symbols-outlined">add</span>
               新增第一条收藏
             </button>
+            <button className="btn" onClick={() => setManagerOpen(true)}>
+              <span className="material-symbols-outlined">category</span>
+              创建分类
+            </button>
           </div>
         ) : (
           curTop && (
             <>
+              {/* 零分类引导：已有收藏但只有「未分类」时，指明分类创建入口 */}
+              {categories.length === 1 && (
+                <div className="fav-cat-hint-row">
+                  <span className="material-symbols-outlined">lightbulb</span>
+                  还没有自己的分类——点上方「＋」新建大类，子类与排序在「分类管理」里整理
+                </div>
+              )}
               <div className={`fav-group${dragOverKey === 'top' ? ' drag-over' : ''}`} {...dropProps('top', curTop.id)}>
                 <div className="fav-group-head">
                   <span className="material-symbols-outlined">bookmark</span>
@@ -303,6 +408,40 @@ export default function FavoritesModule() {
                   {itemsOf(ch.id).map((i) => renderRow(i))}
                 </div>
               ))}
+              {/* 新增子类入口：当前大类分组区尾（「未分类」为系统锁定类，不参与建子类） */}
+              {!curTop.is_system &&
+                (addSubOpen ? (
+                  <div className="fav-add-sub">
+                    <input
+                      className="field"
+                      placeholder={`在「${curTop.name}」下新建子类`}
+                      value={subName}
+                      autoFocus
+                      onChange={(e) => setSubName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void doAddSub()
+                        if (e.key === 'Escape') setAddSubOpen(false)
+                      }}
+                    />
+                    <button className="btn btn-primary" onClick={() => void doAddSub()}>
+                      创建
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        setAddSubOpen(false)
+                        setSubName('')
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button className="fav-add-sub-btn" onClick={() => setAddSubOpen(true)}>
+                    <span className="material-symbols-outlined">add</span>
+                    新增子类
+                  </button>
+                ))}
             </>
           )
         )}

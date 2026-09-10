@@ -56,6 +56,7 @@ import {
   removeNote,
   listMarks,
   addMark,
+  updateMark,
   removeMark,
   setReadingPref,
   addReadTime,
@@ -837,6 +838,10 @@ export function registerIpc(): void {
     removeMark(markId)
     return true
   })
+  ipcMain.handle(
+    'books:markUpdate',
+    (_e, markId: number, m: { label?: string; note?: string }) => updateMark(markId, m)
+  )
   ipcMain.handle(
     'books:setReadingPref',
     (_e, bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }) => {

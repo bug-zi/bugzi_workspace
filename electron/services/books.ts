@@ -298,6 +298,19 @@ export function addMark(
     .get(Number(r.lastInsertRowid)) as unknown as BookMark
 }
 
+/** 更新书签 label/备注（只传要改的字段；书签优化轮 §三），回读整行返回 */
+export function updateMark(markId: number, m: { label?: string; note?: string }): BookMark {
+  if (m.label !== undefined) {
+    getDb().prepare('UPDATE book_marks SET label = ? WHERE id = ?').run(m.label, markId)
+  }
+  if (m.note !== undefined) {
+    getDb().prepare('UPDATE book_marks SET note = ? WHERE id = ?').run(m.note, markId)
+  }
+  return getDb()
+    .prepare('SELECT * FROM book_marks WHERE id = ?')
+    .get(markId) as unknown as BookMark
+}
+
 /** 彻底删除书签（渲染层二次确认后调用） */
 export function removeMark(markId: number): void {
   getDb().prepare('DELETE FROM book_marks WHERE id = ?').run(markId)

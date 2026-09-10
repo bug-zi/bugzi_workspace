@@ -482,6 +482,12 @@ const api = {
     ): Promise<import('../src/shared/types').BookMark> => ipcRenderer.invoke('books:markAdd', bookId, m),
     /** 彻底删除书签（前端二次确认后调用） */
     markRemove: (markId: number): Promise<boolean> => ipcRenderer.invoke('books:markRemove', markId),
+    /** 书签改名/备注（只传要改的字段，返回更新后整行） */
+    markUpdate: (
+      markId: number,
+      m: { label?: string; note?: string }
+    ): Promise<import('../src/shared/types').BookMark> =>
+      ipcRenderer.invoke('books:markUpdate', markId, m),
     /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
     setReadingPref: (
       bookId: number,

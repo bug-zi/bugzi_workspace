@@ -165,7 +165,7 @@ export interface BooksNote {
   created_at: string
 }
 
-/** 书架手动书签（book_marks 表，书架 v2.0）：epub 存 cfi、pdf 存 page（1 基）；label 自动生成 */
+/** 书架手动书签（book_marks 表，书架 v2.0 + 书签优化轮）：epub 存 cfi、pdf 存 page（1 基）；label 可手动改 */
 export interface BookMark {
   id: number
   book_id: number
@@ -173,8 +173,10 @@ export interface BookMark {
   cfi: string | null
   /** pdf 页码（1 基；pdf 行非空） */
   page: number | null
-  /** 显示名 */
+  /** 显示名（默认「章节名 · 42%」/「章节名 · 第 N 页」，用户可改） */
   label: string
+  /** 备注；空字符串 = 无备注 */
+  note: string
   created_at: string
 }
 
@@ -887,6 +889,8 @@ export interface Api {
     markAdd(bookId: number, m: { cfi?: string | null; page?: number | null; label: string }): Promise<BookMark>
     /** 彻底删除书签（前端二次确认后调用） */
     markRemove(markId: number): Promise<boolean>
+    /** 书签改名/备注（只传要改的字段，返回更新后整行） */
+    markUpdate(markId: number, m: { label?: string; note?: string }): Promise<BookMark>
     /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
     setReadingPref(bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }): Promise<boolean>
     /** 阅读时长累计（30 秒批量 flush） */

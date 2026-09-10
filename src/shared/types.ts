@@ -350,7 +350,7 @@ export interface BooksNote {
   created_at: string
 }
 
-/** 书架手动书签（book_marks 表，书架 v2.0 §二）：epub 存 cfi、pdf 存 page（1 基）；label 自动生成（章节名兜底「第 N 页 / 约 X%」） */
+/** 书架手动书签（book_marks 表，书架 v2.0 §二 + 书签优化轮）：epub 存 cfi、pdf 存 page（1 基）；label 默认「章节名 · 位置」可手动改 */
 export interface BookMark {
   id: number
   book_id: number
@@ -358,8 +358,10 @@ export interface BookMark {
   cfi: string | null
   /** pdf 页码（1 基；pdf 行非空） */
   page: number | null
-  /** 显示名 */
+  /** 显示名（默认「章节名 · 42%」/「章节名 · 第 N 页」，用户可改） */
   label: string
+  /** 备注；空字符串 = 无备注 */
+  note: string
   created_at: string
 }
 

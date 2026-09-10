@@ -1,6 +1,10 @@
 # 收藏夹 designs-specs.md
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/收藏夹/2026-09-10-收藏夹-design.md`（260910 brainstorming 定稿）生成，是开发的直接依据。依赖：样式/designs-specs.md（ConfirmDialog / Toast 与主题色系、Material Symbols 用法）；「去原文」复用现有 `shell:openExternal` 通道（preload `window.api.openExternal(url)`，主进程仅放行 http/https）；**无新 npm 依赖、无 AI/LLM 调用、CSP 不动**（渲染层不发外部请求，抓取全在主进程）。
+>
+> **增量注记（260910 优化建议区第 33 轮·分类可发现性）**：§3.1 顶栏补三处——①tab 行（`.fav-tabs` 容器之后）增「＋」虚线胶囊按钮与弹出小输入框（`.fav-tab-add`/`.fav-quick-add`），回车或「创建」即 `addCategory(name, null)` 并切到新 tab，点击外部/Esc 关闭；②「分类」按钮更名「分类管理」；③零分类引导——空态（§3.1 空状态）加「创建分类」次按钮开管理弹窗，`categories 仅未分类 && items 非空 && 非搜索` 时列表顶显示引导行（`.fav-cat-hint-row`）。仅渲染层两文件，§1/§2/§4/IPC 零改动。
+>
+> **增量注记（260910 第 33 轮反馈修订·排版修复 + 子类入口）**：①§3.1 顶栏搜索框样式选择器 `.fav-search` 改 **`.fav-header .fav-search`**（0,2,0 特异度）——全局 `.field{width:100%}` 同特异度且注入顺序在后，曾反杀 210px 定宽把 tab 行挤到 0 宽、按钮溢出视口（首发即埋、首次冒烟暴露；`.rs-input .field` 同款解法）；§3.4 管理弹窗新增子类/新增大类输入行 `.fav-cat-add .field` 同理已带父级特异度。②子类创建入口补两处——主视图当前大类分组区尾「＋ 新增子类」行内入口（`.fav-add-sub`，就地输入 `addCategory(name, curTop.id)`，未分类系统锁定类不显示、切大类自动收起）；§3.4 大类行「新增子类」按钮由纯图标改带「＋ 子类」文字胶囊（`.fav-cat-sub-btn`）。仍仅渲染层两文件。
 
 ## 0. 命名与常量
 

@@ -6,7 +6,7 @@ import ePub from 'epubjs'
 import type { Book, Contents, NavItem, Rendition } from 'epubjs'
 import type { BooksNote, BooksRecord, Theme } from '../../shared/types'
 import { parseReaderKey, dirOfKey, createHoldScroller, type ReadingMode } from './readerKeys'
-import type { ReaderLocate, ReaderTocItem } from './ReaderSidebar'
+import { flattenToc, type ReaderLocate, type ReaderTocItem } from './ReaderSidebar'
 
 export interface EpubReaderHandle {
   /** 跳到 CFI（笔记页签回跳） */
@@ -39,14 +39,27 @@ interface Props {
   fontScale: number | null
 }
 
-/** NavItem → 侧栏目录树（subitems 递归，深于 4 层剪枝） */
-function convertToc(items: NavItem[] | undefined, depth = 0): ReaderTocItem[] {
+/** 目录 href → spine 序号（去锚点解析；解析失败 undefined → 区间判定跳过该项。书签优化轮 §一） */
+function resolveSpineIndex(spine: Book['spine'], href: string | undefined): number | undefined {
+  if (!href) return undefined
+  const file = href.split('#')[0]
+  if (!file) return undefined
+  try {
+    return spine.get(file)?.index ?? spine.get(href)?.index ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** NavItem → 侧栏目录树（subitems 递归，深于 4 层剪枝；书签优化轮：增 spineIndex 供「当前章」区间判定） */
+function convertToc(items: NavItem[] | undefined, spine: Book['spine'], depth = 0): ReaderTocItem[] {
   if (!items || depth > 4) return []
   return items
     .map((it) => ({
       label: (it.label ?? '').trim(),
       href: it.href,
-      children: convertToc(it.subitems, depth + 1)
+      spineIndex: resolveSpineIndex(spine, it.href),
+      children: convertToc(it.subitems, spine, depth + 1)
     }))
     .filter((it) => it.label || it.children.length > 0)
 }
@@ -132,6 +145,8 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
   const lastSaveRef = useRef(0)
   const spineIdxRef = useRef(0)
   const curCfiRef = useRef<string | null>(null)
+  /** 拍平目录（含锚点；章节锚点解析候选——书签反馈修订） */
+  const flatTocRef = useRef<ReaderTocItem[]>([])
   const notesRef = useRef<BooksNote[]>([])
   notesRef.current = notes
   /** 已渲染标注：cfi → 是否带下划线（diff 增删） */
@@ -318,14 +333,23 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
       }
     })
     rendition.on('relocated', (loc: unknown) => {
-      const l = loc as { start?: { cfi?: string; index?: number; percentage?: number; href?: string } }
+      const l = loc as { start?: { cfi?: string; index?: number; href?: string } }
       const cfi = l.start?.cfi ?? null
       if (typeof l.start?.index === 'number') spineIdxRef.current = l.start.index
       if (cfi) curCfiRef.current = cfi
-      if (l.start?.href) props.onLocate({ href: l.start.href })
+      if (l.start?.href) props.onLocate({ href: chapterHrefAt() ?? l.start.href, spineIndex: l.start.index })
       const bk2 = bookRef.current
-      let percent = l.start?.percentage ?? 0
-      if (bk2?.locations?.length() && cfi) percent = bk2.locations.percentageFromCfi(cfi) ?? percent
+      // 百分比（书签反馈修订）：locations 有产出用 percentageFromCfi；否则 spine 粒度粗估兜底。
+      // 不用 l.start.percentage——locations 生成失败时 epub.js 会算出 -1/-1 = 1 的假 100%
+      let percent: number | null = null
+      if (bk2?.locations?.length() && cfi) {
+        const p = bk2.locations.percentageFromCfi(cfi)
+        if (typeof p === 'number') percent = p
+      }
+      if (percent == null) {
+        const n = (bk2?.spine as unknown as { spineItems?: unknown[] } | undefined)?.spineItems?.length ?? 0
+        percent = n > 1 ? Math.min(Math.max(spineIdxRef.current, 0), n - 1) / (n - 1) : 0
+      }
       pendingRef.current = { cfi, percent }
       props.onProgress(`${Math.round(percent * 100)}%`)
       const now = Date.now()
@@ -368,6 +392,38 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     if (target?.href) void renditionRef.current?.display(target.href)
   }
 
+  /** 当前位置的同文件目录锚点 href（书签反馈修订）：「一册一个大 html、章靠锚点」的书，
+   *  文件粒度区间会取到同文件最后一条（如网络资料）——用当前 CFI 的 Range 与锚点元素
+   *  comparePoint 做文档内定位；锚点不可解析回落同文件无锚点条目（册名），再回落 null。 */
+  const chapterHrefAt = (): string | null => {
+    const rendition = renditionRef.current
+    const sameFile = flatTocRef.current.filter((it) => it.spineIndex === spineIdxRef.current)
+    if (sameFile.length === 0) return null
+    const fragOnes = sameFile.filter((it) => it.href != null && it.href.includes('#'))
+    if (fragOnes.length > 0 && rendition && curCfiRef.current) {
+      try {
+        const range = rendition.getRange(curCfiRef.current)
+        const doc = range?.startContainer?.ownerDocument
+        if (range && doc) {
+          let best: string | null = null
+          for (const it of fragOnes) {
+            const el = doc.getElementById((it.href as string).split('#')[1] ?? '')
+            if (!el) continue
+            try {
+              if (range.comparePoint(el, 0) <= 0) best = it.href as string // 锚点在当前位置之前（含所在处）
+            } catch {
+              /* 节点不在当前文档等，跳过该锚点 */
+            }
+          }
+          if (best) return best
+        }
+      } catch {
+        /* getRange 失败（所在章未渲染等）→ 回落 */
+      }
+    }
+    return sameFile.find((it) => it.href && !it.href.includes('#'))?.href ?? null
+  }
+
   // 打开书籍（book.id 变化即换书；模式切换由父级换 key 全量重挂——同 Book 重建 rendition
   // 在 scroll→page 方向实测空白（260909 开发者反馈），彻底重开最稳）
   useEffect(() => {
@@ -378,9 +434,13 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
       const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
       const bk = ePub(ab)
       bookRef.current = bk
-      // 目录上报（navigation 就绪后一次）
-      void bk.loaded.navigation
-        .then((nav) => props.onToc(convertToc(nav.toc)))
+      // 目录上报（navigation + spine 就绪后一次；书签优化轮：spine 用于解析章节 spineIndex）
+      void Promise.all([bk.loaded.navigation, bk.loaded.spine])
+        .then(([nav]) => {
+          const items = convertToc(nav.toc, bk.spine)
+          flatTocRef.current = flattenToc(items)
+          props.onToc(items)
+        })
         .catch(() => undefined)
       createRendition()
       // locations 异步生成（大书较慢）；就绪前 relocated 的 percentage 走 epub.js 内置近似
@@ -404,6 +464,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
       renditionRef.current = null
       bookRef.current = null
       renderedRef.current.clear()
+      flatTocRef.current = []
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id])

@@ -503,8 +503,9 @@ export function CategoryManagerDialog(props: ManagerProps) {
       {!c.is_system && (
         <div className="row-actions">
           {!child && (
-            <button className="icon-btn" title="新增子类" onClick={() => { setAddChildFor(addChildFor === c.id ? null : c.id); setChildText('') }}>
+            <button className="fav-cat-sub-btn" title="新增子类" onClick={() => { setAddChildFor(addChildFor === c.id ? null : c.id); setChildText('') }}>
               <span className="material-symbols-outlined">add</span>
+              子类
             </button>
           )}
           <button className="icon-btn" title="上移" onClick={() => void doMove(c.id, 'up')}>

@@ -799,6 +799,13 @@ function migrate(): void {
     )`)
     d.exec('PRAGMA user_version = 29')
   }
+
+  if (version < 30) {
+    // v30：书架书签优化（2026-09-10-书架书签章节名与备注-design.md §三）——书签加备注列。
+    // label 改「章节名 · 位置」口径由渲染层生成，存量行不迁移（想要精修手动改名）。
+    d.exec(`ALTER TABLE book_marks ADD COLUMN note TEXT NOT NULL DEFAULT ''`)
+    d.exec('PRAGMA user_version = 30')
+  }
 }
 
 // ---------- 通用工具 ----------

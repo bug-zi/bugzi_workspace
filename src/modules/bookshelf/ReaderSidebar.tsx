@@ -1,5 +1,6 @@
-// 阅读侧栏（书架优化第1轮 §8.4/§8.5 + v2.0 §二/§三）：目录 | 笔记 | 书签 三页签展示组件
+// 阅读侧栏（书架优化第1轮 §8.4/§8.5 + v2.0 §二/§三 + 书签优化轮 §四）：目录 | 笔记 | 书签 三页签展示组件
 // （引擎无关，跳转/删除经回调上行；笔记总览入口仅 epub）
+import { useState } from 'react'
 import type { BookMark, BooksNote } from '../../shared/types'
 
 /** 目录树节点（epub href 跳转 / pdf 页码跳转，二选一有值） */
@@ -7,6 +8,8 @@ export interface ReaderTocItem {
   label: string
   /** epub：章节 href（rendition.display 直达） */
   href?: string
+  /** epub：spine 序号（书签优化轮 §一，「当前章」区间判定用；解析失败缺省） */
+  spineIndex?: number
   /** pdf：目标页码（1 基） */
   page?: number
   children?: ReaderTocItem[]
@@ -15,6 +18,8 @@ export interface ReaderTocItem {
 /** 当前位置（epub 传 href，pdf 传当前页码） */
 export interface ReaderLocate {
   href?: string
+  /** epub：当前 spine 序号（书签优化轮 §一） */
+  spineIndex?: number
   page?: number
 }
 
@@ -34,6 +39,8 @@ export interface ReaderSidebarProps {
   onDeleteNote: (note: BooksNote) => void
   onJumpMark: (m: BookMark) => void
   onDeleteMark: (m: BookMark) => void
+  /** 书签改名/备注保存（模块层走 IPC；书签优化轮 §四） */
+  onUpdateMark: (id: number, m: { label: string; note: string }) => void
   /** 笔记总览入口（仅 epub 传；不传不显示按钮——书架 v2.0 §三） */
   onOverview?: () => void
   onCollapse: () => void
@@ -69,6 +76,16 @@ export function tocAnchorAt(items: ReaderTocItem[], page: number): ReaderTocItem
   return hit
 }
 
+/** 当前 spine 序号落在的目录章节（DFS 序最后一个 spineIndex ≤ 当前的节点；书签优化轮 §一，与 tocAnchorAt 同构） */
+export function epubChapterAt(items: ReaderTocItem[], spineIndex: number): ReaderTocItem | null {
+  let hit: ReaderTocItem | null = null
+  for (const it of flattenToc(items)) {
+    if (it.spineIndex != null && it.spineIndex <= spineIndex) hit = it
+    else if (it.spineIndex != null && hit) break
+  }
+  return hit
+}
+
 /** 目录树渲染（递归缩进，不折叠子树） */
 function TocTree(props: {
   items: ReaderTocItem[]
@@ -99,8 +116,95 @@ function TocTree(props: {
   )
 }
 
+/** 单条书签行：常态（label + 备注小字 + hover 编辑/删除）与行内编辑态（书签优化轮 §四） */
+function MarkItem(props: {
+  mark: BookMark
+  onJump: (m: BookMark) => void
+  onDelete: (m: BookMark) => void
+  onUpdate: (id: number, m: { label: string; note: string }) => void
+}) {
+  const { mark, onJump, onDelete, onUpdate } = props
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState('')
+  const [note, setNote] = useState('')
+  const startEdit = (): void => {
+    setLabel(mark.label)
+    setNote(mark.note)
+    setEditing(true)
+  }
+  const save = (): void => {
+    const t = label.trim()
+    if (!t) return // 空名兜底（保存按钮已禁用）
+    onUpdate(mark.id, { label: t, note: note.trim() })
+    setEditing(false)
+  }
+  if (editing) {
+    return (
+      <div className="bk-note-item bk-mark-editing" onClick={(e) => e.stopPropagation()}>
+        <input
+          className="bk-mark-label-input"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+            else if (e.key === 'Escape') setEditing(false)
+          }}
+          placeholder="书签名"
+          autoFocus
+        />
+        <textarea
+          className="bk-mark-note-input"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="写点备注…可留空"
+          rows={2}
+        />
+        <div className="bk-mark-edit-row">
+          <button className="btn" disabled={!label.trim()} onClick={save}>
+            保存
+          </button>
+          <button className="btn btn-ghost" onClick={() => setEditing(false)}>
+            取消
+          </button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="bk-note-item" onClick={() => onJump(mark)} title="点击跳回书签位置">
+      <div className="bk-note-quote">{mark.label}</div>
+      {mark.note && <div className="bk-note-text">{mark.note}</div>}
+      <div className="bk-note-foot">
+        <span>书签 · {relTime(mark.created_at)}</span>
+        <span className="bk-mark-actions">
+          <button
+            className="bk-mark-edit-btn"
+            title="编辑书签（改名 / 备注）"
+            onClick={(e) => {
+              e.stopPropagation()
+              startEdit()
+            }}
+          >
+            <span className="material-symbols-outlined">edit</span>
+          </button>
+          <button
+            className="bk-note-del"
+            title="删除书签"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(mark)
+            }}
+          >
+            <span className="material-symbols-outlined">delete</span>
+          </button>
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export default function ReaderSidebar(props: ReaderSidebarProps) {
-  const { tab, onTabChange, toc, locate, notes, marks, onJumpToc, onJumpNote, onDeleteNote, onJumpMark, onDeleteMark, onOverview, onCollapse } = props
+  const { tab, onTabChange, toc, locate, notes, marks, onJumpToc, onJumpNote, onDeleteNote, onJumpMark, onDeleteMark, onUpdateMark, onOverview, onCollapse } = props
   // pdf 区间判定：当前页落在的目录节点（按 label 匹配标 active）；epub 用 href 精确匹配
   const anchor = locate?.page != null ? tocAnchorAt(toc, locate.page) : null
   const activeLabel = locate?.href ? (toc.find((t) => t.href === locate.href)?.label ?? null) : anchor?.label ?? null
@@ -138,22 +242,7 @@ export default function ReaderSidebar(props: ReaderSidebarProps) {
             <div className="bk-sidebar-empty">点阅读条的书签按钮，收藏当前位置</div>
           ) : (
             marks.map((m) => (
-              <div key={m.id} className="bk-note-item" onClick={() => onJumpMark(m)} title="点击跳回书签位置">
-                <div className="bk-note-quote">{m.label}</div>
-                <div className="bk-note-foot">
-                  <span>书签 · {relTime(m.created_at)}</span>
-                  <button
-                    className="bk-note-del"
-                    title="删除书签"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDeleteMark(m)
-                    }}
-                  >
-                    <span className="material-symbols-outlined">delete</span>
-                  </button>
-                </div>
-              </div>
+              <MarkItem key={m.id} mark={m} onJump={onJumpMark} onDelete={onDeleteMark} onUpdate={onUpdateMark} />
             ))
           )
         ) : tab === 'toc' ? (

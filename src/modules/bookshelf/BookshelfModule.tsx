@@ -10,7 +10,7 @@ import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import EpubReader, { type EpubReaderHandle } from './EpubReader'
 import PdfReader, { type PdfReaderHandle } from './PdfReader'
-import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
+import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, epubChapterAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
 import { useReadingTimer } from './useReadingTimer'
 import type { ReadingMode } from './readerKeys'
 import './bookshelf.css'
@@ -220,7 +220,7 @@ export default function BookshelfModule() {
     if (target) setConfirmNote(target)
   }, [])
 
-  /** 加书签：当前位置 + 章节名 label；同位置去重 toast（书架 v2.0 §二） */
+  /** 加书签：当前位置 + label「章节名 · 位置」（书签优化轮 §二，区间锚点解析）；同位置去重 toast */
   const addBookmark = (): void => {
     if (!reading) return
     if (reading.format === 'epub') {
@@ -233,8 +233,12 @@ export default function BookshelfModule() {
         toast('已有书签')
         return
       }
-      const label =
-        flattenToc(toc).find((it) => it.href === locate?.href)?.label || `约 ${Math.round(cur.percent * 100)}%`
+      const pct = Math.round(cur.percent * 100)
+      // 反馈修订：locate.href 为锚点级解析结果（含 #anchor）时精确命中真章节；回落文件粒度区间
+      const anchor = flattenToc(toc).find((it) => it.href === locate?.href)?.label ?? null
+      const chapter =
+        anchor ?? (locate?.spineIndex != null ? (epubChapterAt(toc, locate.spineIndex)?.label ?? null) : null)
+      const label = chapter ? `${chapter} · ${pct}%` : `约 ${pct}%`
       void window.api.books.markAdd(reading.id, { cfi: cur.cfi, label }).then((row) => {
         setMarks((prev) => [row, ...prev])
         toast('已加书签')
@@ -245,7 +249,8 @@ export default function BookshelfModule() {
         toast('已有书签')
         return
       }
-      const label = tocAnchorAt(toc, page)?.label || `第 ${page} 页`
+      const anchor = tocAnchorAt(toc, page)?.label
+      const label = anchor ? `${anchor} · 第 ${page} 页` : `第 ${page} 页`
       void window.api.books.markAdd(reading.id, { page, label }).then((row) => {
         setMarks((prev) => [row, ...prev])
         toast('已加书签')
@@ -257,6 +262,17 @@ export default function BookshelfModule() {
   const jumpMark = (m: BookMark): void => {
     if (reading?.format === 'epub' && m.cfi) epubRef.current?.jumpToCfi(m.cfi)
     else if (reading?.format === 'pdf' && m.page != null) pdfRef.current?.jumpToPage(m.page)
+  }
+
+  /** 书签改名/备注保存（书签优化轮 §四）：整行回填本地 */
+  const updateMark = (id: number, m: { label: string; note: string }): void => {
+    void window.api.books
+      .markUpdate(id, m)
+      .then((row) => {
+        setMarks((prev) => prev.map((x) => (x.id === id ? row : x)))
+        toast('已保存')
+      })
+      .catch(() => toast('保存失败'))
   }
 
   /** 书签删除确认后执行（彻底删除不入回收站） */
@@ -402,6 +418,7 @@ export default function BookshelfModule() {
               onDeleteNote={(n) => setConfirmNote(n)}
               onJumpMark={jumpMark}
               onDeleteMark={(m) => setConfirmMark(m)}
+              onUpdateMark={updateMark}
               onOverview={reading.format === 'epub' ? () => void openOverview() : undefined}
               onCollapse={() => setSide((s) => ({ ...s, open: false }))}
             />

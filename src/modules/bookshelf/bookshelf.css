@@ -371,6 +371,52 @@
   color: #fff;
 }
 
+/* ===== 书签行内编辑（书签优化轮 §四） ===== */
+.bk-mark-actions {
+  display: flex;
+  gap: 2px;
+}
+.bk-mark-edit-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+}
+.bk-mark-edit-btn:hover {
+  background: var(--color-primary);
+  color: var(--color-text);
+}
+.bk-mark-editing {
+  cursor: default;
+  gap: 6px;
+}
+.bk-mark-label-input,
+.bk-mark-note-input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  padding: 4px 8px;
+}
+.bk-mark-label-input:focus,
+.bk-mark-note-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.bk-mark-note-input {
+  resize: vertical;
+  min-height: 44px;
+  line-height: 1.55;
+}
+.bk-mark-edit-row {
+  display: flex;
+  gap: 6px;
+}
+
 /* ===== 划词/标注气泡（优化第1轮 §8.5，epub 专用；挂 host 内随滚动） ===== */
 .bk-sel-bubble {
   position: absolute;

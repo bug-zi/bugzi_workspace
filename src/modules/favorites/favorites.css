@@ -19,7 +19,9 @@
   overflow-x: auto;
   flex-wrap: nowrap;
 }
-.fav-search {
+/* 后代选择器提特异度：全局 .field{width:100%}（同特异度 0,1,0、注入顺序在后）会反杀裸 .fav-search，
+   曾把搜索框撑到 100% 宽挤死 tab 行——rs-input .field 同款解法 */
+.fav-header .fav-search {
   width: 210px;
   flex-shrink: 0;
 }
@@ -328,4 +330,117 @@
   font-size: 0.78em;
   color: var(--color-text-secondary);
   line-height: 1.6;
+}
+
+/* tab 行尾「+」一键建大类 + 弹出小输入框（可发现性优化） */
+.fav-tab-add {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.fav-tab-add-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 18px; /* 与 recycle-tab 胶囊同款 */
+  border: 1px dashed var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.fav-tab-add-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.fav-tab-add-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+.fav-quick-add {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10; /* 盖普通内容，低于弹窗遮罩(20) */
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2); /* action-menu 同款 */
+}
+.fav-quick-add .field {
+  width: 150px;
+}
+
+/* 零分类引导行（已有收藏但只有「未分类」时显示） */
+.fav-cat-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+}
+.fav-cat-hint-row .material-symbols-outlined {
+  font-size: 15px;
+  color: var(--color-primary);
+}
+
+/* 主视图大类分组区尾「＋ 新增子类」入口与行内输入 */
+.fav-add-sub {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.fav-add-sub .field {
+  width: 240px; /* (0,2,0) 防 .field{width:100%} 反杀 */
+  flex-shrink: 0;
+}
+.fav-add-sub-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.82em;
+  cursor: pointer;
+}
+.fav-add-sub-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.fav-add-sub-btn .material-symbols-outlined {
+  font-size: 15px;
+}
+
+/* 分类管理大类行「+ 子类」带字按钮（原纯图标不可发现） */
+.fav-cat-sub-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.fav-cat-sub-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.fav-cat-sub-btn .material-symbols-outlined {
+  font-size: 14px;
 }
