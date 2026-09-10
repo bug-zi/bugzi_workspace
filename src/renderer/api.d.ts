@@ -64,6 +64,10 @@ export interface WikiSection {
   created_at: string
 }
 
+/** wiki_entries.state 三态（DB v31，260910 待学习区）：
+ *  pool=后库储备（用户不可见，抽卡消耗）| learn=待学习区 | learned=已学会正式词条 */
+export type WikiEntryState = 'pool' | 'learn' | 'learned'
+
 export interface WikiEntry {
   id: number
   section_id: number
@@ -71,9 +75,15 @@ export interface WikiEntry {
   summary: string
   md_path: string
   origin: 'ai' | 'manual'
+  state: WikiEntryState
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+/** 待学习区列表行（wiki.learnEntries 返回）：词条 + 所属板块名 */
+export interface WikiLearnRow extends WikiEntry {
+  section_name: string
 }
 
 export interface WikiHighlightRow {
@@ -144,6 +154,8 @@ export interface BooksRecord {
   reading_mode: 'scroll' | 'page' | null
   /** epub 字号倍率 0.75~1.5；NULL=跟随个人档全局字体大小 */
   font_scale: number | null
+  /** epub 书级字体族 CSS 串（字体选择轮 §1.2）；NULL=跟随个人档全局字体 */
+  font_family: string | null
 }
 
 /** 书架导入结果：duplicate 由前端弹确认后 force 重导 */
@@ -892,7 +904,10 @@ export interface Api {
     /** 书签改名/备注（只传要改的字段，返回更新后整行） */
     markUpdate(markId: number, m: { label?: string; note?: string }): Promise<BookMark>
     /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
-    setReadingPref(bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }): Promise<boolean>
+    setReadingPref(
+      bookId: number,
+      p: { mode?: 'scroll' | 'page'; fontScale?: number | null; fontFamily?: string | null }
+    ): Promise<boolean>
     /** 阅读时长累计（30 秒批量 flush） */
     addReadTime(bookId: number, seconds: number): Promise<boolean>
     /** 阅读统计聚合 */
@@ -1002,16 +1017,28 @@ export interface Api {
     createSection(name: string): Promise<number>
     renameSection(id: number, name: string): Promise<boolean>
     deleteSection(id: number): Promise<boolean>
+    /** 板块词条列表（只含已学会 state='learned'；learn 态在待学习区、pool 态用户不可见） */
     entries(sectionId: number): Promise<WikiEntry[]>
     entry(id: number): Promise<WikiEntry>
     updateEntry(id: number, term: string, summary: string): Promise<boolean>
+    /** 生成（260910 待学习区）：随机（term=null）先抽后库池卡秒回、池空兜底现场生成；
+     *  结果一律 state='learn' 入待学习区；手动输入撞词返回 conflict + 原词条 id（conflictId） */
     generate(
       jobId: string,
       term: string | null,
       sectionId: number | null
     ): Promise<
-      { ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }
+      | { ok: true; data: { entryId: number; term: string; summary: string } }
+      | { ok: false; conflict: string; conflictId: number | null }
     >
+    /** 待学习区列表（state='learn' 联表板块名，新卡在前） */
+    learnEntries(): Promise<WikiLearnRow[]>
+    /** 学会了/已学会 切换（learn ↔ learned） */
+    setLearned(id: number, learned: boolean): Promise<boolean>
+    /** 后库补充泵触发（进模块）：fire-and-forget 秒回 */
+    stockCheck(): Promise<boolean>
+    /** 后库/每日批次入库渐进通知（照 reasoning.onStockChanged 模式），返回取消订阅 */
+    onStockChanged(cb: () => void): () => void
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
     suggestTerm(jobId: string, sectionId: number | null): Promise<string>
     /** 测一测：随机 5 张卡片各出 1 道四选一 */

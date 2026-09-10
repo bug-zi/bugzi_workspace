@@ -316,16 +316,19 @@ export function removeMark(markId: number): void {
   getDb().prepare('DELETE FROM book_marks WHERE id = ?').run(markId)
 }
 
-/** 书级阅读偏好（书架 v2.0 §四）：只传要改的字段；fontScale 传 null 清除（回落全局字体） */
+/** 书级阅读偏好（书架 v2.0 §四）：只传要改的字段；fontScale/fontFamily 传 null 清除（回落全局） */
 export function setReadingPref(
   bookId: number,
-  p: { mode?: 'scroll' | 'page'; fontScale?: number | null }
+  p: { mode?: 'scroll' | 'page'; fontScale?: number | null; fontFamily?: string | null }
 ): void {
   if (p.mode != null) {
     getDb().prepare('UPDATE books SET reading_mode = ? WHERE id = ?').run(p.mode, bookId)
   }
   if (p.fontScale !== undefined) {
     getDb().prepare('UPDATE books SET font_scale = ? WHERE id = ?').run(p.fontScale, bookId)
+  }
+  if (p.fontFamily !== undefined) {
+    getDb().prepare('UPDATE books SET font_family = ? WHERE id = ?').run(p.fontFamily ?? null, bookId)
   }
 }
 

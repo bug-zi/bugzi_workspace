@@ -35,6 +35,15 @@ export interface MdDialogProps {
     onDiscard: () => void
     onDelete: () => void
   }
+  /** 万象库待学习卡片（260910 待学习区）：底部操作条——learn 态三钮（直接删除/丢弃/学会了）、
+   *  learned 态单钮（已学会，点击移回待学习区；onDiscard/onDelete 不传则不渲染）。
+   *  关闭/遮罩/Esc = 留在待学习区，不强制三选一（区别于 review 流，头部关闭钮保留）。 */
+  learnBar?: {
+    learned: boolean
+    onToggle: () => void
+    onDiscard?: () => void
+    onDelete?: () => void
+  }
   /** 致知己版本化扩展（致知己 specs §2）：版本切换条 + 保存即版本 + 让 AI 追问 */
   versioned?: {
     /** 全部版本（seq 倒序），label 如 v3-260905 */
@@ -57,7 +66,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, versioned, eventToggle, autoEdit, sidePanel } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, versioned, eventToggle, autoEdit, sidePanel } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -370,6 +379,32 @@ export default function MdDialog(props: MdDialogProps) {
             <button className="btn btn-primary" onClick={close}>
               加入
             </button>
+          </div>
+        )}
+        {/* 待学习操作条（260910 万象库待学习区）：学会了才进板块；learned 态只留切换钮。
+            关闭（头部/遮罩/Esc）= 留在待学习区，不强制三选一。 */}
+        {learnBar && !editing && (
+          <div className="dialog-footer">
+            {learnBar.onDelete && (
+              <button className="btn btn-danger-deep" onClick={learnBar.onDelete}>
+                直接删除
+              </button>
+            )}
+            {learnBar.onDiscard && (
+              <button className="btn btn-danger" onClick={learnBar.onDiscard}>
+                丢弃
+              </button>
+            )}
+            {learnBar.learned ? (
+              <button className="btn" onClick={learnBar.onToggle} title="点击移回待学习区">
+                <span className="material-symbols-outlined">task_alt</span>
+                已学会
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={learnBar.onToggle} title="学会了才加入板块">
+                学会了
+              </button>
+            )}
           </div>
         )}
       </div>

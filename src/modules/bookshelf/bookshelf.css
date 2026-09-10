@@ -447,6 +447,10 @@
   gap: 4px;
   justify-content: flex-end;
 }
+/* 高光/批注两键并排居中（字体选择轮 §三横排） */
+.bk-sel-row-center {
+  justify-content: center;
+}
 .bk-sel-row button {
   border: none;
   background: transparent;

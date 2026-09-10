@@ -13,6 +13,8 @@ import PdfReader, { type PdfReaderHandle } from './PdfReader'
 import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, epubChapterAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
 import { useReadingTimer } from './useReadingTimer'
 import type { ReadingMode } from './readerKeys'
+import ActionMenu from '../../components/ActionMenu'
+import { FONT_FAMILIES, READER_FONTS } from '../../theme/fonts'
 import './bookshelf.css'
 
 /** 卡片进度角标：读过显百分比，没读过显「未读」 */
@@ -42,7 +44,7 @@ function fmtNow(): string {
 
 export default function BookshelfModule() {
   const { toast } = useToast()
-  const { theme } = useAppSettings()
+  const { theme, settings } = useAppSettings()
   const [items, setItems] = useState<BooksRecord[]>([])
   const [reading, setReading] = useState<BooksRecord | null>(null)
   const [readerLabel, setReaderLabel] = useState('')
@@ -72,6 +74,8 @@ export default function BookshelfModule() {
   /** 笔记最新值（EpubReader 挂载 effect 捕获的回调里做查重用） */
   const notesRef = useRef<BooksNote[]>([])
   notesRef.current = notes ?? []
+  /** 字体浮层锚点（null=关） */
+  const [fontAnchor, setFontAnchor] = useState<HTMLButtonElement | null>(null)
 
   const load = useCallback(async () => {
     setItems(await window.api.books.list())
@@ -303,6 +307,20 @@ export default function BookshelfModule() {
     })
   }
 
+  /** 书级字体设置（null=跟随全局；字体选择轮 §1.2，镜像 stepFont） */
+  const setBookFont = (value: string | null): void => {
+    if (!reading || reading.format !== 'epub') return
+    void window.api.books.setReadingPref(reading.id, { fontFamily: value }).then(() => {
+      setReading((r) => (r && r.id === reading.id ? { ...r, font_family: value } : r))
+    })
+  }
+
+  /** 「跟随全局（X）」动态名：反查个人档全局字体；未设置=系统 */
+  const globalFontName = (): string => {
+    const hit = FONT_FAMILIES.find((f) => f.value === settings[SettingsKeys.FontFamily])
+    return hit ? hit.label.split('（')[0] : '系统'
+  }
+
   /** 笔记总览：按需生成内容快照开弹窗（书架 v2.0 §三） */
   const openOverview = async (): Promise<void> => {
     if (!reading) return
@@ -387,6 +405,13 @@ export default function BookshelfModule() {
                   默认
                 </button>
               )}
+              <button
+                className="btn bk-bar-btn"
+                onClick={(e) => setFontAnchor(e.currentTarget)}
+                title="字体（每书独立记忆）"
+              >
+                <span className="material-symbols-outlined">font_download</span>
+              </button>
             </>
           )}
           <button className="btn bk-bar-btn" onClick={addBookmark} title="收藏当前位置为书签">
@@ -404,6 +429,28 @@ export default function BookshelfModule() {
             {mode === 'scroll' ? '滚动' : '翻页'}
           </button>
         </div>
+        {fontAnchor && (
+          <ActionMenu
+            anchorEl={fontAnchor}
+            onClose={() => setFontAnchor(null)}
+            items={[
+              {
+                key: 'follow',
+                icon: reading.font_family == null ? 'check' : undefined,
+                label: `跟随全局（${globalFontName()}）`,
+                onClick: () => setBookFont(null)
+              },
+              ...READER_FONTS.map((f) => ({
+                key: f.family,
+                icon: reading.font_family === f.value ? 'check' : undefined,
+                label: f.label,
+                style: { fontFamily: f.value },
+                separatorAbove: f.family === 'Liyu Shoushu',
+                onClick: () => setBookFont(f.value)
+              }))
+            ]}
+          />
+        )}
         <div className={`bk-reader-flex${side.open ? ' with-side' : ''}`}>
           {side.open && (
             <ReaderSidebar
@@ -433,6 +480,7 @@ export default function BookshelfModule() {
                 mode={mode}
                 notes={notes ?? []}
                 fontScale={reading.font_scale}
+                fontFamily={reading.font_family}
                 onProgress={setReaderLabel}
                 onToc={onToc}
                 onLocate={onLocateCb}

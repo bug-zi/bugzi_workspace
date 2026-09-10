@@ -7,6 +7,7 @@ import { registerIpc, settleTurtleTimers } from './ipc'
 import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
 import { ensureReasoningStock } from './services/reasoningStock'
+import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { applyDataDirAtStartup } from './services/storage'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
@@ -79,6 +80,12 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(() => void backfillTrickNotes(), 10_000).unref()
     // 推理角题库预生成泵（v1.3）：同样错开启动高峰；存量达标即 no-op，内部自 catch 永不抛错
     setTimeout(() => void ensureReasoningStock(), 10_000).unref()
+    // 万象库待学习区（260910）：每日批次（5-10 张板块均摊，settings 幂等）+ 后库泵
+    // （每板块 3 张池卡），同样错开启动高峰；静默失败，LLM 未配置跳过且不记日期
+    setTimeout(() => {
+      void ensureDailyLearn()
+      void ensureWikiStock()
+    }, 10_000).unref()
     createWindow()
 
     app.on('activate', () => {

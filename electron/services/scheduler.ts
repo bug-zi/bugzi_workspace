@@ -5,6 +5,7 @@ import { SettingsKeys } from '../../src/shared/types'
 import { generateMottos } from '../ai/services'
 import { cleanupExpired } from './recycle'
 import { cleanupOldArticleBodies } from './feed'
+import { ensureDailyLearn } from './wikiStock'
 
 let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
@@ -80,6 +81,8 @@ export function scheduleMidnightCleanup(): void {
     } catch (e) {
       console.warn(`[scheduler] 回收站清理失败：${(e as Error).message}`)
     }
+    // 万象库每日待学习批次（260910）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
+    void ensureDailyLearn()
     scheduleMidnightCleanup()
   }, msUntilMidnight())
   midnightTimer.unref?.()

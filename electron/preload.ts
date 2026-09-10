@@ -182,8 +182,10 @@ const api = {
       jobId: string,
       term: string | null,
       sectionId: number | null
-    ): Promise<{ ok: true; data: { entryId: number; term: string; summary: string } } | { ok: false; conflict: string }> =>
-      ipcRenderer.invoke('wiki:generate', jobId, term, sectionId),
+    ): Promise<
+      | { ok: true; data: { entryId: number; term: string; summary: string } }
+      | { ok: false; conflict: string; conflictId: number | null }
+    > => ipcRenderer.invoke('wiki:generate', jobId, term, sectionId),
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
     suggestTerm: (jobId: string, sectionId: number | null): Promise<string> =>
       ipcRenderer.invoke('wiki:suggestTerm', jobId, sectionId),
@@ -198,7 +200,22 @@ const api = {
     addHighlight: (entryId: number, text: string): Promise<boolean> =>
       ipcRenderer.invoke('wiki:addHighlight', entryId, text),
     deleteHighlight: (id: number): Promise<boolean> => ipcRenderer.invoke('wiki:deleteHighlight', id),
-    discardEntry: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'wiki_entries', id)
+    discardEntry: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'wiki_entries', id),
+    /** 待学习区（260910）：待学习卡片列表（联表板块名） */
+    learnEntries: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:learnEntries'),
+    /** 学会了/已学会 切换（learn ↔ learned） */
+    setLearned: (id: number, learned: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:setLearned', id, learned),
+    /** 后库补充泵触发（进模块）：fire-and-forget 秒回 */
+    stockCheck: (): Promise<boolean> => ipcRenderer.invoke('wiki:stockCheck'),
+    /** 后库/每日批次入库渐进通知，返回取消订阅 */
+    onStockChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('wiki:stockChanged', listener)
+      return () => ipcRenderer.removeListener('wiki:stockChanged', listener)
+    }
   },
   inspirations: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('inspirations:list'),
@@ -488,10 +505,10 @@ const api = {
       m: { label?: string; note?: string }
     ): Promise<import('../src/shared/types').BookMark> =>
       ipcRenderer.invoke('books:markUpdate', markId, m),
-    /** 书级阅读偏好（只传要改的字段；fontScale null 清除回落全局） */
+    /** 书级阅读偏好（只传要改的字段；fontScale/fontFamily null 清除回落全局） */
     setReadingPref: (
       bookId: number,
-      p: { mode?: 'scroll' | 'page'; fontScale?: number | null }
+      p: { mode?: 'scroll' | 'page'; fontScale?: number | null; fontFamily?: string | null }
     ): Promise<boolean> => ipcRenderer.invoke('books:setReadingPref', bookId, p),
     /** 阅读时长累计（30 秒批量 flush） */
     addReadTime: (bookId: number, seconds: number): Promise<boolean> =>

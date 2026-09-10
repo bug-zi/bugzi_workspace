@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import './ActionMenu.css'
 
 export interface ActionMenuItem {
   key: string
-  /** material symbols 图标名（禁 emoji） */
-  icon: string
+  /** material symbols 图标名（禁 emoji）；可选——不传不渲染图标位（字体选择轮：字体项无勾不占位） */
+  icon?: string
   label: string
   danger?: boolean
   separatorAbove?: boolean
+  /** 项级样式透传（字体选择轮：fontFamily 自渲染预览） */
+  style?: CSSProperties
   onClick: () => void
 }
 
@@ -73,12 +75,13 @@ export default function ActionMenu(props: ActionMenuProps) {
           {it.separatorAbove && <div className="action-menu-sep" />}
           <button
             className={`action-menu-item${it.danger ? ' danger' : ''}`}
+            style={it.style}
             onClick={() => {
               onClose()
               it.onClick()
             }}
           >
-            <span className="material-symbols-outlined">{it.icon}</span>
+            {it.icon && <span className="material-symbols-outlined">{it.icon}</span>}
             {it.label}
           </button>
         </div>

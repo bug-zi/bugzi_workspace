@@ -6,6 +6,7 @@ import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
+import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -456,13 +457,19 @@ export function registerIpc(): void {
   })
   ipcMain.handle('wiki:deleteSection', (_e, id: number) => {
     const d = getDb()
-    const count = d.prepare('SELECT COUNT(*) AS c FROM wiki_entries WHERE section_id = ? AND deleted_at IS NULL').get(id) as { c: number }
+    // 待学习/已学会词条仍阻删（原口径）；后库池卡用户不可见（260910 待学习区），
+    // 随板块物理清理（含 md）——不可成为「看起来空却删不掉」的死局；板块存续时泵会自动补回
+    const count = d.prepare("SELECT COUNT(*) AS c FROM wiki_entries WHERE section_id = ? AND deleted_at IS NULL AND state != 'pool'").get(id) as { c: number }
     if (count.c > 0) throw new Error('SECTION_NOT_EMPTY')
+    const poolRows = d.prepare("SELECT md_path FROM wiki_entries WHERE section_id = ? AND state = 'pool'").all(id) as { md_path: string | null }[]
+    d.prepare("DELETE FROM wiki_entries WHERE section_id = ? AND state = 'pool'").run(id)
+    for (const r of poolRows) if (r.md_path) mdDelete(r.md_path)
     d.prepare('DELETE FROM wiki_sections WHERE id = ?').run(id)
     return true
   })
+  // 板块页只列已学会词条（260910 待学习区）：learn 态在待学习区页、pool 态用户不可见
   ipcMain.handle('wiki:entries', (_e, sectionId: number) =>
-    getDb().prepare('SELECT * FROM wiki_entries WHERE section_id = ? AND deleted_at IS NULL ORDER BY id DESC').all(sectionId)
+    getDb().prepare("SELECT * FROM wiki_entries WHERE section_id = ? AND deleted_at IS NULL AND state = 'learned' ORDER BY id DESC").all(sectionId)
   )
   ipcMain.handle('wiki:entry', (_e, id: number) =>
     getDb().prepare('SELECT * FROM wiki_entries WHERE id = ?').get(id)
@@ -472,18 +479,51 @@ export function registerIpc(): void {
     return true
   })
   ipcMain.handle('wiki:generate', async (_e, jobId: string, term: string | null, sectionId: number | null) => {
+    // 随机抽卡池优先（260910 待学习区）：抽中池卡原地转 learn 态秒回（无 LLM 调用，
+    // 池卡入库时已查重故无 CONFLICT 路径），随后消耗后触发补泵；池空才兜底现场生成
+    if (!term) {
+      const drawn = drawPoolCard(sectionId)
+      if (drawn) {
+        void ensureWikiStock()
+        return { ok: true as const, data: { entryId: drawn.id, term: drawn.term, summary: drawn.summary } }
+      }
+    }
     const ac = beginJob(jobId)
     try {
       // 必须在此 await：若把 generateWikiCard 的 Promise 嵌进返回对象，
       // ipcMain.handle 只 await 顶层值，嵌套 Promise 序列化失败 → 渲染层 invoke 永不 settle（卡"生成中"）
+      // state='learn'（默认）：用户随机/手动生成的卡片一律先入待学习区
       return { ok: true as const, data: await generateWikiCard(term, sectionId, ac.signal) }
     } catch (e) {
       const msg = (e as Error).message
-      if (msg.startsWith('CONFLICT:')) return { ok: false as const, conflict: msg.slice(9) }
+      if (msg.startsWith('CONFLICT:')) {
+        // 撞词词条可能在待学习区（板块页 entries 只列 learned），主进程带回 id 供「查看原卡片」直达；
+        // 池卡（pool）用户不可见，跳过（仅池卡撞词时无跳转，只提示已存在）
+        const dup = getDb()
+          .prepare(
+            "SELECT id FROM wiki_entries WHERE term = ? AND deleted_at IS NULL AND state != 'pool' ORDER BY id LIMIT 1"
+          )
+          .get(msg.slice(9)) as { id: number } | undefined
+        return { ok: false as const, conflict: msg.slice(9), conflictId: dup?.id ?? null }
+      }
       throw e
     } finally {
       endJob(jobId)
     }
+  })
+  // 待学习列表（260910 待学习区）：state='learn' 联表板块名，新卡在前
+  ipcMain.handle('wiki:learnEntries', () =>
+    getDb().prepare("SELECT e.*, s.name AS section_name FROM wiki_entries e JOIN wiki_sections s ON e.section_id = s.id WHERE e.state = 'learn' AND e.deleted_at IS NULL ORDER BY e.id DESC").all()
+  )
+  // 学会了/已学会 切换：learn ↔ learned（state 守卫防误改池卡）
+  ipcMain.handle('wiki:setLearned', (_e, id: number, learned: boolean) => {
+    getDb().prepare("UPDATE wiki_entries SET state = ?, updated_at = ? WHERE id = ? AND state != 'pool'").run(learned ? 'learned' : 'learn', nowIso(), id)
+    return true
+  })
+  // 后库补充泵触发（进万象库模块，照 reasoning:stockCheck 模式）：fire-and-forget 秒回
+  ipcMain.handle('wiki:stockCheck', () => {
+    void ensureWikiStock()
+    return true
   })
   // 随机词条名（手动弹窗骰子/指定板块随机生成）：只构思词条名不生成卡片
   ipcMain.handle('wiki:suggestTerm', async (_e, jobId: string, sectionId: number | null) => {
@@ -844,7 +884,11 @@ export function registerIpc(): void {
   )
   ipcMain.handle(
     'books:setReadingPref',
-    (_e, bookId: number, p: { mode?: 'scroll' | 'page'; fontScale?: number | null }) => {
+    (
+      _e,
+      bookId: number,
+      p: { mode?: 'scroll' | 'page'; fontScale?: number | null; fontFamily?: string | null }
+    ) => {
       setReadingPref(bookId, p)
       return true
     }

@@ -1,7 +1,9 @@
-// 万象库模块（万象库 specs 全量）：总览/板块页/板块管理/卡片生成/划词/笔记本
+// 万象库模块（万象库 specs 全量）：总览/板块页/板块管理/卡片生成/划词/笔记本/待学习区
 // 260908 辩真阁并入：双板块「百科 | 辩真」（推理角同款 keep-alive 隐藏切换，验证中任务切板块不中断）
+// 260910 待学习区：生成卡片一律先入待学习区（state='learn'），弹窗「学会了」才进板块、可逆切换；
+// 随机抽卡后库池优先秒开（wikiStock 泵每板块维持 3 张），每日批次 5-10 张板块均摊自动入待学习区。
 import { useCallback, useEffect, useState } from 'react'
-import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion } from '../../renderer/api'
+import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion, WikiLearnRow } from '../../renderer/api'
 import type { AiChannel } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
@@ -15,7 +17,7 @@ export interface WikiModuleProps {
   bumpAi: () => void
 }
 
-type View = { kind: 'overview' } | { kind: 'section'; id: number } | { kind: 'notebook' } | { kind: 'quiz' }
+type View = { kind: 'overview' } | { kind: 'section'; id: number } | { kind: 'learn' } | { kind: 'notebook' } | { kind: 'quiz' }
 
 /** 手动生成弹窗的占位词条名示例：初始板块各配一个代表词，自定义板块用通用示例 */
 const SECTION_TERM_EXAMPLES: Record<string, string> = {
@@ -41,6 +43,8 @@ export default function WikiModule(props: WikiModuleProps) {
   const [entries, setEntries] = useState<WikiEntry[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
   const [highlights, setHighlights] = useState<WikiHighlightRow[]>([])
+  // 待学习区（260910）：state='learn' 卡片列表（联表板块名）
+  const [learnEntries, setLearnEntries] = useState<WikiLearnRow[]>([])
   // 卡片弹窗
   const [cardEntry, setCardEntry] = useState<WikiEntry | null>(null)
   const [mdVersion, setMdVersion] = useState(0)
@@ -76,8 +80,7 @@ export default function WikiModule(props: WikiModuleProps) {
   const [delHighlightTarget, setDelHighlightTarget] = useState<WikiHighlightRow | null>(null)
   // 跳转：笔记本 → 原卡片
   const [jumpEntryId, setJumpEntryId] = useState<number | null>(null)
-  // 生成审核（优化建议区：第一遍生成弹窗三选 加入/丢弃/直接删除）
-  const [reviewing, setReviewing] = useState(false)
+  // 待学习卡「直接删除」（learnBar 触发，二次确认）
   const [reviewDelete, setReviewDelete] = useState<WikiEntry | null>(null)
   // 测一测（优化建议区）
   const [quizJob, setQuizJob] = useState<string | null>(null)
@@ -102,17 +105,35 @@ export default function WikiModule(props: WikiModuleProps) {
     setHighlights(await window.api.wiki.highlights())
   }, [])
 
+  const loadLearn = useCallback(async () => {
+    setLearnEntries(await window.api.wiki.learnEntries())
+  }, [])
+
   useEffect(() => {
     void loadSections()
     void loadHighlights()
-  }, [loadSections, loadHighlights])
+    void loadLearn()
+  }, [loadSections, loadHighlights, loadLearn])
 
-  // keep-alive：切回万象库时刷新板块/词条/高光（后台生成可能已入库）
+  // keep-alive：切回万象库时刷新板块/词条/高光/待学习（后台生成可能已入库）+ 后库泵触发
   useModuleActivated('wiki', () => {
     void loadSections()
     void loadHighlights()
+    void loadLearn()
+    // 后库泵触发（260910，照推理角 stockCheck 模式）：存量达标即 no-op，覆盖 LLM 事后才配置好场景
+    void window.api.wiki.stockCheck()
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   })
+
+  // 后库/每日批次入库渐进到达（wiki:stockChanged）：待学习列表与板块计数随之刷新
+  useEffect(
+    () =>
+      window.api.wiki.onStockChanged(() => {
+        void loadLearn()
+        void loadSections()
+      }),
+    [loadLearn, loadSections]
+  )
 
   // 板块页加载词条
   useEffect(() => {
@@ -163,19 +184,17 @@ export default function WikiModule(props: WikiModuleProps) {
     try {
       const r = await window.api.wiki.generate(jobId, term, sectionId)
       if (r.ok) {
-        toast(`已生成词条「${r.data.term}」`)
+        toast(`已生成词条「${r.data.term}」，先进待学习区`)
         await loadSections()
-        // 打开新卡片（生成审核态：读完三选 加入/丢弃/直接删除）
+        await loadLearn()
+        // 打开新卡（待学习态：弹窗底部「学会了」才进板块；关闭=留在待学习区）
         const e = await window.api.wiki.entry(r.data.entryId)
-        setReviewing(true)
         setCardEntry(e)
         setMdVersion((v) => v + 1)
       } else {
-        // 已存在 → 拦截提示 + 可跳原卡片
+        // 已存在 → 拦截提示 + 可跳原卡片（conflictId 主进程带回：原卡可能在待学习区，板块列表找不到）
         setConflictTerm(r.conflict)
-        const list = await window.api.wiki.entries(sectionId ?? sections[0]?.id ?? 0)
-        const found = list.find((x) => x.term === r.conflict) ?? null
-        setConflictEntry(found)
+        setConflictEntry(r.conflictId != null ? await window.api.wiki.entry(r.conflictId) : null)
       }
     } catch (e) {
       const msg = String((e as Error).message)
@@ -223,21 +242,36 @@ export default function WikiModule(props: WikiModuleProps) {
     await window.api.wiki.discardEntry(discardTarget.id)
     toast('已放入回收站')
     setDiscardTarget(null)
-    setReviewing(false)
     setCardEntry(null)
     await loadSections()
+    await loadLearn()
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   }
 
-  /** 生成审核「直接删除」：彻底删卡片（含高光），不进回收站 */
+  /** 待学习卡「直接删除」：彻底删卡片（含高光），不进回收站 */
   const doReviewDelete = async (): Promise<void> => {
     if (!reviewDelete) return
     await window.api.wiki.deleteForeverEntry(reviewDelete.id)
     toast('已彻底删除')
     setReviewDelete(null)
-    setReviewing(false)
     setCardEntry(null)
     await loadSections()
+    await loadLearn()
+    if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
+  }
+
+  /** 学会了/已学会 切换（260910 待学习区）：learn ↔ learned 可逆；卡片保持打开、按钮态翻转 */
+  const toggleLearned = async (): Promise<void> => {
+    if (!cardEntry) return
+    const toLearned = cardEntry.state === 'learn'
+    await window.api.wiki.setLearned(cardEntry.id, toLearned)
+    toast(
+      toLearned
+        ? `已加入板块「${sections.find((s) => s.id === cardEntry.section_id)?.name ?? ''}」`
+        : '已移回待学习区'
+    )
+    await refreshCard()
+    await loadLearn()
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   }
 
@@ -370,6 +404,19 @@ export default function WikiModule(props: WikiModuleProps) {
               </div>
             </div>
             <div className="zone-body">
+              {/* 待学习区（260910）：置顶于板块列表上方（经济学上方），笔记本仍在最下 */}
+              <div
+                className="row-item"
+                onClick={() => setView({ kind: 'learn' })}
+                style={{ borderStyle: 'dashed' }}
+              >
+                <span className="material-symbols-outlined">school</span>
+                <div className="row-main">
+                  <div className="row-title">待学习</div>
+                  <div className="row-sub">学会了才进板块 · 每天自动来 5-10 张</div>
+                </div>
+                <span className="zone-count">{learnEntries.length}</span>
+              </div>
               {sections.map((s) => (
                 <div className="row-item" key={s.id} onClick={() => openSection(s.id)}>
                   <span className="material-symbols-outlined">folder</span>
@@ -439,7 +486,7 @@ export default function WikiModule(props: WikiModuleProps) {
             {entries.length === 0 && (
               <div className="empty-state">
                 <span className="material-symbols-outlined">public</span>
-                暂无词条，去总览「随机来一条」或手动输入生成
+                暂无词条：生成的卡片先进待学习区，点「学会了」后进入本板块
               </div>
             )}
             {entries.map((e) => (
@@ -466,6 +513,51 @@ export default function WikiModule(props: WikiModuleProps) {
                     }}
                   >
                     <span className="material-symbols-outlined">edit</span>
+                  </button>
+                  <button className="icon-btn danger" title="回收站" onClick={() => setDiscardTarget(e)}>
+                    <span className="material-symbols-outlined">delete</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 待学习页（260910）：state='learn' 卡片，读卡点「学会了」才进板块 */}
+      {view.kind === 'learn' && (
+        <div className="zone">
+          <div className="zone-header">
+            <span className="material-symbols-outlined">school</span>
+            <span>待学习</span>
+            <span className="zone-count">{learnEntries.length}</span>
+          </div>
+          <div className="zone-body">
+            {learnEntries.length === 0 && (
+              <div className="empty-state">
+                <span className="material-symbols-outlined">school</span>
+                暂无待学习卡片：每天自动来 5-10 张，或点「随机来一条」
+              </div>
+            )}
+            {learnEntries.map((e) => (
+              <div
+                className="row-item"
+                key={e.id}
+                onClick={() => void window.api.wiki.entry(e.id).then((x: WikiEntry) => setCardEntry(x))}
+              >
+                <div className="row-main">
+                  <div className="row-title">{e.term}</div>
+                  <div className="row-sub">
+                    {e.section_name} ｜ {e.summary}
+                  </div>
+                </div>
+                <div className="row-actions" onClick={(ev) => ev.stopPropagation()}>
+                  <button
+                    className="icon-btn"
+                    title="查看"
+                    onClick={() => void window.api.wiki.entry(e.id).then((x: WikiEntry) => setCardEntry(x))}
+                  >
+                    <span className="material-symbols-outlined">visibility</span>
                   </button>
                   <button className="icon-btn danger" title="回收站" onClick={() => setDiscardTarget(e)}>
                     <span className="material-symbols-outlined">delete</span>
@@ -599,20 +691,20 @@ export default function WikiModule(props: WikiModuleProps) {
         titleTag={cardEntry ? sections.find((s) => s.id === cardEntry.section_id)?.name : undefined}
         filePath={cardEntry?.md_path ?? ''}
         onClose={() => {
-          // 生成审核态关闭 =「加入」保留（优化建议区）
-          if (reviewing) {
-            setReviewing(false)
-            toast('已加入万象库')
-          }
+          // 待学习卡关闭 = 留在待学习区（学会了才进板块）；已学会卡直接关
+          if (cardEntry?.state === 'learn') toast('已留在待学习区')
           setCardEntry(null)
         }}
         onChanged={() => void refreshCard()}
         selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
-        review={
-          reviewing && cardEntry
+        learnBar={
+          cardEntry
             ? {
-                onDiscard: () => setDiscardTarget(cardEntry),
-                onDelete: () => setReviewDelete(cardEntry)
+                learned: cardEntry.state === 'learned',
+                onToggle: () => void toggleLearned(),
+                // 待学习卡给丢弃/直接删除；已学会卡只留切换钮（板块行内已有回收站入口）
+                onDiscard: cardEntry.state === 'learn' ? () => setDiscardTarget(cardEntry) : undefined,
+                onDelete: cardEntry.state === 'learn' ? () => setReviewDelete(cardEntry) : undefined
               }
             : undefined
         }
@@ -861,7 +953,7 @@ export default function WikiModule(props: WikiModuleProps) {
         放入回收站，3 天后自动彻底删除。
       </ConfirmDialog>
 
-      {/* 生成审核：直接删除二次确认（不进回收站） */}
+      {/* 待学习卡直接删除二次确认（不进回收站） */}
       <ConfirmDialog
         open={reviewDelete != null}
         title="直接删除"

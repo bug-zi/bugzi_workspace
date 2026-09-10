@@ -3,6 +3,8 @@
   position: fixed;
   z-index: 300;
   min-width: 176px;
+  max-height: 70vh;
+  overflow-y: auto;
   background: var(--color-surface-strong);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

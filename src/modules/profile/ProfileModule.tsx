@@ -5,6 +5,7 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { FONT_FAMILIES } from '../../theme/fonts'
 import { LLM_SCENE_LABELS, SettingsKeys } from '../../shared/types'
 import type { LlmUsageRecord, LlmUsageStats } from '../../shared/types'
 
@@ -14,17 +15,7 @@ const PROFILE_CATEGORIES = [
   '学习与技能', '职业规划', '价值观', '其他'
 ]
 
-// 内置字体（优化建议区「字体更换」：删除宋体/黑体/等线，随应用打包 5 款手写/楷体字体，
-// 对应 global.css @font-face；楷体为系统字体保留）
-const FONT_FAMILIES = [
-  { label: '默认（系统）', value: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif" },
-  { label: '漓雨手书', value: "'Liyu Shoushu', 'KaiTi', serif" },
-  { label: '鸿雷板书简体', value: "'Honglei Banshu', sans-serif" },
-  { label: '霞鹜文楷', value: "'LXGW WenKai', 'KaiTi', serif" },
-  { label: '玄宗体', value: "'XuanZong Ti', serif" },
-  { label: '演示悠然小楷', value: "'Youran Xiaokai', 'KaiTi', serif" },
-  { label: '楷体', value: "'KaiTi', 'STKaiti', serif" }
-]
+// 内置字体 FONT_FAMILIES 已迁共享模块 src/theme/fonts.ts（字体选择轮 §1.1，书架字体浮层反查全局名共用）
 
 /** 字体大小默认/范围（优化建议区：默认 16px，10-24px） */
 const FONT_SIZE_DEFAULT = 16

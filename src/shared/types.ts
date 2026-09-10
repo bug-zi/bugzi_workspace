@@ -69,7 +69,9 @@ export const SettingsKeys = {
   CanvasWidth: 'canvas_width',
   CanvasActiveId: 'canvas_active_id',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
-  BooksReadingMode: 'books_reading_mode'
+  BooksReadingMode: 'books_reading_mode',
+  // 万象库待学习区（260910）：每日批次最近执行日（本地日期 YYYY-MM-DD，幂等标记）
+  WikiDailyLearnDate: 'wiki_daily_learn_date'
 } as const
 
 export type Theme = 'light' | 'dark'
@@ -329,6 +331,8 @@ export interface BooksRecord {
   reading_mode: 'scroll' | 'page' | null
   /** epub 字号倍率 0.75~1.5（书架 v2.0 §四）；NULL=跟随个人档全局字体大小 */
   font_scale: number | null
+  /** epub 书级字体族 CSS 串（字体选择轮 §1.2）；NULL=跟随个人档全局字体 */
+  font_family: string | null
 }
 
 /** 书架导入结果（书架 specs §2.1）：duplicate 由渲染层弹确认后 force 重导 */

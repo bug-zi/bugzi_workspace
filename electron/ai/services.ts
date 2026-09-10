@@ -977,11 +977,13 @@ export async function suggestWikiTerm(
   return { sectionId: section.id, term }
 }
 
-/** 生成知识卡片 md（固定模板，specs §3.1），并建词条记录 */
+/** 生成知识卡片 md（固定模板，specs §3.1），并建词条记录。
+ *  state（260910 待学习区）：pool=后库储备（泵预生成）| learn=待学习区（用户随机/手动生成，默认）| learned=直接转正（无人调用，保留口径）。 */
 export async function generateWikiCard(
   term: string | null,
   sectionId: number | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  state: 'pool' | 'learn' | 'learned' = 'learn'
 ): Promise<GenerateWikiResult> {
   const d = getDb()
   // 词条名缺省：LLM 构思（板块 = 指定板块，未指定则随机挑）
@@ -1004,9 +1006,9 @@ export async function generateWikiCard(
   const now = nowIso()
   const r = d
     .prepare(
-      "INSERT INTO wiki_entries (section_id, term, summary, md_path, origin, created_at, updated_at) VALUES (?, ?, ?, ?, 'ai', ?, ?)"
+      "INSERT INTO wiki_entries (section_id, term, summary, md_path, origin, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)"
     )
-    .run(sectionId, term, summary, 'PENDING', now, now)
+    .run(sectionId, term, summary, 'PENDING', state, now, now)
   const id = Number(r.lastInsertRowid)
   const mdPath = `md/wiki/${id}.md`
   d.prepare('UPDATE wiki_entries SET md_path = ? WHERE id = ?').run(mdPath, id)
@@ -1056,11 +1058,12 @@ function parseQuizArray(
   return out
 }
 
-/** 每次测 5 题：随机抽 5 张卡片（不足则全取）→ 一次 LLM 调用批量出四选一 */
+/** 每次测 5 题：随机抽 5 张已学会卡片（不足则全取；待学习/后库卡不考——260910 待学习区口径）
+ *  → 一次 LLM 调用批量出四选一 */
 export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQuestion[]> {
   const d = getDb()
   const rows = d
-    .prepare('SELECT id, term, md_path FROM wiki_entries WHERE deleted_at IS NULL')
+    .prepare("SELECT id, term, md_path FROM wiki_entries WHERE deleted_at IS NULL AND state = 'learned'")
     .all() as { id: number; term: string; md_path: string }[]
   if (rows.length === 0) throw new Error('题库为空，请先在万象库生成一些知识卡片')
   // Fisher-Yates 洗牌后取前 5

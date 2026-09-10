@@ -806,6 +806,23 @@ function migrate(): void {
     d.exec(`ALTER TABLE book_marks ADD COLUMN note TEXT NOT NULL DEFAULT ''`)
     d.exec('PRAGMA user_version = 30')
   }
+
+  if (version < 31) {
+    // v31：万象库待学习区与预生成后库（2026-09-10-待学习区与预生成-design.md §二）——
+    // wiki_entries 加 state 三态列：pool=后库储备（用户不可见）| learn=待学习区 | learned=已学会正式词条。
+    // 存量行默认 learned（行为零变化）；池卡不进回收站，板块删除时随板块物理清理（ipc.ts）。
+    d.exec(`ALTER TABLE wiki_entries ADD COLUMN state TEXT NOT NULL DEFAULT 'learned'`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_wiki_entries_state ON wiki_entries(state)')
+    d.exec('PRAGMA user_version = 31')
+  }
+
+  if (version < 32) {
+    // v32：书架字体选择（2026-09-11-阅读器字体选择与划词气泡修复-design.md §1.2）——
+    // 书级字体族（NULL=跟随全局，存量书零迁移）。（设计初稿写 v31，被并行会话万象库
+    // 待学习区占用 v31，实际落 v32——版本号实况条款同 v18/v19、v29 先例。）
+    d.exec(`ALTER TABLE books ADD COLUMN font_family TEXT`)
+    d.exec('PRAGMA user_version = 32')
+  }
 }
 
 // ---------- 通用工具 ----------
