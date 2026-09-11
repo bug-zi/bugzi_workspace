@@ -48,6 +48,8 @@ export default function TerminalPanel(props: Props) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [height, setHeight] = useState(TERMINAL_DEFAULTS.height)
   const [closeAsk, setCloseAsk] = useState<TerminalTabData | null>(null)
+  // 页签就地重命名（260912 开发者指令：点击页签名即改；仅当前会话有效）
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
   const termsRef = useRef(new Map<string, Terminal>())
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const { toast } = useToast()
@@ -109,6 +111,13 @@ export default function TerminalPanel(props: Props) {
       prev.map((t) => (t.id === id ? { ...t, exited: null, spawnEpoch: t.spawnEpoch + 1 } : t))
     )
   }, [])
+
+  const commitRename = (): void => {
+    if (!renaming) return
+    const v = renaming.value.trim()
+    if (v) patchTab(renaming.id, { label: v }) // 清空视为放弃，保留原名
+    setRenaming(null)
+  }
 
   // 重新打开事件（TerminalTab 上抛）
   useEffect(() => {
@@ -205,7 +214,34 @@ export default function TerminalPanel(props: Props) {
               }}
               title={t.cwd}
             >
-              <span className="terminal-tab-label">{t.label}</span>
+              {renaming?.id === t.id ? (
+                <input
+                  className="terminal-tab-rename"
+                  value={renaming.value}
+                  autoFocus
+                  maxLength={30}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setRenaming({ id: t.id, value: e.target.value })}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename()
+                    else if (e.key === 'Escape') setRenaming(null)
+                  }}
+                />
+              ) : (
+                <span
+                  className="terminal-tab-label"
+                  title="点击重命名"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setRenaming({ id: t.id, value: t.label })
+                  }}
+                >
+                  {t.label}
+                </span>
+              )}
               <button
                 className="terminal-tab-close"
                 title="关闭标签"
