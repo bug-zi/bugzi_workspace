@@ -1,4 +1,5 @@
 // 阅读视图（信息源 specs §3.2）：AI 总结卡（jobId 全局取消接线）+ 消毒正文 + 去原文
+// 260911：头部加显式已读/再看看与收藏星标（与列表行双入口）
 import { useCallback, useEffect, useState } from 'react'
 import DOMPurify from 'dompurify'
 import type { ArticleRecord } from '../../shared/types'
@@ -35,6 +36,8 @@ export default function ArticleView(props: Props) {
   const [genJob, setGenJob] = useState<string | null>(null)
   const [genError, setGenError] = useState('')
   const [goConfig, setGoConfig] = useState(false)
+  const [read, setRead] = useState(!!props.article.read_at)
+  const [fav, setFav] = useState(!!props.article.favorited_at)
 
   /** 发起总结（按需 + 缓存：无缓存才跑；jobId 取消接线同 WikiModule 惯例） */
   const runSummarize = useCallback(
@@ -62,10 +65,34 @@ export default function ArticleView(props: Props) {
     [props.article.id]
   )
 
+  /** 已读/再看看（260911）：与列表行双入口，读完好顺手点 */
+  const toggleRead = async (): Promise<void> => {
+    try {
+      await window.api.articles.setRead(props.article.id, !read)
+      setRead(!read)
+      props.onChanged()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 收藏/取消收藏（260911） */
+  const toggleFav = async (): Promise<void> => {
+    try {
+      await window.api.articles.setFavorite(props.article.id, !fav)
+      setFav(!fav)
+      props.onChanged()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
   // 打开文章：无缓存总结自动生成（specs §3.2）
   useEffect(() => {
     setSummary(props.article.summary_text)
     setGenError('')
+    setRead(!!props.article.read_at)
+    setFav(!!props.article.favorited_at)
     if (!props.article.summary_text) void runSummarize(crypto.randomUUID())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.article.id])
@@ -82,6 +109,17 @@ export default function ArticleView(props: Props) {
         <div className="bk-reader-title" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {props.article.title}
         </div>
+        <button
+          className={`icon-btn feed-star${fav ? ' on' : ''}`}
+          title={fav ? '取消收藏' : '收藏'}
+          onClick={() => void toggleFav()}
+        >
+          <span className="material-symbols-outlined">star</span>
+        </button>
+        <button className="btn" onClick={() => void toggleRead()}>
+          <span className="material-symbols-outlined">{read ? 'move_to_inbox' : 'mark_email_read'}</span>
+          {read ? '再看看' : '已读'}
+        </button>
         {props.article.url && (
           <button className="btn" onClick={() => void window.api.shell.openExternal(props.article.url)} title={props.article.url}>
             <span className="material-symbols-outlined">open_in_new</span>去原文

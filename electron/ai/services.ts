@@ -21,7 +21,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   motto: SettingsKeys.AiActiveSessionMotto,
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
-  verify: SettingsKeys.AiActiveSessionVerify
+  verify: SettingsKeys.AiActiveSessionVerify,
+  learn: SettingsKeys.AiActiveSessionLearn
 }
 
 /** 会话列表（最近活跃在前，按频道隔离） */
@@ -172,6 +173,7 @@ export function appendSystemToChannelSession(channel: AiChannel, content: string
 }
 
 const MODULE_LABELS: Record<string, string> = {
+  learn: '学习库',
   mottos: '格言库',
   wiki: '万象库',
   inspirations: '灵感泉',
@@ -191,7 +193,9 @@ const CHANNEL_PERSONAS: Record<AiChannel, string> = {
   zhijiji:
     '当前频道是「致知己·追问」，你是用户请来的「较真的朋友」：用户正在把自己对某个问题的答案写成版本，你的职责是追问检验——找逻辑漏洞、要具体例子、问适用边界，一次提 1~3 个追问。绝不替用户写答案，绝不输出答案文本，只提问与追问。',
   verify:
-    '当前频道是「辩真·核查」，你是核查员：围绕待验证观点的真实性讨论，结论要有依据，引用来源时给出链接。'
+    '当前频道是「辩真·核查」，你是核查员：围绕待验证观点的真实性讨论，结论要有依据，引用来源时给出链接。',
+  learn:
+    '当前频道是「学习·问答」，你是计算机专业知识的学习助教：用通俗、准确的方式讲解计算机专业知识，多举实际例子（命令、配置、代码），必要时指出常见误区与工程实践要点。'
 }
 
 /** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
@@ -1095,6 +1099,213 @@ export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQu
     signal
   })
   return parseQuizArray(res.content, idByTerm)
+}
+
+// ---------- 学习库（2026-09-11-学习库 specs：建树 / 知识卡 / 主题展开） ----------
+
+export interface LearnTreeResult {
+  topics: number
+  points: number
+}
+
+/** 领域建树（骨架）：5~8 主题 × 5~8 知识点（仅 title+一句话简介，content_ready=0），事务写入后 tree_ready=1 */
+export async function generateLearnTree(
+  domainId: number,
+  signal?: AbortSignal
+): Promise<LearnTreeResult> {
+  const d = getDb()
+  const dom = d.prepare('SELECT id, name FROM learn_domains WHERE id = ?').get(domainId) as
+    | { id: number; name: string }
+    | undefined
+  if (!dom) throw new Error('NOT_FOUND')
+  const prompt = `请为计算机专业领域「${dom.name}」设计一份知识树骨架：恰好 5~8 个主题，每个主题下恰好 5~8 个知识点。要求：主题覆盖该领域系统学习的主干，从基础到进阶有清晰的先后学习逻辑；知识点是具体、可独立学习的最小单元（具体协议、算法、机制、命令族等），标题用行业通用术语，不与主题名重复。
+以 JSON 对象返回，最外层是对象，格式：{"topics":[{"title":"主题名","points":[{"title":"知识点名","summary":"一句话简介（20~40 字，说清它是什么、为什么重要）"}]}]}，不要输出其他任何内容。`
+  const call = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+      jsonMode: true,
+      scene: 'learn:tree',
+      signal
+    })
+  let parsed: Record<string, unknown>
+  try {
+    parsed = parseJsonObject((await call()).content)
+  } catch (e) {
+    if (signal?.aborted) throw e
+    parsed = parseJsonObject((await call()).content) // 解析失败自动重试一次（同 generateMottos 惯例）
+  }
+  const topics = (Array.isArray(parsed.topics) ? parsed.topics : []) as Record<string, unknown>[]
+  const clean = topics
+    .map((t) => ({
+      title: typeof t.title === 'string' ? t.title.trim() : '',
+      points: (Array.isArray(t.points) ? t.points : []) as Record<string, unknown>[]
+    }))
+    .filter((t) => t.title)
+    .map((t) => ({
+      title: t.title,
+      points: t.points
+        .map((p) => ({
+          title: typeof p.title === 'string' ? p.title.trim() : '',
+          summary: typeof p.summary === 'string' ? p.summary.trim() : ''
+        }))
+        .filter((p) => p.title)
+        .slice(0, 8)
+    }))
+    .filter((t) => t.points.length > 0)
+    .slice(0, 8)
+  if (clean.length === 0) throw new Error('LLM 未返回有效的知识树')
+  ensureNotCancelled(signal)
+  const now = nowIso()
+  const insTopic = d.prepare(
+    "INSERT INTO learn_nodes (domain_id, parent_id, level, title, created_at) VALUES (?, NULL, 1, ?, ?)"
+  )
+  const insPoint = d.prepare(
+    "INSERT INTO learn_nodes (domain_id, parent_id, level, title, summary, created_at) VALUES (?, ?, 2, ?, ?, ?)"
+  )
+  d.exec('BEGIN')
+  try {
+    let points = 0
+    for (const t of clean) {
+      const r = insTopic.run(domainId, t.title, now)
+      const topicId = Number(r.lastInsertRowid)
+      for (const p of t.points) {
+        insPoint.run(domainId, topicId, p.title, p.summary, now)
+        points++
+      }
+    }
+    d.prepare('UPDATE learn_domains SET tree_ready = 1 WHERE id = ?').run(domainId)
+    d.exec('COMMIT')
+    return { topics: clean.length, points }
+  } catch (e) {
+    d.exec('ROLLBACK')
+    throw e
+  }
+}
+
+export interface GenerateLearnCardResult {
+  nodeId: number
+  title: string
+  summary: string
+}
+
+/** 知识点卡片生成（按需/泵/手动添加共用）：注入领域+主题上下文，模板见学习库 specs §八；
+ *  写 md/learn/<id>.md 并置 content_ready=1。 */
+export async function generateLearnCard(
+  nodeId: number,
+  signal?: AbortSignal
+): Promise<GenerateLearnCardResult> {
+  const d = getDb()
+  const row = d
+    .prepare(
+      `SELECT n.id, n.title, n.summary, dom.name AS domain_name, t.title AS topic_title
+       FROM learn_nodes n
+       JOIN learn_domains dom ON n.domain_id = dom.id
+       LEFT JOIN learn_nodes t ON n.parent_id = t.id
+       WHERE n.id = ?`
+    )
+    .get(nodeId) as
+    | { id: number; title: string; summary: string; domain_name: string; topic_title: string | null }
+    | undefined
+  if (!row) throw new Error('NOT_FOUND')
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}请为计算机知识点「${row.title}」生成学习卡片。领域：${row.domain_name}；主题：${row.topic_title ?? '（无）'}；一句话简介：${row.summary || '（无，请自拟'}）。
+Markdown 格式，严格按以下模板输出（每个二级标题必须有内容，不要输出模板外的任何内容）：
+
+# ${row.title}
+
+> ${row.summary || '一句话定义'}
+
+## 原理详解
+{讲清机制与原理，200~400 字，通俗准确}
+
+## 实操示例
+{命令/代码/配置示例，用代码块呈现，每段配一句说明}
+
+## 工作应用场景
+{结合运维/安全/开发实际的 2~3 个具体场景，每条一行}
+
+## 延伸
+{关联知识点与深入方向，2~4 条列表；确无可写时写「（暂无）」}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.6,
+    scene: 'learn:card',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const md = stripMdFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  mdWrite(`md/learn/${row.id}.md`, md)
+  d.prepare('UPDATE learn_nodes SET content_ready = 1 WHERE id = ?').run(row.id)
+  return { nodeId: row.id, title: row.title, summary: row.summary }
+}
+
+export interface LearnExpandResult {
+  points: number
+}
+
+/** 主题 AI 展开：为该主题补 3~5 个新知识点（查重跳过已有，事务追加；不动 tree_ready） */
+export async function expandLearnTopic(
+  topicId: number,
+  signal?: AbortSignal
+): Promise<LearnExpandResult> {
+  const d = getDb()
+  const t = d
+    .prepare(
+      `SELECT n.id, n.title, dom.id AS domain_id, dom.name AS domain_name
+       FROM learn_nodes n JOIN learn_domains dom ON n.domain_id = dom.id
+       WHERE n.id = ? AND n.level = 1`
+    )
+    .get(topicId) as
+    | { id: number; title: string; domain_id: number; domain_name: string }
+    | undefined
+  if (!t) throw new Error('NOT_FOUND')
+  const existing = d.prepare('SELECT title FROM learn_nodes WHERE parent_id = ?').all(topicId) as {
+    title: string
+  }[]
+  const avoid = existing.length
+    ? `（已有知识点请避开：${existing.map((r) => r.title).join('、')}）`
+    : ''
+  const prompt = `在计算机领域「${t.domain_name}」的知识树中，为主题「${t.title}」补充 3~5 个尚未覆盖的知识点${avoid}。知识点是具体、可独立学习的最小单元，标题用行业通用术语，每条配一句话简介。
+以 JSON 对象返回，格式：{"points":[{"title":"知识点名","summary":"一句话简介（20~40 字）"}]}，points 数组内恰好 3~5 项，不要输出其他任何内容。`
+  const call = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      jsonMode: true,
+      scene: 'learn:expand',
+      signal
+    })
+  let parsed: Record<string, unknown>
+  try {
+    parsed = parseJsonObject((await call()).content)
+  } catch (e) {
+    if (signal?.aborted) throw e
+    parsed = parseJsonObject((await call()).content)
+  }
+  const titles = new Set(existing.map((r) => r.title.trim()))
+  const pts = ((Array.isArray(parsed.points) ? parsed.points : []) as Record<string, unknown>[])
+    .map((p) => ({
+      title: typeof p.title === 'string' ? p.title.trim() : '',
+      summary: typeof p.summary === 'string' ? p.summary.trim() : ''
+    }))
+    .filter((p) => p.title && !titles.has(p.title))
+    .slice(0, 5)
+  if (pts.length === 0) throw new Error('LLM 未返回新的知识点（可能均已存在）')
+  ensureNotCancelled(signal)
+  const now = nowIso()
+  const ins = d.prepare(
+    "INSERT INTO learn_nodes (domain_id, parent_id, level, title, summary, created_at) VALUES (?, ?, 2, ?, ?, ?)"
+  )
+  d.exec('BEGIN')
+  try {
+    for (const p of pts) ins.run(t.domain_id, topicId, p.title, p.summary, now)
+    d.exec('COMMIT')
+  } catch (e) {
+    d.exec('ROLLBACK')
+    throw e
+  }
+  return { points: pts.length }
 }
 
 // ---------- 辩真阁验证（辩真阁 specs §3） ----------

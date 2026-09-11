@@ -2,6 +2,7 @@
 
 // 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除）
 export type ModuleId =
+  | 'learn'
   | 'wiki'
   | 'inspirations'
   | 'zhijiji'
@@ -15,7 +16,7 @@ export type ModuleId =
   | 'profile'
 
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn'
 
 // 草稿本频道（优化建议区第21轮，DB v14：drafts.channel）：固定两频道起步，加频道零迁移
 export type DraftChannel = 'general' | 'turtle'
@@ -73,7 +74,9 @@ export const SettingsKeys = {
   BooksReadingBg: 'books_reading_bg',
   ReaderBgImage: 'reader_bg_image',
   // 万象库待学习区（260910）：每日批次最近执行日（本地日期 YYYY-MM-DD，幂等标记）
-  WikiDailyLearnDate: 'wiki_daily_learn_date'
+  WikiDailyLearnDate: 'wiki_daily_learn_date',
+  // 学习库（260911）：「学习·问答」频道激活会话
+  AiActiveSessionLearn: 'ai_active_session_learn'
 } as const
 
 export type Theme = 'light' | 'dark'
@@ -142,6 +145,9 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'wiki:card': '万象库·知识卡',
   'wiki:suggest': '万象库·词条构思',
   'wiki:quiz': '万象库·测一测',
+  'learn:tree': '学习库·建树',
+  'learn:card': '学习库·知识卡',
+  'learn:expand': '学习库·主题展开',
   'inspiration:diverge': '灵感泉·发散',
   'inspiration:refine': '灵感泉·自评',
   'verify:check': '万象库·辩真核查',
@@ -260,6 +266,69 @@ export interface WikiHighlight {
   entry_id: number
   text: string
   created_at: string
+}
+
+// ===== 学习库（DB v33，学习库 specs）：知识树 领域→主题→知识点；卡片 md 在 md/learn/<id>.md =====
+
+/** 领域（learn_domains 表）；tree_ready=0 为懒建树态（出厂 seed，首次打开时显式生成骨架） */
+export interface LearnDomain {
+  id: number
+  name: string
+  sort: number
+  tree_ready: 0 | 1
+  created_at: string
+  /** 知识点总数（learn:domains 联查聚合，非表列） */
+  total: number
+  /** 已学知识点数（联查聚合） */
+  learned: number
+}
+
+/** 树节点（learn_nodes 表；level 1=主题 2=知识点，主题无 summary/state 语义） */
+export interface LearnNode {
+  id: number
+  domain_id: number
+  parent_id: number | null
+  level: 1 | 2
+  title: string
+  summary: string
+  state: 'todo' | 'learned'
+  /** 0=未学 1..4=复习四档 5=毕业（next_review_at 为 NULL，不再出现） */
+  review_stage: number
+  next_review_at: string | null
+  content_ready: 0 | 1
+  source: 'ai' | 'manual'
+  deleted_at: string | null
+  created_at: string
+}
+
+/** 知识树视图（learn:tree 返回）：主题行聚合进度 + 其知识点行 */
+export interface LearnTopicView {
+  id: number
+  title: string
+  total: number
+  learned: number
+  points: LearnNode[]
+}
+
+/** 卡片行（learn:getCard / learn:randomOne / learn:nodeAdd 返回）：知识点 + 领域/主题名（弹窗 titleTag 用） */
+export interface LearnCardRow extends LearnNode {
+  domain_name: string
+  topic_title: string | null
+}
+
+/** 今日队列行（learn:daily 返回） */
+export interface LearnDailyRow extends LearnNode {
+  domain_name: string
+  topic_title: string | null
+}
+
+/** 高光行（learn:highlights 返回，联表知识点标题） */
+export interface LearnHighlightRow {
+  id: number
+  node_id: number
+  text: string
+  created_at: string
+  title: string
 }
 
 export interface InspirationRecord {
@@ -463,6 +532,7 @@ export interface ArticleRecord {
   content_feed_html: string | null
   content_fetched_html: string | null
   read_at: string | null
+  favorited_at: string | null
   summary_text: string | null
   summary_at: string | null
 }
@@ -477,14 +547,16 @@ export interface ArticleSummary {
   published_at: string | null
   fetched_at: string
   read_at: string | null
+  /** 已收藏（260911 收藏页/星标实心态） */
+  favorited: boolean
   /** 已有 AI 总结缓存（列表可显小标） */
   has_summary: boolean
   /** 正文剥标签预览（前 120 字） */
   preview: string
 }
 
-/** 文章列表视图（优化建议区第28轮）：unread=收件箱（只显未读，读完即消失）；archive=已归档（已读按时间翻） */
-export type FeedView = 'unread' | 'archive'
+/** 文章列表视图（260911 扩三值）：unread=收件箱（未读）；archive=已归档（已读按时间翻）；favorite=收藏（收藏时间倒序全量、不筛源） */
+export type FeedView = 'unread' | 'archive' | 'favorite'
 
 /** 文章列表返回体（优化建议区第28轮）：窗口内轻量行 + 窗口外剩余计数（「加载更早」按钮展示） */
 export interface FeedListView {
@@ -573,6 +645,7 @@ export interface RecycleItem {
     | 'ledger_tx'
     | 'ledger_account'
     | 'ledger_category'
+    | 'learn'
   item_id: number
   payload: string
   created_at: string

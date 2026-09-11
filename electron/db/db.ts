@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'canvas', 'books', 'covers', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'canvas', 'books', 'covers', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -822,6 +822,61 @@ function migrate(): void {
     // 待学习区占用 v31，实际落 v32——版本号实况条款同 v18/v19、v29 先例。）
     d.exec(`ALTER TABLE books ADD COLUMN font_family TEXT`)
     d.exec('PRAGMA user_version = 32')
+  }
+
+  if (version < 33) {
+    // v33：学习库模块（2026-09-11-学习库-design.md §二）——知识树（领域表 + 主题/知识点邻接表）、
+    // 每日队列定档、高光（照 wiki_highlights 同构）。卡片 md 在 md/learn/<id>.md（扁平路径，同 wiki 惯例，
+    // 设计初稿嵌套路径作废——见 plan 偏差①）。领域/主题清空才能删（判空含回收站节点，防恢复孤儿）。
+    d.exec(`CREATE TABLE IF NOT EXISTS learn_domains (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      sort INTEGER NOT NULL DEFAULT 0,
+      tree_ready INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE IF NOT EXISTS learn_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain_id INTEGER NOT NULL,
+      parent_id INTEGER,
+      level INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT 'todo',
+      review_stage INTEGER NOT NULL DEFAULT 0,
+      next_review_at TEXT,
+      content_ready INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'ai',
+      deleted_at TEXT,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_learn_nodes_domain ON learn_nodes(domain_id, level)')
+    d.exec(`CREATE TABLE IF NOT EXISTS learn_daily (
+      date TEXT PRIMARY KEY,
+      new_ids TEXT NOT NULL,
+      review_ids TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE IF NOT EXISTS learn_highlights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      node_id INTEGER NOT NULL REFERENCES learn_nodes(id),
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+    // 出厂 8 领域（brainstorm 定稿顺序，tree_ready=0 懒建树——领域首次打开时显式生成骨架）。
+    // 迁移只跑一次：用户后续删除领域不会复活（版本守卫）。
+    const seedLearn = d.prepare('INSERT INTO learn_domains (name, sort, tree_ready, created_at) VALUES (?, ?, 0, ?)')
+    ;['计算机网络', '信息安全', 'Linux 与运维', '操作系统', '计算机组成原理', '算法与数据结构', '数据库', '编程开发'].forEach(
+      (name, i) => seedLearn.run(name, i, nowIso())
+    )
+    d.exec('PRAGMA user_version = 33')
+  }
+
+  if (version < 34) {
+    // v34：信息源显式已读与文章收藏（2026-09-11-信息源已读收藏与清理-design.md §1）——
+    // articles 加 favorited_at（NULL=未收藏）：收藏文章只出现在收藏页、永不被清理
+    // （清理只删已读+未收藏；未读与收藏都保留）。无新表、无索引（数据量小）。
+    d.exec(`ALTER TABLE articles ADD COLUMN favorited_at TEXT`)
+    d.exec('PRAGMA user_version = 34')
   }
 }
 

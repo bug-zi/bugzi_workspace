@@ -19,6 +19,7 @@ export type RecycleSource =
   | 'ledger_account'
   | 'ledger_category'
   | 'canvases'
+  | 'learn'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -34,7 +35,8 @@ const TABLES: Record<RecycleSource, string> = {
   ledger_tx: 'ledger_tx',
   ledger_account: 'ledger_accounts',
   ledger_category: 'ledger_categories',
-  canvases: 'canvases'
+  canvases: 'canvases',
+  learn: 'learn_nodes'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -54,7 +56,8 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   ledger_account: null,
   ledger_category: null,
   // 画布：path 指向 canvas/{id}.excalidraw（mdDelete 对 userData 内任意文件通用）
-  canvases: 'path'
+  canvases: 'path',
+  learn: null // learn 卡片 md 派生为 md/learn/<id>.md（无表列），hardDelete 特判清理
 }
 
 export interface RecycleRow {
@@ -131,6 +134,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回画布面板：仅清标记
       d.prepare('UPDATE canvases SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
+    case 'learn':
+      // 回知识树原主题：仅清标记（主题存续由「删主题判空含回收站节点」保证）
+      d.prepare('UPDATE learn_nodes SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
     case 'wenbi_journal':
       // 回浮生记时间线：仅清标记（分节钉在 created_at，无需复位）
       d.prepare('UPDATE wenbi_journals SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
@@ -189,6 +196,11 @@ export function hardDelete(recycleId: number): void {
   }
   if (rb.source === 'wiki') {
     d.prepare('DELETE FROM wiki_highlights WHERE entry_id = ?').run(rb.item_id)
+  }
+  if (rb.source === 'learn') {
+    // 知识点卡：md 路径派生为 md/learn/<id>.md，连同高光记录一起清理（同 wiki 口径）
+    d.prepare('DELETE FROM learn_highlights WHERE node_id = ?').run(rb.item_id)
+    mdDelete(`md/learn/${rb.item_id}.md`)
   }
   if (rb.source === 'zhijiji') {
     // 一问题多版本 md：先收齐路径再删行（问题行 + 全部版本行），最后逐个删文件

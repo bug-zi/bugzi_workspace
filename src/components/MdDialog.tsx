@@ -44,6 +44,17 @@ export interface MdDialogProps {
     onDiscard?: () => void
     onDelete?: () => void
   }
+  /** 学习库卡片（260911 学习库）：底部学习操作条——mode 决定按钮组：new=未学（学会了）、
+   *  review=到期复习（记住了/忘记了）、done=已学未到期或毕业（只读态显示 statusText）。
+   *  关闭/遮罩/Esc = 保留现状，不强制操作（同 learnBar 口径，头部关闭钮保留）。 */
+  studyBar?: {
+    mode: 'new' | 'review' | 'done'
+    /** done 态状态文案（如「已学 · 3 天后复习」/「已毕业」） */
+    statusText?: string
+    onLearn?: () => void
+    onRemember?: () => void
+    onForget?: () => void
+  }
   /** 致知己版本化扩展（致知己 specs §2）：版本切换条 + 保存即版本 + 让 AI 追问 */
   versioned?: {
     /** 全部版本（seq 倒序），label 如 v3-260905 */
@@ -66,7 +77,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, versioned, eventToggle, autoEdit, sidePanel } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -404,6 +415,29 @@ export default function MdDialog(props: MdDialogProps) {
               <button className="btn btn-primary" onClick={learnBar.onToggle} title="学会了才加入板块">
                 学会了
               </button>
+            )}
+          </div>
+        )}
+        {/* 学习库操作条（260911 学习库）：学会了进 1/3/7/15 天复习序列；到期卡记住了升档/忘记了重置；done 态只读 */}
+        {studyBar && !editing && (
+          <div className="dialog-footer">
+            {studyBar.mode === 'new' && (
+              <button className="btn btn-primary" onClick={studyBar.onLearn} title="学会后进入 1/3/7/15 天间隔复习">
+                学会了
+              </button>
+            )}
+            {studyBar.mode === 'review' && (
+              <>
+                <button className="btn btn-danger" onClick={studyBar.onForget} title="重置回第 1 档，明天再来">
+                  忘记了
+                </button>
+                <button className="btn btn-primary" onClick={studyBar.onRemember} title="升一档，复习间隔拉长">
+                  记住了
+                </button>
+              </>
+            )}
+            {studyBar.mode === 'done' && (
+              <span className="module-sub" style={{ padding: '6px 0' }}>{studyBar.statusText ?? ''}</span>
             )}
           </div>
         )}

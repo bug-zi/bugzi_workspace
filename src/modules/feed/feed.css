@@ -92,8 +92,8 @@
 }
 .feed-art-row {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--color-surface-strong);
@@ -102,6 +102,48 @@
 }
 .feed-art-row:hover {
   border-color: var(--color-border);
+}
+/* 主体列（标题/预览/meta）+ 右侧常显操作区（260911 显式已读+收藏） */
+.feed-art-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.feed-art-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* 已读/再看看双态小按钮（主题色系、无彩亮——全局硬性规则） */
+.feed-read-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.feed-read-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+:root[data-theme='dark'] .feed-read-btn:hover {
+  color: #fff;
+}
+.feed-read-btn .material-symbols-outlined {
+  font-size: 15px;
+}
+/* 星标收藏态：实心主题色（基类 FILL 0，此处覆盖 FILL 轴） */
+.feed-star.on .material-symbols-outlined {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  color: var(--color-primary);
 }
 .feed-art-title {
   font-size: 0.95em;

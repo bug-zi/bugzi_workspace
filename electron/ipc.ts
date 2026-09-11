@@ -7,6 +7,7 @@ import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from '.
 import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
+import { ensureDailyQueue, ensureLearnStock, addDaysLocal } from './services/learnStock'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -22,6 +23,9 @@ import {
   generateWikiCard,
   suggestWikiTerm,
   generateWikiQuiz,
+  generateLearnTree,
+  generateLearnCard,
+  expandLearnTopic,
   generateInspirations,
   refineInspiration,
   runVerification,
@@ -75,8 +79,9 @@ import {
   listArticles,
   openArticle,
   markAllRead,
-  summarizeArticle,
-  cleanupOldArticleBodies
+  setArticleRead,
+  setArticleFavorite,
+  summarizeArticle
 } from './services/feed'
 import {
   listFavorites,
@@ -104,7 +109,7 @@ import {
 } from './services/ledger'
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
-import type { AiChannel, LlmConfig, McpConfig } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -669,6 +674,282 @@ export function registerIpc(): void {
   })
   ipcMain.handle('wiki:mcpStatus', () => ({ enabled: getEnabledMcps().length }))
 
+  // ---------- 学习库（2026-09-11-学习库-design.md） ----------
+  /** 知识点卡片行通用 SQL（联领域/主题名；弹窗 titleTag 与列表行共用） */
+  const learnCardSql = `SELECT n.*, dom.name AS domain_name, t.title AS topic_title
+    FROM learn_nodes n
+    JOIN learn_domains dom ON n.domain_id = dom.id
+    LEFT JOIN learn_nodes t ON n.parent_id = t.id
+    WHERE n.deleted_at IS NULL AND n.level = 2`
+
+  ipcMain.handle('learn:domains', () =>
+    getDb()
+      .prepare(
+        `SELECT d.*,
+          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NULL) AS total,
+          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NULL AND n.state = 'learned') AS learned
+         FROM learn_domains d ORDER BY d.sort`
+      )
+      .all()
+  )
+  ipcMain.handle('learn:domainCreate', (_e, name: string) => {
+    const d = getDb()
+    const max = d.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM learn_domains').get() as {
+      m: number
+    }
+    try {
+      const r = d
+        .prepare('INSERT INTO learn_domains (name, sort, created_at) VALUES (?, ?, ?)')
+        .run(name, max.m + 1, nowIso())
+      return Number(r.lastInsertRowid)
+    } catch {
+      throw new Error('CONFLICT:' + name) // name UNIQUE 撞名
+    }
+  })
+  ipcMain.handle('learn:domainRename', (_e, id: number, name: string) => {
+    try {
+      getDb().prepare('UPDATE learn_domains SET name = ? WHERE id = ?').run(name, id)
+      return true
+    } catch {
+      throw new Error('CONFLICT:' + name)
+    }
+  })
+  ipcMain.handle('learn:domainDelete', (_e, id: number) => {
+    const d = getDb()
+    // 领域清空才能删（设计 §三：无主题行方可删——主题层被删光的前提是知识点已清空）
+    const count = d
+      .prepare('SELECT COUNT(*) AS c FROM learn_nodes WHERE domain_id = ? AND level = 1')
+      .get(id) as { c: number }
+    if (count.c > 0) throw new Error('DOMAIN_NOT_EMPTY')
+    d.prepare('DELETE FROM learn_domains WHERE id = ?').run(id)
+    return true
+  })
+  ipcMain.handle('learn:generateTree', async (_e, jobId: string, domainId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return await generateLearnTree(domainId, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('learn:tree', (_e, domainId: number) => {
+    const d = getDb()
+    const topics = d
+      .prepare(
+        'SELECT * FROM learn_nodes WHERE domain_id = ? AND level = 1 AND deleted_at IS NULL ORDER BY id'
+      )
+      .all(domainId) as { id: number; title: string }[]
+    return topics.map((t) => {
+      const points = d
+        .prepare(
+          'SELECT * FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NULL ORDER BY id'
+        )
+        .all(t.id) as { state: string }[]
+      return {
+        id: t.id,
+        title: t.title,
+        total: points.length,
+        learned: points.filter((p) => p.state === 'learned').length,
+        points
+      }
+    })
+  })
+  ipcMain.handle('learn:topicCreate', (_e, domainId: number, title: string) => {
+    const r = getDb()
+      .prepare('INSERT INTO learn_nodes (domain_id, level, title, created_at) VALUES (?, 1, ?, ?)')
+      .run(domainId, title, nowIso())
+    return Number(r.lastInsertRowid)
+  })
+  ipcMain.handle('learn:topicRename', (_e, id: number, title: string) => {
+    getDb().prepare('UPDATE learn_nodes SET title = ? WHERE id = ? AND level = 1').run(title, id)
+    return true
+  })
+  ipcMain.handle('learn:topicDelete', (_e, id: number) => {
+    const d = getDb()
+    // 判空含回收站中未彻底删的知识点（设计 §三：保证回收站恢复目标主题永远存在，无孤儿）
+    const count = d
+      .prepare('SELECT COUNT(*) AS c FROM learn_nodes WHERE parent_id = ? AND level = 2')
+      .get(id) as { c: number }
+    if (count.c > 0) throw new Error('TOPIC_NOT_EMPTY')
+    d.prepare('DELETE FROM learn_nodes WHERE id = ?').run(id)
+    return true
+  })
+  ipcMain.handle('learn:expandTopic', async (_e, jobId: string, topicId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return await expandLearnTopic(topicId, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('learn:nodeAdd', async (_e, jobId: string, topicId: number, title: string) => {
+    const d = getDb()
+    const dup = d
+      .prepare('SELECT id FROM learn_nodes WHERE parent_id = ? AND title = ?')
+      .get(topicId, title)
+    if (dup) throw new Error('CONFLICT:' + title)
+    const topic = d
+      .prepare('SELECT domain_id FROM learn_nodes WHERE id = ? AND level = 1')
+      .get(topicId) as { domain_id: number } | undefined
+    if (!topic) throw new Error('NOT_FOUND')
+    const r = d
+      .prepare(
+        "INSERT INTO learn_nodes (domain_id, parent_id, level, title, source, created_at) VALUES (?, ?, 2, ?, 'manual', ?)"
+      )
+      .run(topic.domain_id, topicId, title, nowIso())
+    const id = Number(r.lastInsertRowid)
+    const ac = beginJob(jobId)
+    try {
+      // 手动添加即生成完整卡片（工作即学即用入口，万象库手动输入同款体验）
+      await generateLearnCard(id, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+    return d.prepare(`${learnCardSql} AND n.id = ?`).get(id)
+  })
+  ipcMain.handle('learn:nodeDelete', (_e, id: number) => {
+    discardToRecycle('learn', id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+  ipcMain.handle('learn:getCard', async (_e, jobId: string, id: number) => {
+    const d = getDb()
+    const row = d.prepare(`${learnCardSql} AND n.id = ?`).get(id) as { content_ready: number } | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    if (row.content_ready === 0) {
+      // 骨架先行兜底：未生成的卡点开时现场生成（可取消；常态泵已备好秒回）
+      const ac = beginJob(jobId)
+      try {
+        await generateLearnCard(id, ac.signal)
+      } finally {
+        endJob(jobId)
+      }
+    }
+    return d.prepare(`${learnCardSql} AND n.id = ?`).get(id)
+  })
+  ipcMain.handle('learn:daily', () => {
+    ensureDailyQueue() // 幂等定档（纯 SQL）；随后 fire-and-forget 泵补内容
+    void ensureLearnStock()
+    const d = getDb()
+    const row = d
+      .prepare('SELECT new_ids, review_ids FROM learn_daily WHERE date = ?')
+      .get(localDateStr()) as { new_ids: string; review_ids: string } | undefined
+    if (!row) return { new: [], review: [] }
+    const byId = new Map<number, LearnDailyRow>()
+    const all = [
+      ...(JSON.parse(row.new_ids) as number[]),
+      ...(JSON.parse(row.review_ids) as number[])
+    ]
+    if (all.length > 0) {
+      const rows = d
+        .prepare(`${learnCardSql} AND n.id IN (${all.map(() => '?').join(',')})`)
+        .all(...all) as unknown as LearnDailyRow[]
+      for (const r of rows) byId.set(r.id, r)
+    }
+    const pick = (arr: number[]): LearnDailyRow[] =>
+      arr.map((i) => byId.get(i)).filter((r): r is LearnDailyRow => r != null)
+    return {
+      new: pick(JSON.parse(row.new_ids) as number[]),
+      review: pick(JSON.parse(row.review_ids) as number[])
+    }
+  })
+  ipcMain.handle('learn:randomOne', async (_e, jobId: string) => {
+    const d = getDb()
+    // 已生成的未学卡优先（秒开——泵产即备选池）；无才现场生成（生成中可取消）
+    const ready = d
+      .prepare(`${learnCardSql} AND n.state = 'todo' AND n.content_ready = 1`)
+      .all() as { id: number }[]
+    const pool = ready.length > 0 ? ready : (d.prepare(`${learnCardSql} AND n.state = 'todo'`).all() as { id: number }[])
+    if (pool.length === 0) throw new Error('没有可学的知识点：去知识树建树、AI 展开主题或手动添加')
+    const picked = pool[Math.floor(Math.random() * pool.length)]
+    if (ready.length === 0) {
+      const ac = beginJob(jobId)
+      try {
+        await generateLearnCard(picked.id, ac.signal)
+      } finally {
+        endJob(jobId)
+      }
+    }
+    return d.prepare(`${learnCardSql} AND n.id = ?`).get(picked.id)
+  })
+  ipcMain.handle('learn:mark', (_e, id: number, action: 'learn' | 'remember' | 'forget') => {
+    const d = getDb()
+    const n = d
+      .prepare('SELECT state, review_stage, next_review_at FROM learn_nodes WHERE id = ? AND deleted_at IS NULL')
+      .get(id) as
+      | { state: string; review_stage: number; next_review_at: string | null }
+      | undefined
+    if (!n) throw new Error('NOT_FOUND')
+    const today = localDateStr()
+    if (action === 'learn') {
+      if (n.state !== 'todo') return false
+      // 学会了：进第 1 档，次日复习（设计 §二状态机）
+      d.prepare(
+        "UPDATE learn_nodes SET state = 'learned', review_stage = 1, next_review_at = ? WHERE id = ?"
+      ).run(addDaysLocal(1), id)
+      return true
+    }
+    // remember/forget 仅到期卡可用（渲染层双钮也只在到期卡显示）
+    if (
+      n.state !== 'learned' ||
+      n.review_stage < 1 ||
+      n.review_stage > 4 ||
+      n.next_review_at == null ||
+      n.next_review_at > today
+    ) {
+      return false
+    }
+    if (action === 'forget') {
+      // 忘记了：重置回第 1 档，明天再来
+      d.prepare('UPDATE learn_nodes SET review_stage = 1, next_review_at = ? WHERE id = ?').run(
+        addDaysLocal(1),
+        id
+      )
+      return true
+    }
+    const nextStage = n.review_stage + 1
+    if (nextStage >= 5) {
+      // 走完 15 天档：毕业，不再进复习
+      d.prepare('UPDATE learn_nodes SET review_stage = 5, next_review_at = NULL WHERE id = ?').run(id)
+    } else {
+      const gap = nextStage === 2 ? 3 : nextStage === 3 ? 7 : 15
+      d.prepare('UPDATE learn_nodes SET review_stage = ?, next_review_at = ? WHERE id = ?').run(
+        nextStage,
+        addDaysLocal(gap),
+        id
+      )
+    }
+    return true
+  })
+  ipcMain.handle('learn:stockCheck', () => {
+    void ensureLearnStock()
+    return true
+  })
+  ipcMain.handle('learn:highlights', () =>
+    getDb()
+      .prepare(
+        'SELECT h.*, n.title AS title FROM learn_highlights h JOIN learn_nodes n ON h.node_id = n.id WHERE n.deleted_at IS NULL ORDER BY h.id DESC'
+      )
+      .all()
+  )
+  ipcMain.handle('learn:addHighlight', (_e, nodeId: number, text: string) => {
+    const d = getDb()
+    const dup = d
+      .prepare('SELECT id FROM learn_highlights WHERE node_id = ? AND text = ?')
+      .get(nodeId, text)
+    if (dup) return false
+    d.prepare('INSERT INTO learn_highlights (node_id, text, created_at) VALUES (?, ?, ?)').run(
+      nodeId,
+      text,
+      nowIso()
+    )
+    return true
+  })
+  ipcMain.handle('learn:deleteHighlight', (_e, id: number) => {
+    getDb().prepare('DELETE FROM learn_highlights WHERE id = ?').run(id)
+    return true
+  })
+
   // ---------- 灵感泉 ----------
   ipcMain.handle('inspirations:list', () =>
     getDb().prepare('SELECT * FROM inspirations WHERE deleted_at IS NULL ORDER BY sort, id').all()
@@ -1032,8 +1313,18 @@ export function registerIpc(): void {
     'articles:list',
     (_e, feedId: number | null, view: FeedView, sinceDays: number) => listArticles(feedId, view, sinceDays)
   )
-  /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+  /** 打开文章：懒抓正文 + 全量返回（260911 起不再自动标已读——已读判定唯一入口是 setRead） */
   ipcMain.handle('articles:open', (_e, id: number) => openArticle(id))
+  /** 显式已读/再看看（read=false 清空 read_at，行回收件箱） */
+  ipcMain.handle('articles:setRead', (_e, id: number, read: boolean) => {
+    setArticleRead(id, read)
+    return true
+  })
+  /** 收藏/取消收藏（取消后按已读状态回流收件箱/已归档） */
+  ipcMain.handle('articles:setFavorite', (_e, id: number, fav: boolean) => {
+    setArticleFavorite(id, fav)
+    return true
+  })
   /** 全部标已读（feedId=null 全部源） */
   ipcMain.handle('articles:markAllRead', (_e, feedId: number | null) => {
     markAllRead(feedId)

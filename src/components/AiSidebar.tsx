@@ -36,6 +36,7 @@ const ROLE_LABEL: Record<string, string> = { user: '我', assistant: AI_NAME, sy
 const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
   { id: 'assistant', label: '助手', icon: 'forum' },
   { id: 'motto', label: '格言·解读', icon: 'psychology' },
+  { id: 'learn', label: '学习·问答', icon: 'school' },
   { id: 'wiki', label: '万象·问答', icon: 'public' },
   { id: 'zhijiji', label: '致知己·追问', icon: 'self_improvement' },
   { id: 'verify', label: '辩真·核查', icon: 'fact_check' }
@@ -47,7 +48,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   motto: SettingsKeys.AiActiveSessionMotto,
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
-  verify: SettingsKeys.AiActiveSessionVerify
+  verify: SettingsKeys.AiActiveSessionVerify,
+  learn: SettingsKeys.AiActiveSessionLearn
 }
 
 /** 画像提炼协议标记（主进程 PROFILE_SUGGEST_INSTRUCTION 约定）：<<<PROFILE_SUGGEST:类别|内容>>> */
@@ -154,7 +156,7 @@ export default function AiSidebar(props: AiSidebarProps) {
       let ch: AiChannel = 'assistant'
       try {
         const saved = await window.api.settings.get(SettingsKeys.AiActiveChannel)
-        if (saved === 'wiki' || saved === 'zhijiji' || saved === 'verify' || saved === 'assistant') ch = saved
+        if (saved === 'learn' || saved === 'motto' || saved === 'wiki' || saved === 'zhijiji' || saved === 'verify' || saved === 'assistant') ch = saved
       } catch {
         /* 读失败用默认 */
       }
@@ -689,6 +691,7 @@ export default function AiSidebar(props: AiSidebarProps) {
 function moduleLabel(m: string): string {
   // 260908：辩真阁并入万象库（verify 移除）；账本→记账本、个人中心→个人档；260911 格言库并入文笔坊（mottos 移除）
   const map: Record<string, string> = {
+    learn: '学习库',
     wiki: '万象库',
     inspirations: '灵感泉',
     zhijiji: '致知己',

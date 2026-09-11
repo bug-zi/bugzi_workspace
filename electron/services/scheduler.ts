@@ -1,11 +1,12 @@
-// 定时任务（主进程）：格言定时生成 + 回收站每日零点清理 + 信息源老文章正文清理
+// 定时任务（主进程）：格言定时生成 + 回收站每日零点清理 + 信息源 30 天已读文章清理
 // 规则（总需求文档第 10 条）：App 未运行时错过即跳过，不补生成
 import { getSetting, setSetting } from '../db/settings'
 import { SettingsKeys } from '../../src/shared/types'
 import { generateMottos } from '../ai/services'
 import { cleanupExpired } from './recycle'
-import { cleanupOldArticleBodies } from './feed'
+import { cleanupOldArticles } from './feed'
 import { ensureDailyLearn } from './wikiStock'
+import { ensureLearnStock } from './learnStock'
 
 let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
@@ -76,13 +77,15 @@ export function scheduleMidnightCleanup(): void {
     try {
       const n = cleanupExpired()
       if (n > 0) console.log(`[scheduler] 回收站零点清理 ${n} 条`)
-      const a = cleanupOldArticleBodies()
-      if (a > 0) console.log(`[scheduler] 信息源老文章正文清理 ${a} 条`)
+      const a = cleanupOldArticles()
+      if (a > 0) console.log(`[scheduler] 信息源 30 天已读文章清理 ${a} 条`)
     } catch (e) {
       console.warn(`[scheduler] 回收站清理失败：${(e as Error).message}`)
     }
     // 万象库每日待学习批次（260910）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
     void ensureDailyLearn()
+    // 学习库每日队列（260911）：App 跨天常驻时零点也定档（内部幂等 + 顺带触发泵）
+    void ensureLearnStock()
     scheduleMidnightCleanup()
   }, msUntilMidnight())
   midnightTimer.unref?.()
@@ -93,8 +96,8 @@ export function startSchedulers(): void {
   try {
     const n = cleanupExpired()
     if (n > 0) console.log(`[scheduler] 启动清理回收站 ${n} 条`)
-    const a = cleanupOldArticleBodies()
-    if (a > 0) console.log(`[scheduler] 启动清理信息源老文章正文 ${a} 条`)
+    const a = cleanupOldArticles()
+    if (a > 0) console.log(`[scheduler] 启动清理信息源 30 天已读文章 ${a} 条`)
   } catch (e) {
     console.warn(`[scheduler] 启动清理失败：${(e as Error).message}`)
   }

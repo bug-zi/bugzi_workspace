@@ -1,5 +1,6 @@
 // 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除
 export type ModuleId =
+  | 'learn'
   | 'wiki'
   | 'inspirations'
   | 'verify'
@@ -13,8 +14,8 @@ export type ModuleId =
   | 'recycle'
   | 'profile'
 
-/** AI 边栏频道（DB v9 频道制） */
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify'
+/** AI 边栏频道（DB v9 频道制；260911 新增 learn） */
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn'
 
 /** 草稿本频道（DB v14）：固定两频道起步 */
 export type DraftChannel = 'general' | 'turtle'
@@ -103,6 +104,63 @@ export interface WikiQuizQuestion {
   options: string[]
   /** 正确选项下标 0..3 */
   answer: number
+}
+
+// ===== 学习库（DB v33，学习库 specs）=====
+
+export interface LearnDomain {
+  id: number
+  name: string
+  sort: number
+  tree_ready: 0 | 1
+  created_at: string
+  /** 知识点总数（learn:domains 联查聚合） */
+  total: number
+  /** 已学知识点数 */
+  learned: number
+}
+
+export interface LearnNode {
+  id: number
+  domain_id: number
+  parent_id: number | null
+  level: 1 | 2
+  title: string
+  summary: string
+  state: 'todo' | 'learned'
+  /** 0=未学 1..4=复习四档 5=毕业（next_review_at 为 NULL） */
+  review_stage: number
+  next_review_at: string | null
+  content_ready: 0 | 1
+  source: 'ai' | 'manual'
+  deleted_at: string | null
+  created_at: string
+}
+
+export interface LearnTopicView {
+  id: number
+  title: string
+  total: number
+  learned: number
+  points: LearnNode[]
+}
+
+export interface LearnCardRow extends LearnNode {
+  domain_name: string
+  topic_title: string | null
+}
+
+export interface LearnDailyRow extends LearnNode {
+  domain_name: string
+  topic_title: string | null
+}
+
+export interface LearnHighlightRow {
+  id: number
+  node_id: number
+  text: string
+  created_at: string
+  title: string
 }
 
 export interface InspirationRecord {
@@ -273,6 +331,7 @@ export interface ArticleRecord {
   content_feed_html: string | null
   content_fetched_html: string | null
   read_at: string | null
+  favorited_at: string | null
   summary_text: string | null
   summary_at: string | null
 }
@@ -287,12 +346,13 @@ export interface ArticleSummary {
   published_at: string | null
   fetched_at: string
   read_at: string | null
+  favorited: boolean
   has_summary: boolean
   preview: string
 }
 
-/** 文章列表视图（优化建议区第28轮）：unread=收件箱（只显未读，读完即消失）；archive=已归档（已读按时间翻） */
-export type FeedView = 'unread' | 'archive'
+/** 文章列表视图（260911 扩三值）：unread=收件箱（未读）；archive=已归档（已读按时间翻）；favorite=收藏（收藏时间倒序全量、不筛源） */
+export type FeedView = 'unread' | 'archive' | 'favorite'
 
 /** 文章列表返回体（优化建议区第28轮）：窗口内轻量行 + 窗口外剩余计数（「加载更早」按钮展示） */
 export interface FeedListView {
@@ -403,6 +463,7 @@ export interface RecycleRow {
     | 'ledger_tx'
     | 'ledger_account'
     | 'ledger_category'
+    | 'learn'
   item_id: number
   payload: string
   created_at: string
@@ -925,8 +986,8 @@ export interface Api {
     list(): Promise<(FeedRecord & { unread: number })[]>
     /** 并发拉全部源（逐源返回成败，单源失败不阻断） */
     fetchAll(): Promise<FeedFetchResult[]>
-    /** 验证订阅并取源名（失败抛带 message Error） */
-    probe(url: string): Promise<{ title: string; siteUrl: string }>
+    /** 验证订阅并取源名（支持网站首页自动发现；失败抛带 message 的可读中文 Error） */
+    probe(url: string): Promise<{ title: string; siteUrl: string; feedUrl: string }>
     /** 添加订阅（入库并立即拉一次） */
     add(url: string): Promise<FeedRecord & { unread: number }>
     /** 改显示名（拉取永不覆盖） */
@@ -937,8 +998,12 @@ export interface Api {
   articles: {
     /** 文章列表（feedId=null 全部；view=unread 收件箱/archive 已归档；sinceDays 时间窗口；返回轻量行+窗口外剩余数） */
     list(feedId: number | null, view: FeedView, sinceDays: number): Promise<FeedListView>
-    /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+    /** 打开文章：懒抓正文 + 全量返回（260911 起不再自动标已读） */
     open(id: number): Promise<ArticleRecord>
+    /** 显式已读/再看看（read=false 回退收件箱） */
+    setRead(id: number, read: boolean): Promise<boolean>
+    /** 收藏/取消收藏（取消后按已读状态回流收件箱/已归档） */
+    setFavorite(id: number, fav: boolean): Promise<boolean>
     /** 全部标已读（feedId=null 全部源） */
     markAllRead(feedId: number | null): Promise<boolean>
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
@@ -1052,6 +1117,43 @@ export interface Api {
     addHighlight(entryId: number, text: string): Promise<boolean>
     deleteHighlight(id: number): Promise<boolean>
     discardEntry(id: number): Promise<boolean>
+  }
+  learn: {
+    /** 领域列表（含树进度统计；出厂 8 领域 seed 见 DB v33） */
+    domains(): Promise<LearnDomain[]>
+    domainCreate(name: string): Promise<number>
+    domainRename(id: number, name: string): Promise<boolean>
+    /** 删领域（需无主题行，否则抛 DOMAIN_NOT_EMPTY） */
+    domainDelete(id: number): Promise<boolean>
+    /** 建树（骨架 5-8 主题 × 5-8 知识点，tree_ready=1）；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    generateTree(jobId: string, domainId: number): Promise<{ topics: number; points: number }>
+    /** 指定领域知识树（主题 + 知识点 + 进度） */
+    tree(domainId: number): Promise<LearnTopicView[]>
+    topicCreate(domainId: number, title: string): Promise<number>
+    topicRename(id: number, title: string): Promise<boolean>
+    /** 删主题（判空含回收站节点，否则抛 TOPIC_NOT_EMPTY） */
+    topicDelete(id: number): Promise<boolean>
+    /** AI 展开主题：补 3-5 个新知识点（查重跳过已有） */
+    expandTopic(jobId: string, topicId: number): Promise<{ points: number }>
+    /** 手动添加知识点（同名抛 CONFLICT）→ 生成完整卡片挂该主题 */
+    nodeAdd(jobId: string, topicId: number, title: string): Promise<LearnCardRow>
+    /** 知识点软删入回收站 */
+    nodeDelete(id: number): Promise<boolean>
+    /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
+    getCard(jobId: string, id: number): Promise<LearnCardRow>
+    /** 今日队列（新学 + 到期复习，定档不重抽） */
+    daily(): Promise<{ new: LearnDailyRow[]; review: LearnDailyRow[] }>
+    /** 随机来一条：优先已生成未学卡秒开 */
+    randomOne(jobId: string): Promise<LearnCardRow>
+    /** 状态机：learn=学会了 | remember=记住了 | forget=忘记了 */
+    mark(id: number, action: 'learn' | 'remember' | 'forget'): Promise<boolean>
+    /** 预生成泵触发（进模块） */
+    stockCheck(): Promise<boolean>
+    /** 泵产出渐进通知，返回取消订阅 */
+    onStockChanged(cb: () => void): () => void
+    highlights(): Promise<LearnHighlightRow[]>
+    addHighlight(nodeId: number, text: string): Promise<boolean>
+    deleteHighlight(id: number): Promise<boolean>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>

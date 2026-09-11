@@ -14,7 +14,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const [feeds, setFeeds] = useState<FeedWithUnread[]>([])
   const [activeFeed, setActiveFeed] = useState<number | null>(null)
   const [articles, setArticles] = useState<ArticleSummary[]>([])
-  // 收件箱模式（优化建议区第28轮）：unread=只显未读读完即消失；archive=已读按时间翻；30 天窗口，「加载更早」前移
+  // 收件箱模式（优化建议区第28轮；260911 显式已读+收藏）：unread=未读 / archive=已读按时间翻（30 天清理后天然≤30 天）/ favorite=收藏全量不筛源；已读判定唯一入口是「已读/再看看」双态按钮（打开不自动标已读）
   const [view, setView] = useState<FeedView>('unread')
   const [sinceDays, setSinceDays] = useState(30)
   const [remaining, setRemaining] = useState(0)
@@ -24,7 +24,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const [addOpen, setAddOpen] = useState(false)
   const [addUrl, setAddUrl] = useState('')
   const [probing, setProbing] = useState(false)
-  const [probed, setProbed] = useState<{ title: string; siteUrl: string } | null>(null)
+  const [probed, setProbed] = useState<{ title: string; siteUrl: string; feedUrl: string } | null>(null)
   const [removeTarget, setRemoveTarget] = useState<FeedWithUnread | null>(null)
   const [renameTarget, setRenameTarget] = useState<FeedWithUnread | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -84,15 +84,34 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const totalUnread = feeds.reduce((n, f) => n + f.unread, 0)
   const activeFeedRow = feeds.find((f) => f.id === activeFeed)
 
-  /** 打开文章（open 内置标已读 + 懒抓正文） */
+  /** 打开文章（open 只懒抓正文不再标已读——已读判定唯一入口是「已读」按钮，design.md §2） */
   const openArticle = async (id: number): Promise<void> => {
     try {
       const full = await window.api.articles.open(id)
       setReadingArticle(full)
       setReadingId(id)
-      void load() // 未读态即时消失
     } catch (e) {
       toast(`打开失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 已读/再看看（260911）：点击即流转，行随列表刷新消失/回归 */
+  const toggleRead = async (a: ArticleSummary): Promise<void> => {
+    try {
+      await window.api.articles.setRead(a.id, !a.read_at)
+      await load()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 收藏/取消收藏（260911）：收藏进收藏页，取消按已读状态回流收件箱/已归档 */
+  const toggleFav = async (a: ArticleSummary): Promise<void> => {
+    try {
+      await window.api.articles.setFavorite(a.id, !a.favorited)
+      await load()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
     }
   }
 
@@ -180,6 +199,12 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
           >
             已归档
           </button>
+          <button
+            className={`recycle-tab${view === 'favorite' ? ' active' : ''}`}
+            onClick={() => switchView('favorite')}
+          >
+            收藏
+          </button>
         </div>
         <div className="module-sub">{feeds.length} 个源{totalUnread > 0 ? ` · ${totalUnread} 篇未读` : ''}</div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -256,27 +281,62 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
               <span className="material-symbols-outlined">rss_feed</span>
               {fetching
                 ? '正在拉取…'
-                : view === 'unread'
-                  ? activeFeedRow
-                    ? '该源没有未读文章'
-                    : '没有未读文章，点「刷新」拉取新内容'
-                  : activeFeedRow
-                    ? '该源近 30 天没有已读文章'
-                    : '近 30 天没有已读文章'}
+                : view === 'favorite'
+                  ? '还没有收藏的文章（点文章行右侧星标收藏）'
+                  : view === 'unread'
+                    ? activeFeedRow
+                      ? '该源没有未读文章'
+                      : '没有未读文章，点「刷新」拉取新内容'
+                    : activeFeedRow
+                      ? '该源近 30 天没有已读文章'
+                      : '近 30 天没有已读文章'}
             </div>
           ) : (
             <>
               {articles.map((a) => (
-                <div key={a.id} className={`feed-art-row${a.read_at ? '' : ' unread'}`} onClick={() => void openArticle(a.id)}>
-                  <div className="feed-art-title">{a.title}</div>
-                  {a.preview && <div className="feed-art-preview">{a.preview}</div>}
-                  <div className="feed-art-meta">
-                    {activeFeed === null && <span>{feeds.find((f) => f.id === a.feed_id)?.title ?? ''}</span>}
-                    <span>{relTime(a.published_at ?? a.fetched_at)}</span>
+                <div
+                  key={a.id}
+                  className={`feed-art-row${a.read_at ? '' : ' unread'}`}
+                  onClick={() => void openArticle(a.id)}
+                >
+                  <div className="feed-art-main">
+                    <div className="feed-art-title">{a.title}</div>
+                    {a.preview && <div className="feed-art-preview">{a.preview}</div>}
+                    <div className="feed-art-meta">
+                      {(activeFeed === null || view === 'favorite') && (
+                        <span>{feeds.find((f) => f.id === a.feed_id)?.title ?? ''}</span>
+                      )}
+                      <span>{relTime(a.published_at ?? a.fetched_at)}</span>
+                    </div>
+                  </div>
+                  <div className="feed-art-actions">
+                    <button
+                      className={`icon-btn feed-star${a.favorited ? ' on' : ''}`}
+                      title={a.favorited ? '取消收藏' : '收藏'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void toggleFav(a)
+                      }}
+                    >
+                      <span className="material-symbols-outlined">star</span>
+                    </button>
+                    <button
+                      className="feed-read-btn"
+                      title={a.read_at ? '清除已读，回到收件箱' : '标记已读，移入已归档'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void toggleRead(a)
+                      }}
+                    >
+                      <span className="material-symbols-outlined">
+                        {a.read_at ? 'move_to_inbox' : 'mark_email_read'}
+                      </span>
+                      {a.read_at ? '再看看' : '已读'}
+                    </button>
                   </div>
                 </div>
               ))}
-              {remaining > 0 && (
+              {view === 'unread' && remaining > 0 && (
                 <button className="feed-load-more" onClick={() => setSinceDays((s) => s + 30)}>
                   加载更早 30 天 · 还剩 {remaining} 篇
                 </button>
@@ -294,7 +354,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
             <div className="dialog-body">
               <input
                 className="field"
-                placeholder="RSS/Atom 链接，如 https://example.com/feed.xml"
+                placeholder="RSS/Atom 链接或网站首页，如 https://example.com/feed.xml"
                 value={addUrl}
                 onChange={(e) => {
                   setAddUrl(e.target.value)
@@ -307,6 +367,9 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
                   验证通过：{probed.title}
                   {probed.siteUrl ? `（${probed.siteUrl}）` : ''}
                 </div>
+              )}
+              {probed && probed.feedUrl !== addUrl.trim() && (
+                <div className="feed-probe-line">实际订阅源：{probed.feedUrl}</div>
               )}
             </div>
             <div className="dialog-footer">

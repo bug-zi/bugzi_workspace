@@ -537,8 +537,9 @@ const api = {
       ipcRenderer.invoke('feeds:list'),
     /** 并发拉全部源（逐源返回成败，单源失败不阻断） */
     fetchAll: (): Promise<import('../src/shared/types').FeedFetchResult[]> => ipcRenderer.invoke('feeds:fetchAll'),
-    /** 验证订阅并取源名（失败抛带 message Error） */
-    probe: (url: string): Promise<{ title: string; siteUrl: string }> => ipcRenderer.invoke('feeds:probe', url),
+    /** 验证订阅并取源名（支持网站首页自动发现；失败抛带 message 的可读中文 Error） */
+    probe: (url: string): Promise<{ title: string; siteUrl: string; feedUrl: string }> =>
+      ipcRenderer.invoke('feeds:probe', url),
     /** 添加订阅（入库并立即拉一次） */
     add: (url: string): Promise<import('../src/shared/types').FeedRecord & { unread: number }> =>
       ipcRenderer.invoke('feeds:add', url),
@@ -555,8 +556,12 @@ const api = {
       sinceDays: number
     ): Promise<import('../src/shared/types').FeedListView> =>
       ipcRenderer.invoke('articles:list', feedId, view, sinceDays),
-    /** 打开文章：标已读 + 懒抓正文 + 全量返回 */
+    /** 打开文章：懒抓正文 + 全量返回（260911 起不再自动标已读） */
     open: (id: number): Promise<import('../src/shared/types').ArticleRecord> => ipcRenderer.invoke('articles:open', id),
+    /** 显式已读/再看看（read=false 回退收件箱） */
+    setRead: (id: number, read: boolean): Promise<boolean> => ipcRenderer.invoke('articles:setRead', id, read),
+    /** 收藏/取消收藏（取消后按已读状态回流收件箱/已归档） */
+    setFavorite: (id: number, fav: boolean): Promise<boolean> => ipcRenderer.invoke('articles:setFavorite', id, fav),
     /** 全部标已读（feedId=null 全部源） */
     markAllRead: (feedId: number | null): Promise<boolean> => ipcRenderer.invoke('articles:markAllRead', feedId),
     /** AI 总结（jobId 首参全局取消接线；有缓存秒回；LLM 未配置抛 LLM_NOT_CONFIGURED） */
@@ -598,6 +603,70 @@ const api = {
     /** 抓取页面 meta（任何失败返回空对象，不抛错） */
     fetchMeta: (url: string): Promise<{ title: string; desc: string }> =>
       ipcRenderer.invoke('favorites:fetchMeta', url)
+  },
+  learn: {
+    /** 领域列表（含树进度统计；出厂 8 领域 seed 见 DB v33） */
+    domains: (): Promise<import('../src/shared/types').LearnDomain[]> =>
+      ipcRenderer.invoke('learn:domains'),
+    domainCreate: (name: string): Promise<number> => ipcRenderer.invoke('learn:domainCreate', name),
+    domainRename: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('learn:domainRename', id, name),
+    /** 删领域（需无主题行，否则抛 DOMAIN_NOT_EMPTY；二次确认在渲染层） */
+    domainDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('learn:domainDelete', id),
+    /** 建树（骨架 5-8 主题 × 5-8 知识点，事务写入 tree_ready=1）；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    generateTree: (jobId: string, domainId: number): Promise<{ topics: number; points: number }> =>
+      ipcRenderer.invoke('learn:generateTree', jobId, domainId),
+    /** 指定领域知识树（主题 + 知识点 + 进度） */
+    tree: (domainId: number): Promise<import('../src/shared/types').LearnTopicView[]> =>
+      ipcRenderer.invoke('learn:tree', domainId),
+    topicCreate: (domainId: number, title: string): Promise<number> =>
+      ipcRenderer.invoke('learn:topicCreate', domainId, title),
+    topicRename: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('learn:topicRename', id, title),
+    /** 删主题（判空含回收站中未彻底删的知识点，否则抛 TOPIC_NOT_EMPTY） */
+    topicDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('learn:topicDelete', id),
+    /** AI 展开主题：补 3-5 个新知识点（查重跳过已有） */
+    expandTopic: (jobId: string, topicId: number): Promise<{ points: number }> =>
+      ipcRenderer.invoke('learn:expandTopic', jobId, topicId),
+    /** 手动添加知识点（同主题同名抛 CONFLICT）→ 生成完整卡片挂该主题 */
+    nodeAdd: (
+      jobId: string,
+      topicId: number,
+      title: string
+    ): Promise<import('../src/shared/types').LearnCardRow> =>
+      ipcRenderer.invoke('learn:nodeAdd', jobId, topicId, title),
+    /** 知识点软删入回收站（二次确认在渲染层） */
+    nodeDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('learn:nodeDelete', id),
+    /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
+    getCard: (jobId: string, id: number): Promise<import('../src/shared/types').LearnCardRow> =>
+      ipcRenderer.invoke('learn:getCard', jobId, id),
+    /** 今日队列（新学 3-5 + 到期复习 ≤10，定档不重抽；触发幂等定档 + 后台泵） */
+    daily: (): Promise<{
+      new: import('../src/shared/types').LearnDailyRow[]
+      review: import('../src/shared/types').LearnDailyRow[]
+    }> => ipcRenderer.invoke('learn:daily'),
+    /** 随机来一条：优先抽已生成的未学卡秒开；无则现场生成（可取消） */
+    randomOne: (jobId: string): Promise<import('../src/shared/types').LearnCardRow> =>
+      ipcRenderer.invoke('learn:randomOne', jobId),
+    /** 状态机三操作：learn=学会了(进第1档) | remember=记住了(升档) | forget=忘记了(重置第1档) */
+    mark: (id: number, action: 'learn' | 'remember' | 'forget'): Promise<boolean> =>
+      ipcRenderer.invoke('learn:mark', id, action),
+    /** 预生成泵触发（进模块）：fire-and-forget 秒回 */
+    stockCheck: (): Promise<boolean> => ipcRenderer.invoke('learn:stockCheck'),
+    /** 泵产出渐进通知（照 wiki.onStockChanged 模式），返回取消订阅 */
+    onStockChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('learn:stockChanged', listener)
+      return () => ipcRenderer.removeListener('learn:stockChanged', listener)
+    },
+    highlights: (): Promise<import('../src/shared/types').LearnHighlightRow[]> =>
+      ipcRenderer.invoke('learn:highlights'),
+    addHighlight: (nodeId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('learn:addHighlight', nodeId, text),
+    deleteHighlight: (id: number): Promise<boolean> =>
+      ipcRenderer.invoke('learn:deleteHighlight', id)
   },
   ledger: {
     /** 账户列表（含实时余额） */

@@ -8,6 +8,7 @@ import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
 import { ensureReasoningStock } from './services/reasoningStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
+import { ensureLearnStock } from './services/learnStock'
 import { applyDataDirAtStartup } from './services/storage'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
@@ -86,6 +87,9 @@ if (!app.requestSingleInstanceLock()) {
       void ensureDailyLearn()
       void ensureWikiStock()
     }, 10_000).unref()
+    // 学习库（260911）：每日队列定档（纯 SQL，泵内部先执行）+ 今日新卡预生成泵；
+    // 静默失败，LLM 未配置跳过（队列照常定档，配置后下次触发补齐）
+    setTimeout(() => void ensureLearnStock(), 10_000).unref()
     createWindow()
 
     app.on('activate', () => {

@@ -1,4 +1,5 @@
 // 信息源服务（信息源 specs §2）：RSS/Atom 拉取解析 + 正文两级策略 + AI 总结（按需缓存，signal 穿透）
+import { net } from 'electron'
 import { createHash } from 'node:crypto'
 import { XMLParser } from 'fast-xml-parser'
 import { Readability } from '@mozilla/readability'
@@ -24,6 +25,9 @@ const TIMEOUT_MS = 15_000
 
 /** RSS 自带全文判够阈值：剥标签后 ≥ 此字符数不抓网页（specs §0） */
 const FULL_TEXT_MIN = 500
+
+/** 拉取入库时间窗（天）：发布时间早于 now-N 天的条目不入库（260911 补充需求；无日期条目视作新发照常进） */
+const FETCH_WINDOW_DAYS = 7
 
 /** AI 总结输入截断（specs §2.3） */
 const SUMMARY_INPUT_MAX = 8000
@@ -133,10 +137,31 @@ function parseFeed(text: string): { channelTitle: string; items: FeedItem[] } {
 
 // ---------- 拉取 ----------
 
-/** 拉取单源并按 (feed_id, guid) 去重入库；成功清 fetch_error，失败记错误（不抛） */
+/** 网络拉取统一入口：Electron net.fetch 走 Chromium 网络栈，自动跟随系统代理
+ *  （260911 修复：主进程全局 fetch 不读系统代理，墙外源〔如 feedburner〕直连超时报 Error） */
+function httpGet(url: string): Promise<Response> {
+  return net.fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'User-Agent': UA } })
+}
+
+/** 网络/解析错误 → 可读中文（260911：原始报错如「fetch failed」对用户排查无意义） */
+function friendlyError(e: unknown): string {
+  const err = e instanceof Error ? e : new Error(String(e))
+  const raw = `${err.name} ${err.message} ${String((err as Error & { cause?: unknown }).cause ?? '')}`
+  const PROXY_HINT = '（应用自动跟随系统代理，需代理的站点请确认系统代理已开启）'
+  if (/NAME_NOT_RESOLVED|ENOTFOUND|getaddrinfo/i.test(raw)) return '域名无法解析，请检查地址是否正确'
+  if (/PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED/i.test(raw)) return `代理连接失败${PROXY_HINT}`
+  if (/TIMED_OUT|timed.?out|timeout|abort/i.test(raw)) return `连接超时：请检查地址是否正确${PROXY_HINT}`
+  if (/CONNECTION_REFUSED/i.test(raw)) return '连接被拒绝，站点可能暂时不可用'
+  if (/fetch failed|ERR_CONNECTION|ERR_CERT|ERR_TLS/i.test(raw)) return `连接失败：请检查地址是否正确${PROXY_HINT}`
+  return err.message
+}
+
+/** 拉取单源并按 (feed_id, guid) 去重入库；成功清 fetch_error，失败记错误（不抛）。
+ *  260911：入库限 7 天窗口（FETCH_WINDOW_DAYS）——发布时间早于 now-7 天的条目跳过，防首次订阅拉进整段历史；
+ *  无日期条目视作新发照常进（跳过会让无日期源永远拉不到文章；guid 去重防重复）。 */
 async function fetchFeed(feedId: number, feedUrl: string): Promise<{ added: number }> {
   try {
-    const res = await fetch(feedUrl, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'User-Agent': UA } })
+    const res = await httpGet(feedUrl)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const parsed = parseFeed(await res.text())
     const d = getDb()
@@ -144,16 +169,18 @@ async function fetchFeed(feedId: number, feedUrl: string): Promise<{ added: numb
       `INSERT OR IGNORE INTO articles (feed_id, guid, title, url, author, published_at, fetched_at, content_feed_html)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
+    const cutoff = new Date(Date.now() - FETCH_WINDOW_DAYS * 86_400_000).toISOString()
     let added = 0
     for (const it of parsed.items) {
+      if (it.publishedIso && it.publishedIso < cutoff) continue
       const r = ins.run(feedId, it.guid, it.title, it.link, it.author, it.publishedIso, nowIso(), it.contentHtml)
       added += Number(r.changes)
     }
     d.prepare('UPDATE feeds SET last_fetched_at = ?, fetch_error = NULL WHERE id = ?').run(nowIso(), feedId)
     return { added }
   } catch (e) {
-    // 超时/网络/格式错误：记到源上标红，不影响其他源
-    getDb().prepare('UPDATE feeds SET fetch_error = ? WHERE id = ?').run((e as Error).message, feedId)
+    // 超时/网络/格式错误：记到源上标红，不影响其他源（260911 起映射为可读中文）
+    getDb().prepare('UPDATE feeds SET fetch_error = ? WHERE id = ?').run(friendlyError(e), feedId)
     return { added: 0 }
   }
 }
@@ -195,33 +222,105 @@ export async function listFeeds(): Promise<(FeedRecord & { unread: number })[]> 
   }
   return d
     .prepare(
-      `SELECT f.*, (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read_at IS NULL) AS unread
+      `SELECT f.*, (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read_at IS NULL AND a.favorited_at IS NULL) AS unread
        FROM feeds f ORDER BY f.created_at, f.id`
     )
     .all() as unknown as (FeedRecord & { unread: number })[]
 }
 
-/** 拉一次验证并取源名（添加订阅弹窗「验证」用） */
-export async function probeFeed(url: string): Promise<{ title: string; siteUrl: string }> {
+/** 验证结果：feedUrl 是实际订阅地址——用户输入网站首页时为页面里发现的直链，≠ 输入值（260911 自动发现） */
+export interface FeedProbe {
+  title: string
+  siteUrl: string
+  feedUrl: string
+}
+
+/** HTML 页面发现订阅链接：<link rel="alternate" type="…rss…/…atom…">；全站缺 type 时退 href 关键词启发 */
+function discoverFeedLinks(html: string, pageUrl: string): string[] {
+  try {
+    const { document } = parseHTML(html)
+    const nodes = Array.from(document.querySelectorAll('link[rel~="alternate"][href]')) as {
+      getAttribute(name: string): string | null
+    }[]
+    const byType = nodes.filter((el) => /rss|atom|feed/i.test(el.getAttribute('type') ?? ''))
+    const source =
+      byType.length > 0
+        ? byType
+        : nodes.filter((el) => /(?:\.rss|\.atom|\.xml|\/rss|\/feed|\/atom)/i.test(el.getAttribute('href') ?? ''))
+    const out: string[] = []
+    for (const el of source) {
+      const href = el.getAttribute('href') ?? ''
+      try {
+        out.push(new URL(href, pageUrl).toString())
+      } catch {
+        /* 无效 href 跳过 */
+      }
+    }
+    return [...new Set(out)]
+  } catch {
+    return []
+  }
+}
+
+/** 按发现的链接逐个试解析（最多前 3 个，防怪站链一堆逐个打满超时） */
+async function probeViaLinks(html: string, pageUrl: string, siteUrl: string): Promise<FeedProbe | null> {
+  for (const feedUrl of discoverFeedLinks(html, pageUrl).slice(0, 3)) {
+    try {
+      const r = await httpGet(feedUrl)
+      if (!r.ok) continue
+      const parsed = parseFeed(await r.text())
+      if (!parsed.channelTitle) continue
+      return { title: parsed.channelTitle, siteUrl, feedUrl }
+    } catch {
+      /* 单个链接失败试下一个 */
+    }
+  }
+  return null
+}
+
+/** 拉一次验证并取源名（添加订阅弹窗「验证」用；260911 升级——net.fetch 走系统代理 + 网站首页自动发现订阅链接） */
+export async function probeFeed(url: string): Promise<FeedProbe> {
   const u = url.trim()
   if (!/^https?:\/\//.test(u)) throw new Error('请输入 http/https 链接')
-  const res = await fetch(u, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'User-Agent': UA } })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const parsed = parseFeed(await res.text())
-  if (!parsed.channelTitle) throw new Error('订阅源未提供名称')
   let siteUrl = ''
   try {
     siteUrl = new URL(u).origin
   } catch {
     /* 不阻断 */
   }
-  return { title: parsed.channelTitle, siteUrl }
+  let body = ''
+  let isHtml = false
+  try {
+    const res = await httpGet(u)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    body = await res.text()
+    isHtml = (res.headers.get('content-type') ?? '').toLowerCase().includes('html')
+  } catch (e) {
+    throw new Error(friendlyError(e))
+  }
+  if (!isHtml) {
+    // feed 直链（原路径零变化）；解析失败兜底——content-type 标错、实为 HTML 的怪站当页面做自动发现
+    try {
+      const parsed = parseFeed(body)
+      if (!parsed.channelTitle) throw new Error('订阅源未提供名称')
+      return { title: parsed.channelTitle, siteUrl, feedUrl: u }
+    } catch (e) {
+      const viaHtml = await probeViaLinks(body, u, siteUrl)
+      if (viaHtml) return viaHtml
+      throw e
+    }
+  }
+  // 网站首页：自动发现订阅链接
+  const viaHtml = await probeViaLinks(body, u, siteUrl)
+  if (viaHtml) return viaHtml
+  throw new Error('未在该页面发现可用的订阅源（RSS/Atom）链接，请改用 feed 直链重试')
 }
 
 /** 入库并立即拉一次（feeds:add） */
 export async function addFeed(url: string): Promise<FeedRecord & { unread: number }> {
   const probed = await probeFeed(url)
-  const clean = url.trim()
+  // 存实际 feed 直链——首页自动发现后 ≠ 用户输入的首页地址，否则后续拉取永远打在 HTML 上
+  const clean = probed.feedUrl
   const d = getDb()
   const exists = d.prepare('SELECT id FROM feeds WHERE feed_url = ?').get(clean)
   if (exists) throw new Error('该订阅已存在')
@@ -232,7 +331,7 @@ export async function addFeed(url: string): Promise<FeedRecord & { unread: numbe
   await fetchFeed(id, clean)
   return d
     .prepare(
-      `SELECT f.*, (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read_at IS NULL) AS unread
+      `SELECT f.*, (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read_at IS NULL AND a.favorited_at IS NULL) AS unread
        FROM feeds f WHERE f.id = ?`
     )
     .get(id) as unknown as FeedRecord & { unread: number }
@@ -252,57 +351,82 @@ export function removeFeed(id: number): void {
 
 // ---------- 文章 ----------
 
-/** 文章列表（优化建议区第28轮）：view 分未读收件箱/已归档，30 天窗口起按 sinceDays 加载；
- *  remaining = 同条件窗口外计数，「加载更早」按钮展示。轻量行 + 剥标签预览只算窗口内文章。 */
+/** 文章列表：unread/archive 排除收藏、30 天窗口起按 sinceDays 加载（remaining=窗口外计数，「加载更早」用）；
+ *  favorite 全量按收藏时间倒序，不筛源不设窗口（design.md §5）。
+ *  260911：视图查询排除收藏（收藏文章只出现在收藏页）。 */
 export function listArticles(feedId: number | null, view: FeedView, sinceDays: number): FeedListView {
   const d = getDb()
+  if (view === 'favorite') {
+    const rows = d
+      .prepare('SELECT * FROM articles WHERE favorited_at IS NOT NULL ORDER BY favorited_at DESC, id DESC')
+      .all() as unknown as ArticleRecord[]
+    return { articles: rows.map(toSummary), remaining: 0 }
+  }
   const readClause = view === 'unread' ? 'read_at IS NULL' : 'read_at IS NOT NULL'
   const sinceIso = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
   const feedClause = feedId == null ? '' : ' AND feed_id = ?'
   const params: (string | number)[] = [sinceIso, ...(feedId == null ? [] : [feedId])]
   const rows = d
     .prepare(
-      `SELECT * FROM articles WHERE ${readClause} AND COALESCE(published_at, fetched_at) >= ?${feedClause}
+      `SELECT * FROM articles WHERE ${readClause} AND favorited_at IS NULL AND COALESCE(published_at, fetched_at) >= ?${feedClause}
        ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC`
     )
     .all(...params) as unknown as ArticleRecord[]
   const remainingRow = d
     .prepare(
-      `SELECT COUNT(*) AS c FROM articles WHERE ${readClause} AND COALESCE(published_at, fetched_at) < ?${feedClause}`
+      `SELECT COUNT(*) AS c FROM articles WHERE ${readClause} AND favorited_at IS NULL AND COALESCE(published_at, fetched_at) < ?${feedClause}`
     )
     .get(...params) as { c: number }
+  return { articles: rows.map(toSummary), remaining: remainingRow.c }
+}
+
+/** 轻量行映射（三视图共用；剥标签预览 120 字） */
+function toSummary(r: ArticleRecord): ArticleSummary {
   return {
-    articles: rows.map((r) => ({
-      id: r.id,
-      feed_id: r.feed_id,
-      title: r.title,
-      url: r.url,
-      author: r.author,
-      published_at: r.published_at,
-      fetched_at: r.fetched_at,
-      read_at: r.read_at,
-      has_summary: !!r.summary_text,
-      preview: stripTags(r.content_fetched_html || r.content_feed_html || '').slice(0, 120)
-    })),
-    remaining: remainingRow.c
+    id: r.id,
+    feed_id: r.feed_id,
+    title: r.title,
+    url: r.url,
+    author: r.author,
+    published_at: r.published_at,
+    fetched_at: r.fetched_at,
+    read_at: r.read_at,
+    favorited: !!r.favorited_at,
+    has_summary: !!r.summary_text,
+    preview: stripTags(r.content_fetched_html || r.content_feed_html || '').slice(0, 120)
   }
 }
 
-/** 打开文章：标已读 + 全量返回 + 懒抓正文（feed 全文不足且未抓过时，失败静默兜底摘要） */
+/** 打开文章：懒抓正文 + 全量返回（260911 起不再自动标已读——已读判定唯一入口是显式「已读」按钮） */
 export async function openArticle(id: number): Promise<ArticleRecord> {
   const d = getDb()
   const row = d.prepare('SELECT * FROM articles WHERE id = ?').get(id) as unknown as ArticleRecord | undefined
   if (!row) throw new Error('NOT_FOUND')
-  if (!row.read_at) d.prepare('UPDATE articles SET read_at = ? WHERE id = ?').run(nowIso(), id)
   await extractArticle(id)
   return (d.prepare('SELECT * FROM articles WHERE id = ?').get(id) as unknown as ArticleRecord) ?? row
 }
 
-/** 全部标已读（feedId 空=全部源） */
+/** 显式已读/再看看（design.md §2）：true→read_at=now；false→清空回未读（行回收件箱） */
+export function setArticleRead(id: number, read: boolean): void {
+  getDb().prepare('UPDATE articles SET read_at = ? WHERE id = ?').run(read ? nowIso() : null, id)
+}
+
+/** 收藏/取消收藏（design.md §3）：收藏文章只出现在收藏页且永不被清理；
+ *  取消后按已读状态自然回流收件箱（未读）或已归档（已读） */
+export function setArticleFavorite(id: number, fav: boolean): void {
+  getDb().prepare('UPDATE articles SET favorited_at = ? WHERE id = ?').run(fav ? nowIso() : null, id)
+}
+
+/** 全部标已读（feedId 空=全部源；不波及收藏——收藏未读不在收件箱展示，design.md §2） */
 export function markAllRead(feedId: number | null): void {
   const d = getDb()
-  if (feedId == null) d.prepare('UPDATE articles SET read_at = ? WHERE read_at IS NULL').run(nowIso())
-  else d.prepare('UPDATE articles SET read_at = ? WHERE feed_id = ? AND read_at IS NULL').run(nowIso(), feedId)
+  if (feedId == null)
+    d.prepare('UPDATE articles SET read_at = ? WHERE read_at IS NULL AND favorited_at IS NULL').run(nowIso())
+  else
+    d.prepare('UPDATE articles SET read_at = ? WHERE feed_id = ? AND read_at IS NULL AND favorited_at IS NULL').run(
+      nowIso(),
+      feedId
+    )
 }
 
 /**
@@ -319,7 +443,7 @@ async function extractArticle(id: number): Promise<void> {
   if (stripTags(row.content_feed_html ?? '').length >= FULL_TEXT_MIN) return // RSS 全文已够
   if (!row.url) return
   try {
-    const res = await fetch(row.url, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'User-Agent': UA } })
+    const res = await httpGet(row.url)
     if (!res.ok) return
     const html = await res.text()
     const { document } = parseHTML(html)
@@ -370,16 +494,16 @@ export async function summarizeArticle(articleId: number, signal?: AbortSignal):
   return r.content
 }
 
-/** 老文章正文清理（优化建议区第28轮）：180 天前文章置空正文/总结（最占空间的字段），保留标题/链接/已读状态——
- *  归档区仍可翻到、可「去原文」；被点开时 extractArticle 懒抓兜底（正文空+有 url 会重新抓网页）。
+/** 30 天已读文章彻底清理（design.md §4，替代第28轮「清正文保轻行」）：已读+未收藏+超 30 天整行 DELETE；
+ *  未读文章无论多老都保留（待读积压由用户自主处理），收藏文章永不清除。
  *  启动 + 每日零点调用（scheduler.ts），静默，返回清理条数。 */
-export function cleanupOldArticleBodies(): number {
-  const cutoff = new Date(Date.now() - 180 * 86_400_000).toISOString()
+export function cleanupOldArticles(): number {
+  const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
   const r = getDb()
     .prepare(
-      `UPDATE articles SET content_feed_html = NULL, content_fetched_html = NULL, summary_text = NULL, summary_at = NULL
-       WHERE COALESCE(published_at, fetched_at) < ?
-         AND (content_feed_html IS NOT NULL OR content_fetched_html IS NOT NULL OR summary_text IS NOT NULL)`
+      `DELETE FROM articles
+       WHERE read_at IS NOT NULL AND favorited_at IS NULL
+         AND COALESCE(published_at, fetched_at) < ?`
     )
     .run(cutoff)
   return Number(r.changes)

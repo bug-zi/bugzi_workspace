@@ -52,20 +52,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (all[SettingsKeys.FontWeight]) root.style.setProperty('--font-weight', all[SettingsKeys.FontWeight])
   }
 
-  /** 背景图：settings 存 bg_light/bg_dark 文件名，bzres:// 协议引用 */
+  /** 背景图：settings 存各组文件名（素材库 260911：文件在 bg/<group>/ 子目录），bzres:// 协议引用 */
   const applyBg = async (t: Theme, all: Record<string, string>): Promise<void> => {
     const key = t === 'light' ? 'bg_bg-light' : 'bg_bg-dark'
     const file = all[key]
     let url = ''
     if (file) {
-      url = `bzres://bg/${file}`
-      // 探测 404 回退纯色；fetch 异常（网络层拦截等）不视为文件缺失——
-      // CSS url() 加载不受 CORS 限制，保留 url 让样式层自行决定
-      try {
-        const probe = await fetch(url)
-        if (!probe.ok) url = ''
-      } catch {
-        /* 保留 url */
+      // 组目录路径在前；bg/ 根旧路径兜底（迁移失败静默时旧图仍在原地，行为不回退）
+      for (const u of [`bzres://bg/${t}/${file}`, `bzres://bg/${file}`]) {
+        url = u
+        // 探测 404 回退纯色/下一候选；fetch 异常（网络层拦截等）不视为文件缺失——
+        // CSS url() 加载不受 CORS 限制，保留 url 让样式层自行决定
+        try {
+          const probe = await fetch(u)
+          if (probe.ok) break
+          url = ''
+        } catch {
+          break
+        }
       }
     }
     document.documentElement.style.setProperty(

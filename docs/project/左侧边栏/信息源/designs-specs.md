@@ -1,7 +1,11 @@
 # 信息源 designs-specs.md
 
 >
-> 260909 增量注记（第28轮）：主列表改**收件箱模式**（只显未读、读完即消失；「已归档」视图翻已读）+ **30 天时间窗口**加载（窗口外「加载更早 30 天 · 还剩 N 篇」触达，切视图/切源窗口重置）+ **180 天老文章清正文保轻行**（启动+零点定时置空正文/总结，保留标题轻行可跳原文，点开懒抓兜底）。详见 §2.4 与 `2026-09-09-信息源收件箱与时间窗口-design.md`（实施后随计划归档 archive/）。
+> 260911 增量注记（第37轮）：主进程网络层换 **Electron net.fetch**（Chromium 网络栈自动跟随系统代理——修复墙外源〔feedburner 等〕直连超时报 Error，对齐 llm.ts 260909 既定约定；§2 拉取三处统一走 httpGet 内部件）；订阅入口支持**网站首页自动发现**（HTML `<link rel="alternate">` 探测 feed 直链，addFeed 存发现的直链而非用户输入）；订阅/拉取错误映射**可读中文**（连接类附「应用自动跟随系统代理」提示）。详见 `2026-09-11-信息源订阅网络层修复与自动发现-design.md`。
+>
+> 260911 增量注记：已读判定改**显式按钮**（打开文章不再自动标已读，第28轮「读完即消失」与「无标未读回退」口径作废）——行/阅读视图双入口「已读｜再看看」双态可逆；新增**文章收藏**（DB v34 `favorited_at`，「收藏」第三 tab，收藏时间倒序全量不筛源，永不被清理；取消按已读状态回流收件箱/已归档）；老数据清理改**30 天整行彻底删除**（已读+未收藏，第28轮 180 天清正文保轻行口径作废；归档页「加载更早」移除）。详见 §2.4/§2.5/§3/§4 与 `2026-09-11-信息源已读收藏与清理-design.md`。
+>
+> 260909 增量注记（第28轮）：主列表改**收件箱模式**（只显未读、读完即消失；「已归档」视图翻已读）+ **30 天时间窗口**加载（窗口外「加载更早 30 天 · 还剩 N 篇」触达，切视图/切源窗口重置）+ **180 天老文章清正文保轻行**（启动+零点定时置空正文/总结，保留标题轻行可跳原文，点开懒抓兜底；260911 起由 30 天整行删除取代）。详见 §2.4 与 `2026-09-09-信息源收件箱与时间窗口-design.md`（实施后随计划归档 archive/）。
 
 > 本文档由 AI 基于 `docs/project/左侧边栏/信息源/design.md`（260908 brainstorming 定稿并立项）生成，是开发的直接依据。设计全记录（七项决策与被否方案）见同目录 `archive/2026-09-08-信息源-design.md`。依赖：样式/designs-specs.md（ConfirmDialog / GoConfigDialog / Toast 与主题色系、Material Symbols 用法）、个人中心/designs-specs.md（LLM 配置与 GoConfigDialog kind='llm' 惯例）、**AI 生成全局取消机制（260908 落地）**——本模块 `articles:summarize` 为 AI 通道，按「jobId 首参 + beginJob → ac.signal → finally endJob」模式接入（electron/ai/jobs.ts）。260908 已实施（typecheck/build 通过，记录见 `docs/log/260908.md`）。
 
@@ -74,10 +78,12 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
   - user：文章标题 + 全文文本。
 - 成功回写 `summary_text` / `summary_at`；LLM 未配置上抛 `LlmNotConfiguredError`（渲染层转 GoConfigDialog）。
 
-### 2.4 收件箱查询与老数据清理（第28轮）
+### 2.4 收件箱查询与老数据清理（第28轮；260911 三视图+收藏+30 天整行删）
 
-- `listArticles(feedId, view, sinceDays)`：`view='unread'`（收件箱，`read_at IS NULL`）| `'archive'`（已归档，`read_at IS NOT NULL`）；时间条件 `COALESCE(published_at, fetched_at) >= now - sinceDays 天`；返回 `FeedListView { articles, remaining }`，remaining 为同条件去时间窗口 COUNT。
-- `cleanupOldArticleBodies()`：`UPDATE` 置空 180 天前文章的 `content_feed_html`/`content_fetched_html`/`summary_text`/`summary_at`（仅清理仍有内容者），保留标题/链接/已读轻行；挂 scheduler 启动 + 每日零点；老文章点开时 §2.2 懒抓兜底。
+- `listArticles(feedId, view, sinceDays)`（260911 三视图）：`view='unread'`（收件箱，`read_at IS NULL`）| `'archive'`（已归档，`read_at IS NOT NULL`）| `'favorite'`（收藏，`favorited_at IS NOT NULL` 按收藏时间倒序**全量**，不筛源不设窗口）；unread/archive 两分支均排除收藏（`favorited_at IS NULL`）且时间条件 `COALESCE(published_at, fetched_at) >= now - sinceDays 天`；返回 `FeedListView { articles, remaining }`，remaining 为同条件去时间窗口 COUNT（仅 unread 用）。`ArticleSummary` 增 `favorited`。
+- `setArticleRead(id, read)` / `setArticleFavorite(id, fav)`（260911）：已读判定唯一入口——`openArticle` 不再写 `read_at`；`read=false` 清空回未读（行回收件箱）；收藏只出现在收藏页，取消按已读状态自然回流。
+- `cleanupOldArticles()`（260911，取代第28轮 `cleanupOldArticleBodies`）：`DELETE` 已读 + 未收藏 + `COALESCE(published_at, fetched_at)` 超 30 天的**整行**；未读无论多老保留、收藏永不清除；挂 scheduler 启动 + 每日零点。
+- 未读数（`feeds:list` 徽标子查询与 `feeds:add` 返回）排除收藏（260911）。
 
 ## 3. 渲染层（`src/modules/feed/`）
 
@@ -85,7 +91,7 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 
 - 布局：左窄栏源列表（约 200px）+ 右侧文章区；文章区再分列表态/阅读态（`selectedArticleId: number | null` 主栏内切换，写作台页面化同款语义）。
 - 源列表：「全部文章」聚合项（总未读数）+ 各源行（源名 + 未读数徽标 + `fetch_error` 红点 title 显错）+ `more_horiz` 菜单（重命名 / 删除）+ 底部「添加订阅」按钮（icon `add`）。
-- 文章列表：行 = 标题（未读 `font-weight` 加粗）+ 源名（全部视图时显示）+ 相对时间 + 摘要前 50 字；`ORDER BY COALESCE(published_at, fetched_at) DESC`；顶部「收件箱 | 已归档」切换（recycle-tab 同款，第28轮）——收件箱只显未读、读完即消失，已归档显已读；默认 30 天窗口，底部「加载更早 30 天 · 还剩 N 篇」按钮连续前移，切视图/切源重置；顶栏「刷新」（icon `refresh`，拉取中转圈）与「全部标已读」（不带时间过滤，天然清空全部未读）。
+- 文章列表：行 = 主体列（标题未读 `font-weight` 加粗 + 源名 + 相对时间 + 摘要前 120 字）+ 右侧常显操作区（260911：星标 `star` 收藏/取消〔实心=已收藏，FILL 轴〕+ 「已读｜再看看」双态小按钮〔`mark_email_read`/`move_to_inbox`，点击即流转：已读→归档、再看看→收件箱，可逆无确认〕）；`ORDER BY COALESCE(published_at, fetched_at) DESC`（favorite 按 `favorited_at DESC`）；顶部「收件箱 | 已归档 | 收藏」三 tab（recycle-tab 同款，260911 扩）——收藏页跨源 meta 恒显源名、不受左栏选源影响；收件箱默认 30 天窗口，底部「加载更早 30 天 · 还剩 N 篇」仅收件箱显示（260911：归档天然 ≤30 天、收藏无窗口），切视图/切源重置；顶栏「刷新」（icon `refresh`，拉取中转圈）与「全部标已读」（不带时间过滤，260911 起不波及收藏未读）。
 - `useModuleActivated('feed', …)`：切回模块触发 `feeds:fetchAll` + 双列表刷新（进模块自动拉取）。
 - 添加订阅弹窗：URL input → 「验证」`feeds:probe` 显源名 → 「订阅」`feeds:add`（入库并立即拉一次）；probe 失败 toast 原因（网络/非 RSS）。
 - 删除源：ConfirmDialog「删除源及其 N 篇文章，不可恢复」→ `feeds:remove` → 回「全部文章」。
@@ -93,14 +99,14 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 
 ### 3.2 ArticleView.tsx（阅读视图）
 
-- 顶部：返回 + 标题 + 源名/时间行 + 「去原文」按钮（icon `open_in_new`，`window.api.openExternal(url)`）。
+- 顶部：返回 + 标题 + 星标（收藏/取消）+ 「已读｜再看看」双态按钮 + 「去原文」按钮（icon `open_in_new`，`window.api.openExternal(url)`）——260911 与列表行双入口，按钮态本地即时翻转并 `onChanged` 刷新列表。
 - **AI 总结卡**（置顶，主题色边框卡片）：
   - 打开文章（`articles:open`）后若 `summary_text` 为空 → 自动发起 `articles:summarize`：`crypto.randomUUID()` 生成 jobId 首参（WikiModule 同款），卡片 loading 态；
   - jobId 全局取消接线：loading 持 jobId、catch `msg.includes('已取消')` 轻提示分支（排 LLM_NOT_CONFIGURED 前）、生成中可点停止；
   - 失败显示原因 + 「重试」；成功渲染总结文本 + 小字「AI 生成」。
   - `LlmNotConfiguredError`（message 为 `LLM_NOT_CONFIGURED`）→ GoConfigDialog（kind='llm'，模块持有，格言库 goConfig 同款）。
 - **正文**：`DOMPurify.sanitize(html)` 后 `dangerouslySetInnerHTML`，scoped `.feed-article` 排版（复用 md-view 风格：行高/标题层级/链接色 `--color-primary-deep`）；远程 `<img>` 直接加载（CSP 已放宽）。
-- 打开即标已读（`articles:open` 内置 `read_at = now`），列表未读态随之消失。
+- 打开不标已读（260911：`articles:open` 只懒抓正文与全量返回；已读判定唯一入口是显式按钮）。
 
 ## 4. IPC 与 preload（ipc.ts + preload.ts + api.d.ts 三处同步）
 
@@ -112,8 +118,11 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 | `feeds:add` | `(url: string) => Promise<FeedRecord>` | probe 结果入库 + 立即 fetchFeed 一次 |
 | `feeds:rename` | `(id, title: string) => Promise<void>` | 改源显示名 |
 | `feeds:remove` | `(id) => Promise<void>` | 两步删文章与源（§1），彻底删除 |
-| `articles:list` | `(feedId: number \| null, view: 'unread' \| 'archive', sinceDays: number) => Promise<FeedListView>` | null=全部；view 分收件箱/已归档；30 天窗口起 + remaining 窗口外计数 |
-| `articles:open` | `(id) => Promise<ArticleRecord>` | 全量（含正文与总结缓存）+ 标已读 + 懒抓正文（feed 全文不足且未抓过时顺手 extract，§2.2） |
+| `articles:list` | `(feedId: number \| null, view: 'unread' \| 'archive' \| 'favorite', sinceDays: number) => Promise<FeedListView>` | null=全部（favorite 忽略）；三视图 §2.4；30 天窗口起 + remaining 窗口外计数 |
+| `articles:open` | `(id) => Promise<ArticleRecord>` | 全量（含正文与总结缓存）+ 懒抓正文（feed 全文不足且未抓过时顺手 extract，§2.2）；260911 起不标已读 |
+| `articles:setRead` | `(id, read: boolean) => Promise<boolean>` | 260911：显式已读/再看看（read=false 清空 read_at 回收件箱） |
+| `articles:setFavorite` | `(id, fav: boolean) => Promise<boolean>` | 260911：收藏/取消（取消按已读状态回流收件箱/已归档） |
+| `articles:markAllRead` | `(feedId: number \| null) => Promise<boolean>` | 全部标已读（260911 起排除收藏未读） |
 | `articles:summarize` | `(jobId: string, id) => Promise<string>` | **AI 通道**：beginJob → summarizeArticle(ac.signal) → finally endJob；未配置抛 `LLM_NOT_CONFIGURED` |
 
 - 无 signal 兼容：`summarizeArticle` 形参可选（与 services 层惯例一致）；`feeds:rename` 仅改显示名不动拉取配置。
@@ -125,9 +134,9 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 
 ## 6. 明确不做（design.md 背书）
 
-- 收藏/稍后读、定时自动拉取、单篇文章手动删除、全文搜索、OPML、列表虚拟滚动（v2 备选）。
+- 定时自动拉取、单篇文章手动删除、全文搜索、OPML、列表虚拟滚动（v2 备选）。
 - 不入回收站（八块与 RecycleSource 零改动）；不新增 AI 边栏频道（五频道不动）。
-- 已读不进回收站（第28轮维持现口径）；无「标未读」回退操作（第28轮明确不做）。
+- 已读不进回收站（第28轮维持现口径）；~~无「标未读」回退操作（第28轮明确不做）~~（260911「再看看」落地回退）；~~收藏/稍后读~~（260911 文章收藏落地）。
 
 ## 7. 验收清单
 
@@ -135,9 +144,10 @@ CREATE INDEX idx_articles_feed ON articles(feed_id, published_at DESC);
 - [ ]  预置三源：首次进入自动 seed + 自动拉取出文章
 - [ ]  拉取：进模块自动拉 + 手动刷新；单源断网/超时只标红不阻断其他源；guid 去重不重插
 - [ ]  订阅管理：添加（probe 验证 → 确认入库 → 立即拉取）；重命名；删除连文章彻底清
-- [ ]  已读：点开标已读、未读加粗、全部标已读；未读数徽标准确
-- [ ]  收件箱模式（第28轮）：读完消失、已归档可翻、加载更早触达窗口外、全部标已读清空收件箱（含窗口外未读）
-- [ ]  老数据清理（第28轮）：180 天前文章正文/总结置空、标题轻行保留、点开懒抓兜底
+- [ ]  已读（260911）：打开不消失、点「已读」进归档、「再看看」回收件箱（列表行 + 阅读视图双入口）、全部标已读不波及收藏；未读数徽标准确（不含收藏）
+- [ ]  收藏（260911）：星标收藏进收藏页（阅读视图照常、缓存随行）、取消回流正确、收藏页不筛源恒显源名、永不被 30 天清理
+- [ ]  老数据清理（260911）：已读+未收藏+超 30 天整行删除；未读与收藏对照保留
+- [ ]  收件箱模式（第28轮）：已归档可翻、加载更早仅收件箱触达窗口外、全部标已读清空收件箱（含窗口外未读）
 - [ ]  正文两级：全文源直接渲染；摘要源自动抓正文（一次抓两用）；双失败摘要 + 去原文外链
 - [ ]  AI 总结：首次打开生成（jobId 取消接线：停止即中断、toast「已取消」、可重试）+ 缓存秒开；失败重试；LLM 未配置弹「去配置」
 - [ ]  安全：正文过 DOMPurify；远程图片显示（CSP 放行 https:）；「去原文」跳系统浏览器

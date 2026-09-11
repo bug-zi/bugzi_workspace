@@ -5,6 +5,7 @@ import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
 import CanvasSidebar from './components/CanvasSidebar'
+import LearnModule from './modules/learn/LearnModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
@@ -26,8 +27,9 @@ import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊，左栏 12 → 11 项、启动默认万象库）
+// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
+  { id: 'learn', label: '学习库', icon: 'school' },
   { id: 'wiki', label: '万象库', icon: 'public' },
   { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
   { id: 'favorites', label: '收藏夹', icon: 'bookmark' },
@@ -45,6 +47,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
  *  辩真阁已并入万象库，'verify' 频道由万象库辩真板块经 openAiWith 的 channel 覆盖直达；
  *  格言库已并入文笔坊，'motto' 频道由文笔坊格言面板显式传 channel 覆盖直达 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
+  learn: 'learn',
   wiki: 'wiki',
   zhijiji: 'zhijiji'
 }
@@ -199,6 +202,7 @@ function Shell() {
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
               aria-hidden={m.id !== module}
             >
+              {m.id === 'learn' && <LearnModule onOpenAi={openAiWith} />}
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}

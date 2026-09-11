@@ -6,8 +6,10 @@ import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 // 页签 key：单一来源用 source 值；「推理角」为组页签（reasoning_soup 汤 + reasoning_game
-// 对局记录混排一页，specs §5）。260908 辩真阁并入万象库：verify 来源聚合进「万象库」块，页签九块变八块。
+// 对局记录混排一页，specs §5）。260908 辩真阁并入万象库：verify 来源聚合进「万象库」块，页签九块变八块；
+// 其后画布（canvases）加入回九块；260911 学习库接入：learn 块居首（位次随左栏），页签九块变十块。
 const TABS: { key: string; label: string }[] = [
+  { key: 'learn', label: '学习库' },
   { key: 'mottos', label: '格言库' },
   { key: 'wiki', label: '万象库' },
   { key: 'inspirations', label: '灵感泉' },
@@ -31,6 +33,8 @@ function tabOf(source: RecycleRow['source']): string {
 /** 恢复去向文案（specs §5：汤回汤库、对局记录回记录列表） */
 function backToOf(source: RecycleRow['source']): string {
   switch (source) {
+    case 'learn':
+      return '原主题'
     case 'mottos':
       return '格言库草稿区'
     case 'wiki':
@@ -64,6 +68,7 @@ function backToOf(source: RecycleRow['source']): string {
 
 /** 来源板块小字（文笔坊页签内区分两板块；记账本页签内区分流水/账户/分类；辩真并入万象库块后区分词条/记录） */
 function srcTag(source: RecycleRow['source']): string {
+  if (source === 'learn') return '知识点 · '
   if (source === 'wenbi_journal') return '浮生记 · '
   if (source === 'wenbi_article') return '文章 · '
   if (source === 'ledger_tx') return '流水 · '
@@ -84,6 +89,7 @@ function purgeTime(createdAt: string): string {
 function summaryOf(row: RecycleRow): string {
   try {
     const p = JSON.parse(row.payload) as Record<string, unknown>
+    if (row.source === 'learn') return `${p.title ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'mottos') return String(p.content ?? '')
     if (row.source === 'wiki') return `${p.term ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'inspirations') return String(p.title ?? '')
