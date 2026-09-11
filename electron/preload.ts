@@ -769,6 +769,33 @@ const api = {
   clipboard: {
     /** 写文本入系统剪贴板（格言复制等） */
     writeText: (text: string): Promise<boolean> => ipcRenderer.invoke('clipboard:writeText', text)
+  },
+  terminal: {
+    create: (
+      id: string,
+      opts: { cwd: string; shell: 'powershell' | 'pwsh' | 'cmd' }
+    ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('terminal:create', id, opts),
+    write: (id: string, data: string): Promise<boolean> =>
+      ipcRenderer.invoke('terminal:write', id, data),
+    resize: (id: string, cols: number, rows: number): Promise<boolean> =>
+      ipcRenderer.invoke('terminal:resize', id, cols, rows),
+    kill: (id: string): Promise<boolean> => ipcRenderer.invoke('terminal:kill', id),
+    /** 输出流（主进程已合帧）；返回取消订阅 */
+    onData: (cb: (p: { id: string; data: string }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { id: string; data: string }): void => {
+        cb(p)
+      }
+      ipcRenderer.on('terminal:data', listener)
+      return () => ipcRenderer.removeListener('terminal:data', listener)
+    },
+    /** 进程退出推送 */
+    onExit: (cb: (p: { id: string; exitCode: number }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { id: string; exitCode: number }): void => {
+        cb(p)
+      }
+      ipcRenderer.on('terminal:exit', listener)
+      return () => ipcRenderer.removeListener('terminal:exit', listener)
+    }
   }
 }
 

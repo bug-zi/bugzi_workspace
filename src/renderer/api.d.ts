@@ -1219,6 +1219,17 @@ export interface Api {
     /** 写文本入系统剪贴板（格言复制等） */
     writeText(text: string): Promise<boolean>
   }
+  terminal: {
+    /** 建 pty（幂等：同 id 已在跑直接成功）；shell 不存在返回 { ok:false } 由渲染层回落 */
+    create(id: string, opts: { cwd: string; shell: 'powershell' | 'pwsh' | 'cmd' }): Promise<{ ok: boolean; error?: string }>
+    write(id: string, data: string): Promise<boolean>
+    resize(id: string, cols: number, rows: number): Promise<boolean>
+    kill(id: string): Promise<boolean>
+    /** 输出流（主进程已合帧）；返回取消订阅 */
+    onData(cb: (p: { id: string; data: string }) => void): () => void
+    /** 进程退出推送 */
+    onExit(cb: (p: { id: string; exitCode: number }) => void): () => void
+  }
 }
 
 declare global {

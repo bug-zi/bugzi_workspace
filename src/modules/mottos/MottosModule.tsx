@@ -76,7 +76,45 @@ export default function MottosModule(props: MottosModuleProps) {
   // 直接删除二次确认（优化建议区：越过回收站彻底删除）
   const [foreverTarget, setForeverTarget] = useState<MottoRecord | null>(null)
   // 功能气泡菜单（优化建议区第15轮）：单击行 260ms 防抖召唤，双击行打开笔记（正式区）
-  const [menuFor, setMenuFor] = useState<{ id: number; anchor: HTMLElement } | null>(null)
+  // 第39轮：锚点由行右端改为鼠标点击坐标，菜单出现在点击处正下方
+  const [menuFor, setMenuFor] = useState<{ id: number; point: { x: number; y: number } } | null>(null)
+  // 菜单开态 ref 镜像：外点关闭发生在 mousedown 捕获段，click 时 state 已不可靠
+  const menuForRef = useRef<{ id: number; point: { x: number; y: number } } | null>(null)
+  // 第39轮反馈：菜单开着时，任意按下+点击只承担关闭、不再召唤新菜单——
+  // 在 document 捕获段记下「按下瞬间菜单是否开着」（本组件挂载早于 ActionMenu，注册序保证先记后关）
+  const menuOpenAtDownRef = useRef(false)
+  const openMenu = (id: number, point: { x: number; y: number }): void => {
+    const v = { id, point }
+    menuForRef.current = v
+    setMenuFor(v)
+  }
+  const closeMenu = (): void => {
+    menuForRef.current = null
+    setMenuFor(null)
+  }
+  // 第39轮反馈二：行内标签编辑条免开菜单退出——外点 / Esc / 「完成」三路收起
+  const tagEditRowRef = useRef<HTMLDivElement | null>(null)
+  const tagEditAtDownRef = useRef(false)
+  const exitTagEdit = (): void => {
+    setTagEditId(null)
+    setTagInput('')
+  }
+  useEffect(() => {
+    const onDown = (e: MouseEvent): void => {
+      menuOpenAtDownRef.current = menuForRef.current != null
+      // 标签编辑条开着时按下：条内（胶囊/输入框）不打扰；条外任意点收起编辑条，
+      // 并记 flag 让本次行点击只承担收起、不召唤菜单（消费式，同菜单口径）
+      if (tagEditRowRef.current != null) {
+        const inside = e.target instanceof Node && tagEditRowRef.current.contains(e.target)
+        tagEditAtDownRef.current = !inside
+        if (!inside) exitTagEdit()
+      } else {
+        tagEditAtDownRef.current = false
+      }
+    }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+  }, [])
   const clickTimer = useRef<number | null>(null)
   useEffect(() => () => {
     if (clickTimer.current != null) window.clearTimeout(clickTimer.current)
@@ -294,13 +332,14 @@ export default function MottosModule(props: MottosModuleProps) {
     toast('已复制')
   }
 
-  /** 单击行：260ms 防抖给双击让路，到点开/关功能气泡菜单（锚定行本身） */
+  /** 单击行：260ms 防抖给双击让路；菜单/标签编辑条已开时本击只承担关闭、不召唤新菜单（第39轮反馈） */
   const onRowClick = (m: MottoRecord, e: React.MouseEvent): void => {
     if (clickTimer.current != null) window.clearTimeout(clickTimer.current)
-    const anchor = e.currentTarget as HTMLElement
+    if (menuOpenAtDownRef.current || tagEditAtDownRef.current) return
+    const point = { x: e.clientX, y: e.clientY }
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null
-      setMenuFor((cur) => (cur?.id === m.id ? null : { id: m.id, anchor }))
+      openMenu(m.id, point)
     }, 260)
   }
 
@@ -638,17 +677,28 @@ export default function MottosModule(props: MottosModuleProps) {
                             window.clearTimeout(clickTimer.current)
                             clickTimer.current = null
                           }
-                          const anchor = e.currentTarget as HTMLElement
-                          setMenuFor((cur) => (cur?.id === m.id ? null : { id: m.id, anchor }))
+                          // 菜单已开时本击只承担关闭（外点 mousedown 已关），不再召唤
+                          if (menuOpenAtDownRef.current) return
+                          openMenu(m.id, { x: e.clientX, y: e.clientY })
                         }}
                       >
                         <span className="material-symbols-outlined">more_horiz</span>
                       </button>
                     </div>
                   </div>
-                  {/* v2.0 §7.1 行内标签编辑条：回车添加，点 × 删除；虚线胶囊快速添加已有标签 */}
+                  {/* v2.0 §7.1 行内标签编辑条：回车添加，点 × 删除；虚线胶囊快速添加已有标签
+                      （第39轮反馈二：外点 / Esc / 「完成」三路收起，免再开菜单） */}
                   {tagEditId === m.id && (
-                    <div className="tag-edit-row">
+                    <div
+                      className="tag-edit-row"
+                      ref={(el) => {
+                        tagEditRowRef.current = el
+                      }}
+                      onKeyDown={(e) => {
+                        // Esc 容器级接住（冒泡）：焦点在输入框或胶囊按钮上均收起
+                        if (e.key === 'Escape') exitTagEdit()
+                      }}
+                    >
                       {(m.tags ?? []).map((t) => (
                         <span key={t} className="tag-chip removable">
                           {t}
@@ -670,6 +720,7 @@ export default function MottosModule(props: MottosModuleProps) {
                       ))}
                       <input
                         className="field tag-input"
+                        autoFocus
                         value={tagInput}
                         onChange={(e) => setTagInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -678,8 +729,15 @@ export default function MottosModule(props: MottosModuleProps) {
                             setTagInput('')
                           }
                         }}
-                        placeholder="输入标签，回车添加"
+                        placeholder="输入标签，回车添加；Esc 收起"
                       />
+                      <button
+                        className="icon-btn tag-done"
+                        title="完成标签编辑"
+                        onClick={exitTagEdit}
+                      >
+                        <span className="material-symbols-outlined">check</span>
+                      </button>
                     </div>
                   )}
                   </Fragment>
@@ -690,16 +748,16 @@ export default function MottosModule(props: MottosModuleProps) {
         )
       })}
 
-      {/* 功能气泡菜单（优化建议区第15轮）：锚定行 / ⋯ 按钮，互斥单开 */}
+      {/* 功能气泡菜单（优化建议区第15轮；第39轮锚定点击坐标，互斥单开） */}
       {menuFor &&
         (() => {
           const m = mottos.find((x) => x.id === menuFor.id)
           if (!m) return null
           return (
             <ActionMenu
-              anchorEl={menuFor.anchor}
+              anchorPoint={menuFor.point}
               items={mottoMenuItems(m)}
-              onClose={() => setMenuFor(null)}
+              onClose={closeMenu}
             />
           )
         })()}

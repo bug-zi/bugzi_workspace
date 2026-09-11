@@ -20,6 +20,7 @@ import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
 import NoisePage from './modules/noise/NoisePage'
 import LlmActivity from './components/LlmActivity'
+import TerminalPanel from './components/terminal/TerminalPanel'
 import { noiseEngine } from './services/noiseEngine'
 import { sceneById } from './services/noiseScenes'
 import { useToast } from './components/Toast'
@@ -71,7 +72,7 @@ export const MODULE_ACTIVATED_EVENT = 'bugzi:module-activated'
 export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
 
 function Shell() {
-  const { theme, toggleTheme, firstLaunch, setFirstLaunchDone } = useAppSettings()
+  const { theme, toggleTheme, firstLaunch, setFirstLaunchDone, settings } = useAppSettings()
   const { toast } = useToast()
   const [module, setModule] = useState<MainView>('wiki')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
@@ -86,6 +87,25 @@ function Shell() {
   const [aiForceOpen, setAiForceOpen] = useState(false)
   // 海龟汤对局上下文（TurtlePanel 进出对局派发；草稿本据此切频道 + 新建以汤名命名，App 持有保证面板收起时不丢）
   const [turtleGame, setTurtleGame] = useState<{ title: string } | null>(null)
+  // 内置终端（260912）：open 默认收起（pty 不跨重启）；Ctrl+J 呼出/收起、Ctrl+Shift+J 新建标签
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalNewTabSignal, setTerminalNewTabSignal] = useState(0)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const k = e.key.toLowerCase()
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'j') {
+        e.preventDefault()
+        setTerminalOpen((o) => !o)
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && k === 'j') {
+        e.preventDefault()
+        setTerminalOpen(true)
+        setTerminalNewTabSignal((v) => v + 1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     const onTurtleGame = (e: Event): void => {
@@ -206,8 +226,11 @@ function Shell() {
           <div className="sidebar-spacer" />
         </nav>
 
-        {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
-        <main className="main-area">
+        {/* 中栏 + 右栏 + 底部终端面板纵向容器（260912 内置终端）：左栏不参与，保持完整可见 */}
+        <div className="app-body">
+          <div className="app-body-row">
+            {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
+            <main className="main-area">
           {MODULES.map((m) => (
             <div
               key={m.id}
@@ -261,6 +284,16 @@ function Shell() {
           {/* AI 实时活动指示（第31轮反馈修订：自左栏底部迁来右下角主题按钮上方——左栏留给未来新模块；
               同主题按钮规则：三面板任一展开即不渲染，收起态才显示；空闲（无在途调用）也不渲染） */}
           {rightPanel === null && <LlmActivity />}
+          {/* 终端呼出/收起（260912 新功能开发区）：白噪音快捷按钮上方，显隐同款（三面板收起） */}
+          {rightPanel === null && (
+            <button
+              className="right-col-terminal"
+              onClick={() => setTerminalOpen((o) => !o)}
+              title={terminalOpen ? '收起终端 (Ctrl+J)' : '打开终端 (Ctrl+J)'}
+            >
+              <span className="material-symbols-outlined">terminal</span>
+            </button>
+          )}
           {/* 白噪音快捷播放/暂停（260911 新功能开发区）：主题按钮上方，显隐同款（三面板收起）；
               点击 toggle，播放中图标主题色高亮（同左栏入口） */}
           {rightPanel === null && (
@@ -283,6 +316,18 @@ function Shell() {
               <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
             </button>
           )}
+          </div>
+          </div>
+
+          {/* 内置终端底部面板（常驻挂载；open=false 仅 display:none，进程不死） */}
+          <TerminalPanel
+            open={terminalOpen}
+            theme={theme}
+            fontSize={Number(settings[SettingsKeys.FontSize] ?? 16)}
+            newTabSignal={terminalNewTabSignal}
+            onClose={() => setTerminalOpen(false)}
+            onAskAi={(prefill) => openAiWith(prefill, { channel: 'assistant' })}
+          />
         </div>
       </div>
 

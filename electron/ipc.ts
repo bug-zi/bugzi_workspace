@@ -114,6 +114,8 @@ import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, rename
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
+import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './services/terminal'
+import type { TerminalCreateOpts } from './services/terminal'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -135,6 +137,16 @@ export function registerIpc(): void {
     if (key === SettingsKeys.MottoSchedule) scheduleMottoTask()
     return true
   })
+
+  // ---------- terminal（260912 内置终端） ----------
+  ipcMain.handle('terminal:create', (_e, id: string, opts: TerminalCreateOpts) =>
+    createTerminal({ id, cwd: opts.cwd, shell: opts.shell })
+  )
+  ipcMain.handle('terminal:write', (_e, id: string, data: string) => writeTerminal(id, data))
+  ipcMain.handle('terminal:resize', (_e, id: string, cols: number, rows: number) =>
+    resizeTerminal(id, cols, rows)
+  )
+  ipcMain.handle('terminal:kill', (_e, id: string) => killTerminal(id))
 
   // ---------- md 文件 ----------
   ipcMain.handle('md:read', (_e, path: string) => mdRead(path))

@@ -10,6 +10,7 @@ import { ensureReasoningStock } from './services/reasoningStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { ensureLearnStock } from './services/learnStock'
 import { applyDataDirAtStartup } from './services/storage'
+import { killAllTerminals } from './services/terminal'
 
 // 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
 if (process.env.NODE_ENV === 'production' && !process.versions.electron) {
@@ -102,5 +103,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// 海龟汤净用时退出兜底（优化建议区第26轮）：结算所有进行中局的开着计时段
-app.on('before-quit', () => settleTurtleTimers())
+// 海龟汤净用时退出兜底（优化建议区第26轮）+ 内置终端进程兜底（260912）：退出前杀光 shell，不留僵尸进程
+app.on('before-quit', () => {
+  settleTurtleTimers()
+  killAllTerminals()
+})

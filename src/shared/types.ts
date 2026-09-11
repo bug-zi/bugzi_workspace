@@ -72,6 +72,8 @@ export const SettingsKeys = {
   CanvasActiveId: 'canvas_active_id',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode',
+  // 内置终端（260912 新功能开发区）：JSON { shell, cwd, height }
+  Terminal: 'terminal',
   // 藏书架阅读背景（260911 新功能开发区）：背景偏好 JSON + 自定义图文件名（存 userData/bg/，bzres://bg/ 加载）
   BooksReadingBg: 'books_reading_bg',
   ReaderBgImage: 'reader_bg_image',
@@ -80,6 +82,34 @@ export const SettingsKeys = {
   // 学习库（260911）：「学习·问答」频道激活会话
   AiActiveSessionLearn: 'ai_active_session_learn'
 } as const
+
+// 内置终端（260912）：shell 三选 + 默认工作目录 + 面板高度（settings JSON 键 terminal）
+export type TerminalShell = 'powershell' | 'pwsh' | 'cmd'
+export interface TerminalSettings {
+  shell: TerminalShell
+  cwd: string
+  height: number
+}
+export const TERMINAL_DEFAULTS: TerminalSettings = {
+  shell: 'powershell',
+  cwd: 'D:\\Code\\myapp\\bugzi_workspace',
+  height: 380
+}
+/** 从 settings 原始 JSON 解析终端配置（坏数据/缺字段逐项回落默认） */
+export function parseTerminalSettings(raw: string | null | undefined): TerminalSettings {
+  const d = TERMINAL_DEFAULTS
+  if (!raw) return { ...d }
+  try {
+    const o = JSON.parse(raw) as Partial<TerminalSettings>
+    return {
+      shell: o.shell === 'pwsh' || o.shell === 'cmd' ? o.shell : 'powershell',
+      cwd: typeof o.cwd === 'string' && o.cwd ? o.cwd : d.cwd,
+      height: typeof o.height === 'number' && o.height >= 200 ? o.height : d.height
+    }
+  } catch {
+    return { ...d }
+  }
+}
 
 export type Theme = 'light' | 'dark'
 

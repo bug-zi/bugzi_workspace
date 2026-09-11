@@ -6,8 +6,8 @@ import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { FONT_FAMILIES } from '../../theme/fonts'
-import { LLM_SCENE_LABELS, SettingsKeys } from '../../shared/types'
-import type { LlmUsageRecord, LlmUsageStats } from '../../shared/types'
+import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
+import type { LlmUsageRecord, LlmUsageStats, TerminalSettings } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
@@ -64,6 +64,8 @@ export default function ProfileModule() {
   const [dataDir, setDataDir] = useState('')
   const [migrating, setMigrating] = useState(false)
   const [migrateConfirm, setMigrateConfirm] = useState<{ dir: string } | null>(null)
+  // 终端设置（260912）：默认 shell + 默认工作目录（面板高度由面板自身拖拽记忆）
+  const [termCfg, setTermCfg] = useState<TerminalSettings>(TERMINAL_DEFAULTS)
   // 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文
   const [facts, setFacts] = useState<ProfileFactRow[]>([])
   const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
@@ -177,6 +179,7 @@ export default function ProfileModule() {
     try {
       setMcps(JSON.parse(settings[SettingsKeys.McpConfigs] ?? '[]'))
     } catch { /* 空值 */ }
+    setTermCfg(parseTerminalSettings(settings[SettingsKeys.Terminal]))
     void window.api.storage.currentDir().then(setDataDir)
   }, [settings])
 
@@ -186,6 +189,17 @@ export default function ProfileModule() {
     },
     [setSetting]
   )
+
+  // ---------- 终端设置（260912） ----------
+  const saveTerminalCfg = (patch: Partial<TerminalSettings>): void => {
+    const next = { ...termCfg, ...patch }
+    setTermCfg(next)
+    void window.api.settings.set(SettingsKeys.Terminal, JSON.stringify(next))
+  }
+  const pickTerminalDir = async (): Promise<void> => {
+    const dir = await window.api.storage.pickDir()
+    if (dir) saveTerminalCfg({ cwd: dir })
+  }
 
   // ---------- 个人信息 ----------
   const commitName = async (): Promise<void> => {
@@ -638,6 +652,39 @@ export default function ProfileModule() {
             <button className="btn" onClick={() => setBgLibOpen(true)}>
               <span className="material-symbols-outlined">wallpaper</span>
               管理素材库
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* 终端（260912 新功能开发区） */}
+      <section className="zone">
+        <div className="zone-header"><span>终端</span></div>
+        <div className="zone-body" style={{ padding: 0 }}>
+          <div className="setting-row">
+            <span className="setting-label">默认 Shell</span>
+            <select
+              className="field grow"
+              value={termCfg.shell}
+              onChange={(e) => saveTerminalCfg({ shell: e.target.value as TerminalSettings['shell'] })}
+            >
+              <option value="powershell">PowerShell</option>
+              <option value="pwsh">PowerShell 7（pwsh）</option>
+              <option value="cmd">cmd</option>
+            </select>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">默认工作目录</span>
+            <span
+              className="grow"
+              style={{ wordBreak: 'break-all', fontSize: '0.85em', color: 'var(--color-text-secondary)' }}
+              title={termCfg.cwd}
+            >
+              {termCfg.cwd}
+            </span>
+            <button className="btn" onClick={() => void pickTerminalDir()}>
+              <span className="material-symbols-outlined">folder_open</span>
+              选择
             </button>
           </div>
         </div>
