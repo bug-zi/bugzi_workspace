@@ -93,10 +93,194 @@
   cursor: pointer;
 }
 
-/* chips 通用排布（预设 + 自定义混音共用） */
+/* chips 通用排布（备用：场景内音效已改横条式，此规则暂无使用方） */
 .noise-chips {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   padding: 6px 2px 2px;
+}
+
+/* ===== 播放队列（播放队列轮） ===== */
+.noise-tabs {
+  margin-right: 14px;
+}
+.noise-queue-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 14px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  font-size: 0.9em;
+  cursor: pointer;
+  width: fit-content;
+}
+.noise-queue-banner .material-symbols-outlined {
+  font-size: 18px;
+}
+.noise-queue-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 14px;
+}
+.noise-queue-status .material-symbols-outlined {
+  font-size: 20px;
+  color: var(--color-primary);
+}
+.noise-queue-status .q-now {
+  color: var(--color-primary-deep);
+  font-weight: 600;
+}
+.noise-queue-status .q-remain {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.noise-queue-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.noise-queue-rows,
+.noise-sound-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 音效横条（第38轮反馈修订二）：出厂预设/我的混音整行点击应用或召回，几何复用队列行 */
+.noise-sound-row {
+  cursor: pointer;
+}
+.noise-sound-row:hover {
+  border-color: var(--color-primary);
+}
+.noise-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-strong);
+}
+.noise-queue-row.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.noise-queue-row.invalid {
+  opacity: 0.55;
+}
+.noise-queue-row .q-idx {
+  min-width: 22px;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+.noise-queue-row .q-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.noise-queue-row .q-min-select,
+.noise-queue-row .q-min-input {
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85em;
+}
+.noise-queue-row .q-min-select {
+  width: 92px;
+}
+.noise-queue-row .q-min-input {
+  width: 64px;
+}
+.q-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.q-icon-btn:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+}
+.q-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.q-icon-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+/* 添加音效弹窗 */
+.q-add-dialog {
+  width: 420px;
+}
+.q-add-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.q-add-scene {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+}
+.q-add-scene .material-symbols-outlined {
+  font-size: 16px;
+}
+.q-add-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.q-add-item:hover {
+  background: var(--color-primary-soft);
+}
+.q-add-item input[type='checkbox'] {
+  accent-color: var(--color-primary);
+}
+.q-add-kind {
+  font-size: 0.75em;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.q-add-minutes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.9em;
+  color: var(--color-text-secondary);
+}
+.q-add-minutes select {
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
 }

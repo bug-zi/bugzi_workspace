@@ -65,6 +65,8 @@ export const SettingsKeys = {
   // 白噪音（260908 立项）：当前混音状态 + 自定义混音列表（均 JSON 字符串；重启记参数默认暂停）
   NoiseState: 'noise_state',
   NoiseCustomMixes: 'noise_custom_mixes',
+  // 白噪音播放队列（260911 播放队列轮）：JSON { items, mode }；运行态不持久化，重启默认暂停从头开始
+  NoisePlayQueue: 'noise_play_queue',
   // 画布（新功能开发区 260909）：右缘第三面板宽度 + 当前激活画布
   CanvasWidth: 'canvas_width',
   CanvasActiveId: 'canvas_active_id',

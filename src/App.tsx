@@ -118,6 +118,18 @@ function Shell() {
     })
   }, [])
 
+  // 白噪音队列配置恢复（播放队列轮）：只灌配置不运行——重启默认暂停、从头开始
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.NoisePlayQueue).then((raw) => {
+      if (!raw) return
+      try {
+        noiseEngine.loadQueue(JSON.parse(raw))
+      } catch {
+        /* 坏数据静默容错，loadQueue 内部逐条防线 */
+      }
+    })
+  }, [])
+
   const switchRightPanel = useCallback((p: 'ai' | 'draft' | 'canvas' | null): void => {
     setRightPanel(p)
     void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')

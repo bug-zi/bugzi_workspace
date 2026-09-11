@@ -202,6 +202,10 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
   const bubbleRef = useRef<HTMLDivElement | null>(null)
   /** 最近一次点标注的 host 坐标（气泡定位锚） */
   const lastMarkPointRef = useRef({ left: 40, top: 40 })
+  /** 现行键盘处理器（供 iframe 文档转发，见 rendered 钩子；焦点在父文档时 window 监听直用） */
+  const keyHandlersRef = useRef<{ down: (e: KeyboardEvent) => void; up: (e: KeyboardEvent) => void } | null>(null)
+  /** 已挂键盘转发的视图 document（防同文档重复挂载——一次按键翻两页） */
+  const wiredDocsRef = useRef(new WeakSet<Document>())
 
   const saveNow = (): void => {
     const p = pendingRef.current
@@ -405,12 +409,22 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
         saveNow()
       }
     })
-    // 每个章节视图就绪（iframe 重建）注入打包字体（幂等；设计 §1.4）
+    // 每个章节视图就绪（iframe 重建）注入打包字体（幂等；设计 §1.4）；
+    // 并挂键盘转发（260911 翻页键卡死修复）：正文在 iframe 内，点击正文（划词/点标注/点链接）
+    // 后文档焦点进入 iframe，键盘事件只派发到 iframe 文档、不跨 frame 到父 window → 翻页键
+    // 「卡死」直至点击父层控件（如字号键）焦点回来。转发后焦点在哪侧按键都归一到同一处理器，
+    // keyup 一并转发——滚动模式按住 W/S 后在 iframe 内松开也能停滚动
     rendition.on('rendered', (_section: unknown, contents: Contents) => {
       try {
         injectFontFaces(contents.document)
       } catch {
         /* document 未就绪等，忽略 */
+      }
+      const doc = contents.document
+      if (!wiredDocsRef.current.has(doc)) {
+        wiredDocsRef.current.add(doc)
+        doc.addEventListener('keydown', (e) => keyHandlersRef.current?.down(e))
+        doc.addEventListener('keyup', (e) => keyHandlersRef.current?.up(e))
       }
     })
     // 收气泡（设计 §二）：iframe 内事件不冒泡到父文档——正文点击取消划词气泡残留的主根因；
@@ -604,10 +618,13 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
       else if (dir === 'down') hold.release(1)
     }
     const onBlur = (): void => hold.stop()
+    // 供 iframe 文档转发的现行处理器（卸载置空——旧 document 残留监听转成 no-op）
+    keyHandlersRef.current = { down: onKey, up: onKeyUp }
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKeyUp)
     window.addEventListener('blur', onBlur)
     return () => {
+      keyHandlersRef.current = null
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
