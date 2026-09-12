@@ -54,6 +54,8 @@ export interface MdDialogProps {
     onLearn?: () => void
     onRemember?: () => void
     onForget?: () => void
+    /** 深挖按钮（学习库 v2.0 升级 §四）：显示在操作条左侧，点击带卡文发右栏对话 */
+    onDig?: () => void
   }
   /** 致知己版本化扩展（致知己 specs §2）：版本切换条 + 保存即版本 + 让 AI 追问 */
   versioned?: {
@@ -70,6 +72,8 @@ export interface MdDialogProps {
   }
   /** 浮生记大事件标记（文笔坊 specs §2.2，仅浮生记传入）：编辑态头部显示开关，切换即时生效 */
   eventToggle?: { checked: boolean; onChange: (v: boolean) => void }
+  /** 通用底部操作条（预言家判断区等）：非编辑态渲染于正文下方（同 learnBar/studyBar 位置），编辑态隐藏 */
+  footerBar?: ReactNode
   /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
   autoEdit?: boolean
   /** 右侧内嵌栏（致知己追问，优化建议区第13轮）：传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
@@ -77,7 +81,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel, footerBar } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -421,6 +425,12 @@ export default function MdDialog(props: MdDialogProps) {
         {/* 学习库操作条（260911 学习库）：学会了进 1/3/7/15 天复习序列；到期卡记住了升档/忘记了重置；done 态只读 */}
         {studyBar && !editing && (
           <div className="dialog-footer">
+            {studyBar.onDig && (
+              <button className="btn" onClick={studyBar.onDig} title="AI 多角度深挖本知识点（右栏对话）">
+                <span className="material-symbols-outlined">travel_explore</span>
+                深挖
+              </button>
+            )}
             {studyBar.mode === 'new' && (
               <button className="btn btn-primary" onClick={studyBar.onLearn} title="学会后进入 1/3/7/15 天间隔复习">
                 学会了
@@ -441,6 +451,8 @@ export default function MdDialog(props: MdDialogProps) {
             )}
           </div>
         )}
+        {/* 通用底部操作条（260912 预言家判断区等）：非编辑态渲染，编辑态隐藏防误触 */}
+        {footerBar && !editing && <div className="dialog-footer">{footerBar}</div>}
       </div>
     </div>
   )

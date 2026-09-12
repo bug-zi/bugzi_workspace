@@ -21,6 +21,27 @@ export function cancelJob(jobId: string): boolean {
   return true
 }
 
+/** 由 signal 反查 jobId（AI 活动面板取消钮用，260912 面板设计）：任务表量级小，遍历比对开销可忽略 */
+export function findJobIdBySignal(signal: AbortSignal): string | null {
+  for (const [jobId, ac] of jobs) if (ac.signal === signal) return jobId
+  return null
+}
+
+let pumpJobSeq = 0
+
+/** 泵任务包装（AI 活动面板可取消后台预生成，260912 面板设计）：登记 jobId（随 llm:activity 广播
+ *  供面板反查取消）+ AbortController 贯穿 LLM 调用；fn 抛错（含取消）原样上抛由泵侧 catch。
+ *  取消语义 = 跳过当前这张/批，泵循环继续下一项。 */
+export async function runPumpJob<T>(label: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const jobId = `pump-${label}-${++pumpJobSeq}`
+  const ac = beginJob(jobId)
+  try {
+    return await fn(ac.signal)
+  } finally {
+    endJob(jobId)
+  }
+}
+
 /** 阶段间取消检查：已取消即抛「已取消」（渲染层据此走轻提示，不弹错误框） */
 export function ensureNotCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error('已取消')

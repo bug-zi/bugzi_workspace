@@ -66,6 +66,8 @@ export default function ProfileModule() {
   const [migrateConfirm, setMigrateConfirm] = useState<{ dir: string } | null>(null)
   // 终端设置（260912）：默认 shell + 默认工作目录（面板高度由面板自身拖拽记忆）
   const [termCfg, setTermCfg] = useState<TerminalSettings>(TERMINAL_DEFAULTS)
+  const [launchOnBoot, setLaunchOnBoot] = useState(false)
+  const [closeAction, setCloseAction] = useState<'tray' | 'exit'>('tray')
   // 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文
   const [facts, setFacts] = useState<ProfileFactRow[]>([])
   const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
@@ -180,6 +182,8 @@ export default function ProfileModule() {
       setMcps(JSON.parse(settings[SettingsKeys.McpConfigs] ?? '[]'))
     } catch { /* 空值 */ }
     setTermCfg(parseTerminalSettings(settings[SettingsKeys.Terminal]))
+    setLaunchOnBoot(settings[SettingsKeys.LaunchOnBoot] === '1')
+    setCloseAction(settings[SettingsKeys.CloseAction] === 'exit' ? 'exit' : 'tray')
     void window.api.storage.currentDir().then(setDataDir)
   }, [settings])
 
@@ -199,6 +203,18 @@ export default function ProfileModule() {
   const pickTerminalDir = async (): Promise<void> => {
     const dir = await window.api.storage.pickDir()
     if (dir) saveTerminalCfg({ cwd: dir })
+  }
+
+  // ---------- 启动与窗口 ----------
+  const toggleLaunchOnBoot = async (): Promise<void> => {
+    const next = !launchOnBoot
+    setLaunchOnBoot(next)
+    await window.api.app.setLaunchOnBoot(next)
+    toast(next ? '已开启开机自启' : '已关闭开机自启')
+  }
+  const changeCloseAction = async (v: 'tray' | 'exit'): Promise<void> => {
+    setCloseAction(v)
+    await setSetting(SettingsKeys.CloseAction, v)
   }
 
   // ---------- 个人信息 ----------
@@ -686,6 +702,33 @@ export default function ProfileModule() {
               <span className="material-symbols-outlined">folder_open</span>
               选择
             </button>
+          </div>
+        </div>
+      </section>
+
+      {/* 启动与窗口 */}
+      <section className="zone">
+        <div className="zone-header"><span>启动与窗口</span></div>
+        <div className="zone-body" style={{ padding: 0 }}>
+          <div className="setting-row">
+            <span className="setting-label">开机自启</span>
+            <label className="grow" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input type="checkbox" checked={launchOnBoot} onChange={() => void toggleLaunchOnBoot()} />
+              <span style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)' }}>
+                {launchOnBoot ? '开机后自动在后台运行（托盘常驻）' : '当前关闭'}
+              </span>
+            </label>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">关闭按钮行为</span>
+            <select
+              className="field grow"
+              value={closeAction}
+              onChange={(e) => void changeCloseAction(e.target.value as 'tray' | 'exit')}
+            >
+              <option value="tray">最小化到托盘（推荐）</option>
+              <option value="exit">直接退出</option>
+            </select>
           </div>
         </div>
       </section>

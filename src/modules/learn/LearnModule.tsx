@@ -14,6 +14,9 @@ import type { AiChannel } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
+import LearnQuizZone from './LearnQuizZone'
+import LearnTaskDialog from './LearnTaskDialog'
+import { cancelLearnGen, enqueueLearnGen, setLearnQueueHandlers, useLearnQueue } from '../../services/learnGenQueue'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
@@ -54,6 +57,18 @@ function stateIcon(n: { state: string; review_stage: number }): string {
   return n.review_stage >= 5 ? 'verified' : 'task_alt'
 }
 
+/** 行首图标（待加载队列版）：排队中/生成中优先于学习状态图标（相位来自 learnGenQueue store） */
+function RowIcon(props: { n: LearnNode; gen?: 'queued' | 'loading' }) {
+  if (props.gen != null) {
+    return (
+      <span className={`material-symbols-outlined${props.gen === 'loading' ? ' spin' : ''}`}>
+        {props.gen === 'loading' ? 'progress_activity' : 'hourglass_top'}
+      </span>
+    )
+  }
+  return <span className="material-symbols-outlined">{stateIcon(props.n)}</span>
+}
+
 function fmtTime(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -75,7 +90,15 @@ export default function LearnModule(props: LearnModuleProps) {
   // 卡片弹窗
   const [card, setCard] = useState<LearnCardRow | null>(null)
   const [mdVersion, setMdVersion] = useState(0)
-  const [openingId, setOpeningId] = useState<number | null>(null)
+  // 待加载队列（优化区2 + 260912 面板）：状态在 learnGenQueue 全局 store（LlmActivity 面板同源读取）
+  const queue = useLearnQueue()
+  const [queueOpen, setQueueOpen] = useState(false)
+  // 主题折叠（优化区3）：会话内记忆
+  const [collapsedTopics, setCollapsedTopics] = useState<Set<number>>(new Set())
+  // 今日小测答错的节点（LearnQuizZone 上抛，行内标记）
+  const [wrongNodes, setWrongNodes] = useState<Set<number>>(new Set())
+  // 实战任务弹窗（主题行入口）
+  const [taskTopic, setTaskTopic] = useState<{ id: number; title: string } | null>(null)
   const [randomJob, setRandomJob] = useState<string | null>(null)
   // 生成 job（建树/展开/手动加）
   const [treeJob, setTreeJob] = useState<string | null>(null)
@@ -164,26 +187,46 @@ export default function LearnModule(props: LearnModuleProps) {
     else setFailMsg(msg)
   }
 
-  /** 打开卡片：已生成秒开；未生成的现场生成（行内 spin，可取消） */
-  const openCard = async (n: { id: number; content_ready: number }): Promise<void> => {
-    if (card != null || openingId != null) return
-    if (n.content_ready === 1) {
-      try {
-        setCard(await window.api.learn.getCard(crypto.randomUUID(), n.id))
-      } catch (e) {
-        handleAiError(e)
+  /** 待加载队列：就绪后行内实时补上 content_ready（免整树重拉） */
+  const markCardReady = useCallback((id: number) => {
+    const patch = <T extends LearnNode>(rows: T[]): T[] =>
+      rows.map((r) => (r.id === id ? { ...r, content_ready: 1 as const } : r))
+    setDailyNew((rows) => patch(rows))
+    setTree((topics) => topics.map((t) => ({ ...t, points: patch(t.points) })))
+  }, [])
+
+  /** 队列回调注册：就绪回写行 content_ready；失败按既有口径提示（取消静默、未配置去配置） */
+  useEffect(() => {
+    setLearnQueueHandlers({
+      onReady: (id) => markCardReady(id),
+      onFail: (_id, title, msg) => {
+        if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
+        else if (!msg.includes('已取消')) toast(`「${title}」生成失败，可再次点击重试`)
       }
+    })
+  }, [markCardReady, toast])
+
+  /** 打开卡片：已生成秒开弹窗；未生成 → 加入待加载队列（行内排队/生成中反馈，就绪后行恢复常态再点查看） */
+  const openCard = (n: { id: number; content_ready: number; title?: string }): void => {
+    if (n.content_ready === 1) {
+      if (card != null) return
+      window.api.learn
+        .getCard(crypto.randomUUID(), n.id)
+        .then((c) => setCard(c))
+        .catch(handleAiError)
       return
     }
-    const jobId = crypto.randomUUID()
-    setOpeningId(n.id)
-    try {
-      setCard(await window.api.learn.getCard(jobId, n.id))
-    } catch (e) {
-      handleAiError(e)
-    } finally {
-      setOpeningId(null)
-    }
+    if (queue.phaseOf(n.id) != null) return
+    enqueueLearnGen({ id: n.id, title: n.title ?? '' })
+  }
+
+  const toggleTopic = (id: number): void => {
+    setCollapsedTopics((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   /** 随机来一条：优先已生成未学卡秒开；无则现场生成 */
@@ -320,6 +363,22 @@ export default function LearnModule(props: LearnModuleProps) {
     [props]
   )
 
+  /** 深挖（升级设计 §四）：带卡文一键自动发右栏「学习·问答」频道（App 层 CHANNEL_BY_MODULE 自动映射） */
+  const onDig = useCallback(
+    async (c: LearnCardRow) => {
+      let md = ''
+      try {
+        md = await window.api.md.read(`md/learn/${c.id}.md`)
+      } catch {
+        toast('卡片内容读取失败')
+        return
+      }
+      const pre = `请深挖知识点「${c.title}」（领域：${c.domain_name} · 主题：${c.topic_title ?? '（无）'}）。结合下面的卡片内容，从四个角度展开：1）原理再进一层（卡片没讲到的机制细节）；2）常见误解与易错点；3）知识串联（同主题其他知识点与跨主题关联）；4）实际工作中的坑与经验。\n\n<卡片内容>\n${md}\n</卡片内容>`
+      props.onOpenAi(pre, { auto: true })
+    },
+    [props, toast]
+  )
+
   const doDiscardNode = async (): Promise<void> => {
     if (!delNodeTarget) return
     await window.api.learn.nodeDelete(delNodeTarget.id)
@@ -333,6 +392,9 @@ export default function LearnModule(props: LearnModuleProps) {
   }
 
   const currentDomain = domains.find((d) => d.id === domainId) ?? null
+  const learnedToday = dailyNew.filter((n) => n.state === 'learned').length
+  const queueLoading = queue.items.filter((i) => i.phase === 'loading').length
+  const queueTotal = queue.items.length
   const anyTreeReady = domains.some((d) => d.tree_ready === 1)
 
   /** 学习操作条（弹窗 footer）：todo→学会了；到期→记住了/忘记了；其余只读态 */
@@ -361,7 +423,66 @@ export default function LearnModule(props: LearnModuleProps) {
         <span className="material-symbols-outlined">school</span>
         <span className="module-title">学习库</span>
         <span className="module-sub">计算机专业知识 · 知识树 + 每日新学与间隔复习</span>
+        {queueTotal > 0 && (
+          <button
+            className="btn"
+            style={{ marginLeft: 'auto' }}
+            title="查看生成队列（可取消排队/生成中的卡片）"
+            onClick={() => setQueueOpen((v) => !v)}
+          >
+            <span className="material-symbols-outlined">low_priority</span>
+            生成队列
+            <span className="zone-count">
+              生成中 {queueLoading} · 排队 {queueTotal - queueLoading}
+            </span>
+          </button>
+        )}
       </div>
+
+      {/* 生成队列面板（可视化 + 逐项取消） */}
+      {queueOpen && queueTotal > 0 && (
+        <>
+          <div
+            className="dialog-overlay"
+            style={{ background: 'transparent' }}
+            onMouseDown={() => setQueueOpen(false)}
+          />
+          <div className="ctx-menu" style={{ position: 'fixed', top: 60, right: 16, minWidth: 280, zIndex: 300 }}>
+            {queue.items.map((job) => (
+              <div
+                key={job.id}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', minWidth: 240 }}
+              >
+                <span
+                  className={`material-symbols-outlined${job.phase === 'loading' ? ' spin' : ''}`}
+                  style={{ fontSize: 16 }}
+                >
+                  {job.phase === 'loading' ? 'progress_activity' : 'hourglass_top'}
+                </span>
+                <span
+                  style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={job.title}
+                >
+                  {job.title}
+                </span>
+                <span className="module-sub" style={{ flexShrink: 0 }}>
+                  {job.phase === 'loading' ? '生成中' : '排队中'}
+                </span>
+                <button
+                  className="icon-btn"
+                  title={job.phase === 'loading' ? '取消生成' : '移出队列'}
+                  onClick={() => {
+                    cancelLearnGen(job.id)
+                    toast('已取消')
+                  }}
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'daily' ? ' active' : ''}`} onClick={() => setTab('daily')}>
@@ -412,16 +533,21 @@ export default function LearnModule(props: LearnModuleProps) {
             )}
             {dailyNew.map((n) => (
               <div
-                className="row-item"
+                className={`row-item${n.content_ready === 0 ? ' row-pending' : ''}`}
                 key={n.id}
-                onClick={() => void openCard(n)}
-                style={{ cursor: openingId === n.id ? 'wait' : undefined }}
+                onClick={() => openCard(n)}
+                style={{ cursor: queue.phaseOf(n.id) === 'loading' ? 'wait' : undefined }}
               >
-                <span className={`material-symbols-outlined${openingId === n.id ? ' spin' : ''}`}>
-                  {openingId === n.id ? 'progress_activity' : stateIcon(n)}
-                </span>
+                <RowIcon n={n} gen={queue.phaseOf(n.id) ?? undefined} />
                 <div className="row-main">
-                  <div className="row-title">{n.title}</div>
+                  <div className="row-title">
+                    {n.title}
+                    {wrongNodes.has(n.id) && (
+                      <span className="material-symbols-outlined quiz-wrong-mark" title="今日小测答错">
+                        error
+                      </span>
+                    )}
+                  </div>
                   <div className="row-sub">
                     {n.domain_name} · {n.topic_title} ｜ {n.summary}
                   </div>
@@ -445,15 +571,8 @@ export default function LearnModule(props: LearnModuleProps) {
               </div>
             )}
             {dailyReview.map((n) => (
-              <div
-                className="row-item"
-                key={n.id}
-                onClick={() => void openCard(n)}
-                style={{ cursor: openingId === n.id ? 'wait' : undefined }}
-              >
-                <span className={`material-symbols-outlined${openingId === n.id ? ' spin' : ''}`}>
-                  {openingId === n.id ? 'progress_activity' : stateIcon(n)}
-                </span>
+              <div className="row-item" key={n.id} onClick={() => openCard(n)}>
+                <RowIcon n={n} />
                 <div className="row-main">
                   <div className="row-title">{n.title}</div>
                   <div className="row-sub">
@@ -464,6 +583,8 @@ export default function LearnModule(props: LearnModuleProps) {
             ))}
           </div>
         </div>
+
+        <LearnQuizZone learnedCount={learnedToday} onWrongChange={setWrongNodes} />
       </div>
 
       {/* ===== 知识树 ===== */}
@@ -538,78 +659,94 @@ export default function LearnModule(props: LearnModuleProps) {
                 </button>
               </div>
             </div>
-            {tree.map((t) => (
-              <div className="zone" key={t.id}>
-                <div className="zone-header" style={{ cursor: 'default' }}>
-                  <span className="material-symbols-outlined">folder_open</span>
-                  <span>{t.title}</span>
-                  <span className="zone-count" title="已学/知识点数">
-                    已学 {t.learned}/{t.total}
-                  </span>
-                  <div className="row-actions" style={{ marginLeft: 'auto' }} onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className="icon-btn"
-                      title="AI 展开：补充 3-5 个知识点"
-                      disabled={expandJob != null}
-                      onClick={() => void runExpand(t.id)}
-                    >
-                      <span className={`material-symbols-outlined${expandJob ? ' spin' : ''}`}>auto_awesome</span>
-                    </button>
-                    {expandJob && (
+            {tree.map((t) => {
+              const collapsed = collapsedTopics.has(t.id)
+              return (
+                <div className="zone" key={t.id}>
+                  <div
+                    className="zone-header"
+                    style={{ cursor: 'pointer' }}
+                    title={collapsed ? '展开主题' : '收起主题'}
+                    onClick={() => toggleTopic(t.id)}
+                  >
+                    <span className="material-symbols-outlined">{collapsed ? 'chevron_right' : 'expand_more'}</span>
+                    <span className="material-symbols-outlined">folder_open</span>
+                    <span>{t.title}</span>
+                    <span className="zone-count" title="已学/知识点数">
+                      已学 {t.learned}/{t.total}
+                    </span>
+                    <div className="row-actions" style={{ marginLeft: 'auto' }} onClick={(e) => e.stopPropagation()}>
                       <button
                         className="icon-btn"
-                        title="取消本次展开"
-                        onClick={() => void window.api.ai.cancel(expandJob)}
+                        title="AI 展开：补充 3-5 个知识点"
+                        disabled={expandJob != null}
+                        onClick={() => void runExpand(t.id)}
                       >
-                        <span className="material-symbols-outlined">stop_circle</span>
+                        <span className={`material-symbols-outlined${expandJob ? ' spin' : ''}`}>auto_awesome</span>
                       </button>
-                    )}
-                    <button
-                      className="icon-btn"
-                      title="主题管理"
-                      onClick={(e) => {
-                        const r = e.currentTarget.getBoundingClientRect()
-                        setTopicMenu({ topic: t, left: r.right, top: r.bottom + 4 })
-                      }}
-                    >
-                      <span className="material-symbols-outlined">more_vert</span>
-                    </button>
+                      {expandJob && (
+                        <button
+                          className="icon-btn"
+                          title="取消本次展开"
+                          onClick={() => void window.api.ai.cancel(expandJob)}
+                        >
+                          <span className="material-symbols-outlined">stop_circle</span>
+                        </button>
+                      )}
+                      <button
+                        className="icon-btn"
+                        title="实战任务：30 分钟小任务 + AI 点评"
+                        onClick={() => setTaskTopic({ id: t.id, title: t.title })}
+                      >
+                        <span className="material-symbols-outlined">construction</span>
+                      </button>
+                      <button
+                        className="icon-btn"
+                        title="主题管理"
+                        onClick={(e) => {
+                          const r = e.currentTarget.getBoundingClientRect()
+                          setTopicMenu({ topic: t, left: r.right, top: r.bottom + 4 })
+                        }}
+                      >
+                        <span className="material-symbols-outlined">more_vert</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="zone-body">
-                  {t.points.length === 0 && (
-                    <div className="empty-state">
-                      <span className="material-symbols-outlined">radio_button_unchecked</span>
-                      暂无知识点：AI 展开或手动添加
+                  {!collapsed && (
+                    <div className="zone-body">
+                      {t.points.length === 0 && (
+                        <div className="empty-state">
+                          <span className="material-symbols-outlined">radio_button_unchecked</span>
+                          暂无知识点：AI 展开或手动添加
+                        </div>
+                      )}
+                      {t.points.map((p) => (
+                        <div
+                          className={`row-item${p.content_ready === 0 ? ' row-pending' : ''}`}
+                          key={p.id}
+                          onClick={() => openCard(p)}
+                          style={{ cursor: queue.phaseOf(p.id) === 'loading' ? 'wait' : undefined }}
+                        >
+                          <RowIcon n={p} gen={queue.phaseOf(p.id) ?? undefined} />
+                          <div className="row-main">
+                            <div className="row-title">{p.title}</div>
+                            <div className="row-sub">{p.summary}</div>
+                          </div>
+                          <div className="row-actions" onClick={(ev) => ev.stopPropagation()}>
+                            <button className="icon-btn" title="查看" onClick={() => openCard(p)}>
+                              <span className="material-symbols-outlined">visibility</span>
+                            </button>
+                            <button className="icon-btn danger" title="回收站" onClick={() => setDelNodeTarget(p)}>
+                              <span className="material-symbols-outlined">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
-                  {t.points.map((p) => (
-                    <div
-                      className="row-item"
-                      key={p.id}
-                      onClick={() => void openCard(p)}
-                      style={{ cursor: openingId === p.id ? 'wait' : undefined }}
-                    >
-                      <span className={`material-symbols-outlined${openingId === p.id ? ' spin' : ''}`}>
-                        {openingId === p.id ? 'progress_activity' : stateIcon(p)}
-                      </span>
-                      <div className="row-main">
-                        <div className="row-title">{p.title}</div>
-                        <div className="row-sub">{p.summary}</div>
-                      </div>
-                      <div className="row-actions" onClick={(ev) => ev.stopPropagation()}>
-                        <button className="icon-btn" title="查看" onClick={() => void openCard(p)}>
-                          <span className="material-symbols-outlined">visibility</span>
-                        </button>
-                        <button className="icon-btn danger" title="回收站" onClick={() => setDelNodeTarget(p)}>
-                          <span className="material-symbols-outlined">delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </>
         )}
       </div>
@@ -633,7 +770,7 @@ export default function LearnModule(props: LearnModuleProps) {
               <div
                 className="row-item"
                 key={h.id}
-                onClick={() => void openCard({ id: h.node_id, content_ready: 1 })}
+                onClick={() => openCard({ id: h.node_id, content_ready: 1 })}
               >
                 <div className="row-main">
                   <div className="row-title" style={{ whiteSpace: 'normal' }}>
@@ -664,8 +801,10 @@ export default function LearnModule(props: LearnModuleProps) {
         onClose={() => setCard(null)}
         onChanged={() => setMdVersion((v) => v + 1)}
         selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
-        studyBar={card ? studyBarOf(card) : undefined}
+        studyBar={card ? { ...studyBarOf(card), onDig: () => void onDig(card) } : undefined}
       />
+
+      {taskTopic && <LearnTaskDialog topic={taskTopic} onClose={() => setTaskTopic(null)} />}
 
       {/* 领域悬浮菜单 */}
       {domainMenu && currentDomain && (

@@ -16,7 +16,7 @@ export type ModuleId =
   | 'profile'
 
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn'
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet'
 
 // 草稿本频道（优化建议区第21轮，DB v14：drafts.channel）：固定两频道起步，加频道零迁移
 export type DraftChannel = 'general' | 'turtle'
@@ -80,7 +80,11 @@ export const SettingsKeys = {
   // 万象库待学习区（260910）：每日批次最近执行日（本地日期 YYYY-MM-DD，幂等标记）
   WikiDailyLearnDate: 'wiki_daily_learn_date',
   // 学习库（260911）：「学习·问答」频道激活会话
-  AiActiveSessionLearn: 'ai_active_session_learn'
+  AiActiveSessionLearn: 'ai_active_session_learn',
+  AiActiveSessionProphet: 'ai_active_session_prophet',
+  // 启动行为（260912）：开机自启（'1'/'0'）+ 关闭按钮行为（'tray' 隐藏到托盘 | 'exit' 直接退出）
+  LaunchOnBoot: 'launch_on_boot',
+  CloseAction: 'close_action'
 } as const
 
 // 内置终端（260912）：shell 三选 + 默认工作目录 + 面板高度（settings JSON 键 terminal）
@@ -180,6 +184,10 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'learn:tree': '学习库·建树',
   'learn:card': '学习库·知识卡',
   'learn:expand': '学习库·主题展开',
+  'learn:quiz': '学习库·小测出卷',
+  'learn:quizGrade': '学习库·小测批改',
+  'learn:task': '学习库·实战任务',
+  'learn:taskReview': '学习库·作业点评',
   'inspiration:diverge': '灵感泉·发散',
   'inspiration:refine': '灵感泉·自评',
   'verify:check': '万象库·辩真核查',
@@ -188,6 +196,17 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'feed:summary': '信息源·总结',
   'mcp:research': 'MCP·配置研究',
   other: '其他'
+}
+
+/** AI 实时活动项（llm:activity 广播，260912 AI 面板扩展）：一条在途 LLM 调用 */
+export interface LlmActivityItem {
+  seq: number
+  scene: string
+  configName: string
+  /** 起始时刻（Date.now() 毫秒，面板算已运行时长） */
+  startedAt: number
+  /** 关联任务 id（有则可经 ai:cancel 取消）；未传 signal 的调用为 null = 面板不可取消 */
+  jobId: string | null
 }
 
 // MCP 配置（存 settings.mcp_configs，JSON 数组）
@@ -352,6 +371,61 @@ export interface LearnCardRow extends LearnNode {
 export interface LearnDailyRow extends LearnNode {
   domain_name: string
   topic_title: string | null
+}
+
+/** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。
+ *  answering 态经 IPC 下发前隐去 answerIndex/acceptable/answer/analysis（防抄答案）。 */
+export interface LearnQuizQuestion {
+  nodeId: number
+  /** 联节点标题（quizGet 注入，展示用） */
+  nodeTitle?: string
+  type: 'choice' | 'blank' | 'short'
+  /** 题面 md（MdView 渲染，推理角题面同款） */
+  question: string
+  /** choice 专用：选项文本数组（下标即选项号，不含字母前缀） */
+  options?: string[]
+  /** choice 专用：正确选项下标 */
+  answerIndex?: number
+  /** blank 专用：可接受答案数组（归一化比对） */
+  acceptable?: string[]
+  /** 参考答案（short 批改参考；graded 后展示） */
+  answer: string
+  /** 解析（graded 后展示） */
+  analysis: string
+}
+
+/** 小测作答行（learn_quiz.answers JSON 数组元素；作答实时存库） */
+export interface LearnQuizAnswer {
+  qIndex: number
+  answer: string
+  /** choice/blank 本地判；short 交卷 AI 批改前为 null */
+  correct: boolean | null
+  /** short 批改点评 */
+  aiComment?: string
+}
+
+/** 小测卷（learn:quizGet / quizCreate / quizRetry 返回） */
+export interface LearnQuizView {
+  date: string
+  status: 'answering' | 'graded'
+  questions: LearnQuizQuestion[]
+  answers: LearnQuizAnswer[]
+}
+
+/** 实战任务行（learn:taskList / taskGenerate / taskSubmit 返回；md 路径供渲染层读文件） */
+export interface LearnTaskRow {
+  id: number
+  topic_id: number
+  domain_id: number
+  status: 'todo' | 'submitted' | 'reviewed'
+  /** 点评分 0-100（reviewed 后有值） */
+  score: number | null
+  topic_title: string
+  task_md: string
+  homework_md: string | null
+  review_md: string | null
+  created_at: string
+  submitted_at: string | null
 }
 
 /** 高光行（learn:highlights 返回，联表知识点标题） */
@@ -678,6 +752,8 @@ export interface RecycleItem {
     | 'ledger_account'
     | 'ledger_category'
     | 'learn'
+    | 'prophet'
+    | 'twelve_question'
   item_id: number
   payload: string
   created_at: string
@@ -704,6 +780,43 @@ export interface ZhijijiVersion {
   md_path: string
   created_at: string
   updated_at: string
+}
+
+// 预言家判断（用户三选一；可改判覆盖）
+export type ProphetJudgment = 'reasonable' | 'unreasonable' | 'uncertain'
+
+// 预言条目（prophet_records，DB v36；分析说明 md 快照在 analysis_md_path）
+export interface ProphetRecord {
+  id: number
+  claim: string
+  /** 创建时的补充说明（正文快照在 md，此处为初版存档） */
+  note: string
+  status: 'open' | 'judged'
+  judgment: ProphetJudgment | null
+  judgment_note: string
+  judged_at: string | null
+  analysis_md_path: string | null
+  created_at: string
+  updated_at: string
+}
+
+// 十二问题（twelve_questions，DB v36；列表行聚合想法数与最近想法时间）
+export interface TwelveQuestion {
+  id: number
+  title: string
+  ord: number
+  thought_count: number
+  last_thought_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+// 十二问题想法（twelve_thoughts，DB v36；碎片存 SQLite，不落 md）
+export interface TwelveThought {
+  id: number
+  question_id: number
+  content: string
+  created_at: string
 }
 
 // 我的画像条目（profile_facts，DB v9；注入全部 AI 上下文）

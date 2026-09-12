@@ -151,6 +151,7 @@
   border: 1px solid transparent;
   margin-top: 6px;
   cursor: pointer;
+  transition: opacity 0.25s;
 }
 .row-item:hover {
   border-color: var(--color-border);
@@ -206,6 +207,46 @@
 /* 拖拽中的行半透明（格言排序 + 灵感泉看板共用） */
 .row-item.dragging {
   opacity: 0.5;
+}
+/* 学习库未生成内容的知识点行（content_ready=0）：阴影态表示点开需先生成，就绪后移除恢复常态 */
+.row-item.row-pending {
+  opacity: 0.45;
+  box-shadow: inset 3px 0 0 var(--color-border);
+}
+
+/* 学习库 v2.0：今日小测与实战任务 */
+.quiz-question {
+  margin-top: 6px;
+}
+.quiz-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.quiz-option:hover {
+  border-color: var(--color-primary);
+}
+.quiz-option.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.quiz-wrong-mark {
+  font-size: 15px;
+  vertical-align: -2px;
+  margin-left: 4px;
+  color: var(--color-danger);
+}
+.quiz-wrong-icon {
+  color: var(--color-danger);
+}
+.quiz-right-icon {
+  color: var(--color-primary);
 }
 .icon-btn {
   border: none;
@@ -373,6 +414,54 @@
 }
 .cred-badge.low {
   background: var(--color-surface-strong);
+  color: var(--color-text-secondary);
+}
+
+/* ===== 致知己·预言家/十二问题（260912） ===== */
+.zj-status {
+  font-size: 0.82em;
+  border-radius: 12px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.zj-status.open {
+  background: var(--color-surface-strong);
+  color: var(--color-text-secondary);
+}
+.zj-status.judged {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+.zj-judge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+.zj-judge .field {
+  flex: 1;
+  min-width: 160px;
+}
+.zj-twelve-thoughts {
+  padding: 4px 12px 12px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zj-twelve-thought {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.zj-twelve-thought-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.zj-twelve-thought-time {
+  font-size: 0.82em;
   color: var(--color-text-secondary);
 }
 
@@ -1314,6 +1403,73 @@
   to {
     transform: rotate(360deg);
   }
+}
+/* 纯排队无运行中调用：图标不转（260912 AI 面板） */
+.llm-activity.idle .llm-activity-icon {
+  animation: none;
+}
+
+/* ===== AI 调用面板（260912）：指示器展开态浮层，锚定右下角按钮堆上方 ===== */
+.llm-panel {
+  position: fixed;
+  right: 8px;
+  bottom: 180px;
+  width: 340px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 300;
+}
+.llm-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.llm-panel-header .row-actions {
+  margin-left: auto;
+}
+.llm-panel-body {
+  overflow: auto;
+  padding: 4px 0 8px;
+}
+.llm-panel-sec {
+  padding: 6px 10px 2px;
+}
+.llm-panel-empty {
+  padding: 2px 10px;
+  color: var(--color-text-secondary);
+  font-size: 0.82em;
+}
+.llm-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.llm-panel-icon {
+  font-size: 15px;
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+.llm-panel-main {
+  flex: 1;
+  min-width: 0;
+}
+.llm-panel-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9em;
+}
+.llm-panel-nocancel {
+  flex-shrink: 0;
+  padding: 0 8px;
 }
 
 /* ===== 内置终端（260912 新功能开发区）===== */

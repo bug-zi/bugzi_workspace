@@ -15,6 +15,7 @@ import {
   WALL_TYPE_LIST
 } from '../ai/services'
 import type { WallPuzzleType } from '../ai/services'
+import { runPumpJob } from '../ai/jobs'
 
 /** 汤库 fresh 存量目标/低水位（设计定稿：常量写死不进 settings，YAGNI） */
 export const SOUP_TARGET = 10
@@ -117,7 +118,7 @@ function summarize(text: string): string {
 /** 补汤：fresh 存量 < SOUP_LOW 时整批循环补到目标（每批 3 碗、难度错开；近 200 碗避免清单天然覆盖 fresh 存货） */
 async function pumpSoups(): Promise<void> {
   while (freshSoupCount() < SOUP_TARGET) {
-    const r = await retryTransient('补汤', () => generateSoups('random'))
+    const r = await runPumpJob('soup', (sig) => retryTransient('补汤', () => generateSoups('random', sig)))
     notifyStockChanged()
     console.info(`[reasoningStock] 补汤一批 +${r.inserted}（fresh 现 ${freshSoupCount()}）`)
     if (r.inserted === 0) {
@@ -197,7 +198,11 @@ async function pumpPuzzles(): Promise<void> {
     const avoid = buildAvoidList()
     const results = await Promise.allSettled(
       specs.map((s) =>
-        retryTransient('题池生成', () => generateWallPuzzle(s.difficulty, { type: s.type, avoid }))
+        runPumpJob(
+          'wall',
+          (sig) =>
+            retryTransient('题池生成', () => generateWallPuzzle(s.difficulty, { type: s.type, avoid }, sig))
+        )
       )
     )
     let failed = 0

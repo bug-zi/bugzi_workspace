@@ -11,16 +11,22 @@ import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { ensureLearnStock } from './services/learnStock'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
+import { createTray } from './services/tray'
+import { getSetting } from './db/settings'
+import { SettingsKeys } from '../src/shared/types'
 
-// 确保作为打包应用运行时仍能 require 到依赖（Electron 打包场景，esm 兼容）
-if (process.env.NODE_ENV === 'production' && !process.versions.electron) {
-  // no-op：esm 打包由 electron-vite 处理
-}
+// userData 钉回 %APPDATA%\bugzi_workspace（dev 同款）：打包态 productName 变化会导致默认 userData 分裂、
+// 已有数据"消失"。必须先于单实例锁（锁文件在 userData）与 applyDataDirAtStartup（读 userData 下 data_home.json）
+app.setName('bugzi_workspace')
+app.setPath('userData', join(app.getPath('appData'), 'bugzi_workspace'))
 
 // 应用图标（优化建议区：resources/app.png）。dev 从项目根取；打包态预留 extraResources 路径
 const appIcon = app.isPackaged
   ? join(process.resourcesPath, 'app.png')
   : join(__dirname, '../../resources/app.png')
+
+// 托盘「退出」走 app.quit() → 窗口 close 事件：quitting 放行真正销毁；平时点 × 仅隐藏
+let quitting = false
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -41,6 +47,14 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win.show())
+
+  // 点 × 默认隐藏到托盘（settings close_action='exit' 时才真退出）；quitting 标志放行托盘「退出」路径
+  win.on('close', (e) => {
+    if (!quitting && getSetting(SettingsKeys.CloseAction) !== 'exit') {
+      e.preventDefault()
+      win.hide()
+    }
+  })
 
   // 外部链接一律系统浏览器打开（辩真阁来源链接等）
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -69,6 +83,7 @@ if (!app.requestSingleInstanceLock()) {
     if (wins.length > 0) {
       const w = wins[0]
       if (w.isMinimized()) w.restore()
+      w.show()
       w.focus()
     }
   })
@@ -92,11 +107,22 @@ if (!app.requestSingleInstanceLock()) {
     // 静默失败，LLM 未配置跳过（队列照常定档，配置后下次触发补齐）
     setTimeout(() => void ensureLearnStock(), 10_000).unref()
     createWindow()
+    // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
+    createTray(appIcon, showMainWindow)
+    app.setLoginItemSettings({ openAtLogin: getSetting(SettingsKeys.LaunchOnBoot) === '1' })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
   })
+}
+
+function showMainWindow(): void {
+  const w = BrowserWindow.getAllWindows()[0]
+  if (!w) return
+  if (w.isMinimized()) w.restore()
+  w.show()
+  w.focus()
 }
 
 app.on('window-all-closed', () => {
@@ -105,6 +131,7 @@ app.on('window-all-closed', () => {
 
 // 海龟汤净用时退出兜底（优化建议区第26轮）+ 内置终端进程兜底（260912）：退出前杀光 shell，不留僵尸进程
 app.on('before-quit', () => {
+  quitting = true
   settleTurtleTimers()
   killAllTerminals()
 })

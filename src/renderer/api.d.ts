@@ -14,8 +14,8 @@ export type ModuleId =
   | 'recycle'
   | 'profile'
 
-/** AI 边栏频道（DB v9 频道制；260911 新增 learn） */
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn'
+/** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet） */
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet'
 
 /** 草稿本频道（DB v14）：固定两频道起步 */
 export type DraftChannel = 'general' | 'turtle'
@@ -153,6 +153,61 @@ export interface LearnCardRow extends LearnNode {
 export interface LearnDailyRow extends LearnNode {
   domain_name: string
   topic_title: string | null
+}
+
+/** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。
+ *  answering 态经 IPC 下发前隐去 answerIndex/acceptable/answer/analysis（防抄答案）。 */
+export interface LearnQuizQuestion {
+  nodeId: number
+  /** 联节点标题（quizGet 注入，展示用） */
+  nodeTitle?: string
+  type: 'choice' | 'blank' | 'short'
+  /** 题面 md（MdView 渲染，推理角题面同款） */
+  question: string
+  /** choice 专用：选项文本数组（下标即选项号，不含字母前缀） */
+  options?: string[]
+  /** choice 专用：正确选项下标 */
+  answerIndex?: number
+  /** blank 专用：可接受答案数组（归一化比对） */
+  acceptable?: string[]
+  /** 参考答案（short 批改参考；graded 后展示） */
+  answer: string
+  /** 解析（graded 后展示） */
+  analysis: string
+}
+
+/** 小测作答行（learn_quiz.answers JSON 数组元素；作答实时存库） */
+export interface LearnQuizAnswer {
+  qIndex: number
+  answer: string
+  /** choice/blank 本地判；short 交卷 AI 批改前为 null */
+  correct: boolean | null
+  /** short 批改点评 */
+  aiComment?: string
+}
+
+/** 小测卷（learn:quizGet / quizCreate / quizRetry 返回） */
+export interface LearnQuizView {
+  date: string
+  status: 'answering' | 'graded'
+  questions: LearnQuizQuestion[]
+  answers: LearnQuizAnswer[]
+}
+
+/** 实战任务行（learn:taskList / taskGenerate / taskSubmit 返回；md 路径供渲染层读文件） */
+export interface LearnTaskRow {
+  id: number
+  topic_id: number
+  domain_id: number
+  status: 'todo' | 'submitted' | 'reviewed'
+  /** 点评分 0-100（reviewed 后有值） */
+  score: number | null
+  topic_title: string
+  task_md: string
+  homework_md: string | null
+  review_md: string | null
+  created_at: string
+  submitted_at: string | null
 }
 
 export interface LearnHighlightRow {
@@ -464,6 +519,8 @@ export interface RecycleRow {
     | 'ledger_account'
     | 'ledger_category'
     | 'learn'
+    | 'prophet'
+    | 'twelve_question'
   item_id: number
   payload: string
   created_at: string
@@ -477,6 +534,42 @@ export interface ZhijijiQuestion {
   version_count: number
   created_at: string
   updated_at: string
+}
+
+/** 预言家判断（用户三选一；可改判覆盖） */
+export type ProphetJudgment = 'reasonable' | 'unreasonable' | 'uncertain'
+
+/** 预言条目（prophet_records，DB v36；分析说明 md 快照在 analysis_md_path） */
+export interface ProphetRecord {
+  id: number
+  claim: string
+  note: string
+  status: 'open' | 'judged'
+  judgment: ProphetJudgment | null
+  judgment_note: string
+  judged_at: string | null
+  analysis_md_path: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 十二问题（twelve_questions，DB v36；列表行聚合想法数与最近想法时间） */
+export interface TwelveQuestion {
+  id: number
+  title: string
+  ord: number
+  thought_count: number
+  last_thought_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 十二问题想法（twelve_thoughts，DB v36；碎片存 SQLite，不落 md） */
+export interface TwelveThought {
+  id: number
+  question_id: number
+  content: string
+  created_at: string
 }
 
 /** 致知己答案版本（DB v9；标识 v{seq}-{date}） */
@@ -693,6 +786,10 @@ export interface Api {
     get(key: string): Promise<string | null>
     set(key: string, value: string): Promise<boolean>
   }
+  app: {
+    /** 开机自启：写 settings + 立即生效 + 托盘菜单勾选态刷新 */
+    setLaunchOnBoot(on: boolean): Promise<boolean>
+  }
   md: {
     read(path: string): Promise<string>
     write(path: string, content: string): Promise<boolean>
@@ -775,6 +872,28 @@ export interface Api {
     overwriteVersion(versionId: number, content: string): Promise<boolean>
     renameQuestion(id: number, title: string): Promise<boolean>
     discard(id: number): Promise<boolean>
+  }
+  prophet: {
+    list(): Promise<ProphetRecord[]>
+    /** 新预言（观点必填、补充说明可选）；创建后经 analyze 开始 AI 联网分析 */
+    create(claim: string, note: string): Promise<{ id: number }>
+    /** AI 分析：MCP 检索 → 充分说明 → md 快照 + 推「致知己·预言家」频道；过程经 ai:message 推送 */
+    analyze(jobId: string, id: number): Promise<{ recordId: number; analysisMdPath: string }>
+    /** 下判断（三选一 + 可选理由）；重复调用即改判覆盖 */
+    judge(id: number, judgment: ProphetJudgment, judgmentNote: string): Promise<boolean>
+    discard(id: number): Promise<boolean>
+  }
+  twelve: {
+    list(): Promise<TwelveQuestion[]>
+    /** 新问题：满 12 题抛 TWELVE_FULL */
+    createQuestion(title: string): Promise<{ id: number }>
+    renameQuestion(id: number, title: string): Promise<boolean>
+    thoughts(questionId: number): Promise<TwelveThought[]>
+    addThought(questionId: number, content: string): Promise<TwelveThought>
+    /** 删除单条想法（彻底删，不入回收站） */
+    deleteThought(id: number): Promise<boolean>
+    /** 删题进回收站（想法随题封存/恢复） */
+    discardQuestion(id: number): Promise<boolean>
   }
   reasoning: {
     /** 题库补充泵触发（v1.3）：进入推理角模块时调；存量达标即 no-op，主进程 fire-and-forget 秒回 */
@@ -1154,6 +1273,24 @@ export interface Api {
     highlights(): Promise<LearnHighlightRow[]>
     addHighlight(nodeId: number, text: string): Promise<boolean>
     deleteHighlight(id: number): Promise<boolean>
+    /** 今日小测卷（无则 null；answering 态隐去答案与解析） */
+    quizGet(): Promise<LearnQuizView | null>
+    /** 出今日卷（一天一卷幂等，已存在直接返回；force=true 换一张覆盖旧卷；可取消）；可测卡不足抛错 */
+    quizCreate(jobId: string, force?: boolean): Promise<LearnQuizView>
+    /** 单题作答（实时存库；choice/blank 返回本地判定，short 返回 null） */
+    quizAnswer(qIndex: number, answer: string): Promise<boolean | null>
+    /** 交卷：简答批量 AI 批改后整卷 graded */
+    quizSubmit(jobId: string): Promise<{ correct: number; total: number }>
+    /** 重做：清空作答回 answering（同卷） */
+    quizRetry(): Promise<LearnQuizView>
+    /** 主题实战任务列表（创建序倒序） */
+    taskList(topicId: number): Promise<LearnTaskRow[]>
+    /** AI 出新任务（可取消）；主题无知识点抛错 */
+    taskGenerate(jobId: string, topicId: number): Promise<LearnTaskRow>
+    /** 提交作业并 AI 点评（todo/submitted 均可提交，reviewed 拒绝） */
+    taskSubmit(jobId: string, taskId: number, homework: string): Promise<LearnTaskRow>
+    /** 彻底删任务（级联 md，不入回收站） */
+    taskDelete(taskId: number): Promise<boolean>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>
@@ -1185,8 +1322,8 @@ export interface Api {
     stats(range: 'today' | 'month' | 'all'): Promise<import('../shared/types').LlmUsageStats>
     /** 调用记录（260910 明细）：最近 30 条，与时间范围无关 */
     records(): Promise<import('../shared/types').LlmUsageRecord[]>
-    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
-    onActivity(cb: (payload: { items: { scene: string; configName: string }[] }) => void): () => void
+    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组；260912 面板扩展含时长与 jobId） */
+    onActivity(cb: (payload: { items: import('../shared/types').LlmActivityItem[] }) => void): () => void
   }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>

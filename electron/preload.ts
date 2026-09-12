@@ -7,6 +7,10 @@ const api = {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string): Promise<boolean> => ipcRenderer.invoke('settings:set', key, value)
   },
+  app: {
+    /** 开机自启：写 settings + 立即生效 + 托盘菜单勾选态刷新 */
+    setLaunchOnBoot: (on: boolean): Promise<boolean> => ipcRenderer.invoke('app:setLaunchOnBoot', on)
+  },
   md: {
     read: (path: string): Promise<string> => ipcRenderer.invoke('md:read', path),
     write: (path: string, content: string): Promise<boolean> => ipcRenderer.invoke('md:write', path, content),
@@ -70,6 +74,8 @@ const api = {
           | 'ledger_tx'
           | 'ledger_account'
           | 'ledger_category'
+          | 'prophet'
+          | 'twelve_question'
         item_id: number
         payload: string
         created_at: string
@@ -277,6 +283,26 @@ const api = {
     renameQuestion: (id: number, title: string): Promise<boolean> =>
       ipcRenderer.invoke('zhijiji:renameQuestion', id, title),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id)
+  },
+  prophet: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('prophet:list'),
+    create: (claim: string, note: string): Promise<{ id: number }> =>
+      ipcRenderer.invoke('prophet:create', claim, note),
+    analyze: (jobId: string, id: number): Promise<unknown> => ipcRenderer.invoke('prophet:analyze', jobId, id),
+    judge: (id: number, judgment: string, judgmentNote: string): Promise<boolean> =>
+      ipcRenderer.invoke('prophet:judge', id, judgment, judgmentNote),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('prophet:discard', id)
+  },
+  twelve: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('twelve:list'),
+    createQuestion: (title: string): Promise<{ id: number }> => ipcRenderer.invoke('twelve:createQuestion', title),
+    renameQuestion: (id: number, title: string): Promise<boolean> =>
+      ipcRenderer.invoke('twelve:renameQuestion', id, title),
+    thoughts: (questionId: number): Promise<unknown[]> => ipcRenderer.invoke('twelve:thoughts', questionId),
+    addThought: (questionId: number, content: string): Promise<unknown> =>
+      ipcRenderer.invoke('twelve:addThought', questionId, content),
+    deleteThought: (id: number): Promise<boolean> => ipcRenderer.invoke('twelve:deleteThought', id),
+    discardQuestion: (id: number): Promise<boolean> => ipcRenderer.invoke('twelve:discardQuestion', id)
   },
   reasoning: {
     /** 题库补充泵触发（v1.3）：进入推理角模块时调；存量达标即 no-op，主进程 fire-and-forget */
@@ -666,7 +692,37 @@ const api = {
     addHighlight: (nodeId: number, text: string): Promise<boolean> =>
       ipcRenderer.invoke('learn:addHighlight', nodeId, text),
     deleteHighlight: (id: number): Promise<boolean> =>
-      ipcRenderer.invoke('learn:deleteHighlight', id)
+      ipcRenderer.invoke('learn:deleteHighlight', id),
+    /** 今日小测卷（无则 null；answering 态隐去答案与解析） */
+    quizGet: (): Promise<import('../src/shared/types').LearnQuizView | null> =>
+      ipcRenderer.invoke('learn:quizGet'),
+    /** 出今日卷（一天一卷幂等，已存在直接返回；force=true 换一张覆盖旧卷；可取消）；可测卡不足抛错 */
+    quizCreate: (jobId: string, force?: boolean): Promise<import('../src/shared/types').LearnQuizView> =>
+      ipcRenderer.invoke('learn:quizCreate', jobId, force),
+    /** 单题作答（实时存库；choice/blank 返回本地判定，short 返回 null） */
+    quizAnswer: (qIndex: number, answer: string): Promise<boolean | null> =>
+      ipcRenderer.invoke('learn:quizAnswer', qIndex, answer),
+    /** 交卷：简答批量 AI 批改后整卷 graded */
+    quizSubmit: (jobId: string): Promise<{ correct: number; total: number }> =>
+      ipcRenderer.invoke('learn:quizSubmit', jobId),
+    /** 重做：清空作答回 answering（同卷） */
+    quizRetry: (): Promise<import('../src/shared/types').LearnQuizView> =>
+      ipcRenderer.invoke('learn:quizRetry'),
+    /** 主题实战任务列表（创建序倒序） */
+    taskList: (topicId: number): Promise<import('../src/shared/types').LearnTaskRow[]> =>
+      ipcRenderer.invoke('learn:taskList', topicId),
+    /** AI 出新任务（可取消）；主题无知识点抛错 */
+    taskGenerate: (jobId: string, topicId: number): Promise<import('../src/shared/types').LearnTaskRow> =>
+      ipcRenderer.invoke('learn:taskGenerate', jobId, topicId),
+    /** 提交作业并 AI 点评（todo/submitted 均可提交，reviewed 拒绝） */
+    taskSubmit: (
+      jobId: string,
+      taskId: number,
+      homework: string
+    ): Promise<import('../src/shared/types').LearnTaskRow> =>
+      ipcRenderer.invoke('learn:taskSubmit', jobId, taskId, homework),
+    /** 彻底删任务（级联 md，不入回收站） */
+    taskDelete: (taskId: number): Promise<boolean> => ipcRenderer.invoke('learn:taskDelete', taskId)
   },
   ledger: {
     /** 账户列表（含实时余额） */
@@ -728,9 +784,9 @@ const api = {
     /** 调用记录（260910 明细）：最近 30 条，与时间范围无关 */
     records: (): Promise<import('../src/shared/types').LlmUsageRecord[]> =>
       ipcRenderer.invoke('llmUsage:records'),
-    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组） */
-    onActivity: (cb: (payload: { items: { scene: string; configName: string }[] }) => void): (() => void) => {
-      const listener = (_e: unknown, payload: { items: { scene: string; configName: string }[] }): void => {
+    /** AI 实时活动（在途调用起止广播；空闲 items 为空数组；260912 面板扩展含时长与 jobId） */
+    onActivity: (cb: (payload: { items: import('../src/shared/types').LlmActivityItem[] }) => void): (() => void) => {
+      const listener = (_e: unknown, payload: { items: import('../src/shared/types').LlmActivityItem[] }): void => {
         cb(payload)
       }
       ipcRenderer.on('llm:activity', listener)

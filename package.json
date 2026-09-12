@@ -10,7 +10,9 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "smoke": "electron-vite build && electron . --smoke"
+    "smoke": "electron-vite build && electron . --smoke",
+    "icon": "node scripts/gen-icon.cjs",
+    "dist": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
@@ -23,7 +25,6 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.14",
-    "electron": "^44.1.1",
     "electron-vite": "^5.0.0",
     "epubjs": "^0.3.93",
     "fast-xml-parser": "^5.11.1",
@@ -37,5 +38,10 @@
     "react-dom": "^19.2.8",
     "typescript": "^7.0.2",
     "vite": "^8.2.2"
+  },
+  "devDependencies": {
+    "electron": "^44.1.1",
+    "electron-builder": "^26.15.3",
+    "png2icons": "^2.0.1"
   }
 }

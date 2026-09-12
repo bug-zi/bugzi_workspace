@@ -20,7 +20,9 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src'),
     build: {
-      rollupOptions: { input: resolve(__dirname, 'src/index.html') }
+      rollupOptions: {
+        input: { main: resolve(__dirname, 'src/index.html') }
+      }
     },
     resolve: {
       alias: { '@': resolve(__dirname, 'src') }

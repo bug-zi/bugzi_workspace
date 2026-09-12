@@ -8,6 +8,7 @@
 import { BrowserWindow } from 'electron'
 import { getDb } from '../db/db'
 import { generateLearnCard, isLlmConfigured, localDateStr } from '../ai/services'
+import { runPumpJob } from '../ai/jobs'
 
 /** 复习每日上限（设计 §四：防假期后复习雪崩，超出部分次日查询自然再含——零成本顺延） */
 const REVIEW_DAILY_CAP = 10
@@ -102,7 +103,7 @@ export async function ensureLearnStock(): Promise<void> {
     console.info(`[learnStock] 今日新卡预生成开始：${needy.length} 张`)
     for (const n of needy) {
       try {
-        await generateLearnCard(n.id)
+        await runPumpJob('learn', (sig) => generateLearnCard(n.id, sig))
         notifyStockChanged()
         console.info(`[learnStock] 卡片就绪「${n.title}」`)
       } catch (e) {

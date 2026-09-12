@@ -20,6 +20,8 @@ export type RecycleSource =
   | 'ledger_category'
   | 'canvases'
   | 'learn'
+  | 'prophet'
+  | 'twelve_question'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -36,7 +38,9 @@ const TABLES: Record<RecycleSource, string> = {
   ledger_account: 'ledger_accounts',
   ledger_category: 'ledger_categories',
   canvases: 'canvases',
-  learn: 'learn_nodes'
+  learn: 'learn_nodes',
+  prophet: 'prophet_records',
+  twelve_question: 'twelve_questions'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -57,7 +61,9 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   ledger_category: null,
   // 画布：path 指向 canvas/{id}.excalidraw（mdDelete 对 userData 内任意文件通用）
   canvases: 'path',
-  learn: null // learn 卡片 md 派生为 md/learn/<id>.md（无表列），hardDelete 特判清理
+  learn: null, // learn 卡片 md 派生为 md/learn/<id>.md（无表列），hardDelete 特判清理
+  prophet: 'analysis_md_path',
+  twelve_question: null // 想法为 DB 行，hardDelete 特判清理
 }
 
 export interface RecycleRow {
@@ -117,6 +123,20 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'zhijiji':
       // 回主列表：清标记 + 触碰 updated_at（浮回列表顶部，版本 md 原样保留）
       d.prepare('UPDATE zhijiji_questions SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(
+        nowIso(),
+        rb.item_id
+      )
+      break
+    case 'prophet':
+      // 回预言家列表：清标记 + 触碰 updated_at（浮回列表顶部，md 快照与频道会话原样保留）
+      d.prepare('UPDATE prophet_records SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(
+        nowIso(),
+        rb.item_id
+      )
+      break
+    case 'twelve_question':
+      // 回十二问题列表：仅清标记（想法行未动，恢复即全量回来）
+      d.prepare('UPDATE twelve_questions SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(
         nowIso(),
         rb.item_id
       )
@@ -222,6 +242,13 @@ export function hardDelete(recycleId: number): void {
     d.prepare('DELETE FROM turtle_games WHERE id = ?').run(rb.item_id)
     d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
     if (row?.md_path) mdDelete(row.md_path)
+    return
+  }
+  if (rb.source === 'twelve_question') {
+    // 删题连想法：先删想法行再删题行 + 回收记录（想法无 md）
+    d.prepare('DELETE FROM twelve_thoughts WHERE question_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM twelve_questions WHERE id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
     return
   }
   if (rb.source === 'mottos') {

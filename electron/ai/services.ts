@@ -5,7 +5,7 @@ import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { ensureNotCancelled } from './jobs'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
 import { AI_NAME, SettingsKeys } from '../../src/shared/types'
-import type { AiChannel, AiMessage, AiSession, LlmConfig } from '../../src/shared/types'
+import type { AiChannel, AiMessage, AiSession, LearnQuizQuestion, LlmConfig } from '../../src/shared/types'
 
 // ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
 
@@ -22,7 +22,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify,
-  learn: SettingsKeys.AiActiveSessionLearn
+  learn: SettingsKeys.AiActiveSessionLearn,
+  prophet: SettingsKeys.AiActiveSessionProphet
 }
 
 /** 会话列表（最近活跃在前，按频道隔离） */
@@ -172,6 +173,18 @@ export function appendSystemToChannelSession(channel: AiChannel, content: string
   return appendAiMessage('system', content, null, sid)
 }
 
+/** assistant 消息落指定频道的激活会话（预言家分析说明推频道用）；无激活会话则自动新建接收 */
+export function appendAssistantToChannelSession(channel: AiChannel, content: string): AiMessage {
+  let sid = getActiveSessionId(channel)
+  if (sid == null) {
+    const title = content.replace(/\s+/g, ' ').trim().slice(0, AUTO_TITLE_LEN) || DEFAULT_SESSION_TITLE
+    const s = createAiSession(title, channel)
+    setActiveSessionId(s.id, channel)
+    sid = s.id
+  }
+  return appendAiMessage('assistant', content, null, sid)
+}
+
 const MODULE_LABELS: Record<string, string> = {
   learn: '学习库',
   mottos: '格言库',
@@ -195,7 +208,9 @@ const CHANNEL_PERSONAS: Record<AiChannel, string> = {
   verify:
     '当前频道是「辩真·核查」，你是核查员：围绕待验证观点的真实性讨论，结论要有依据，引用来源时给出链接。',
   learn:
-    '当前频道是「学习·问答」，你是计算机专业知识的学习助教：用通俗、准确的方式讲解计算机专业知识，多举实际例子（命令、配置、代码），必要时指出常见误区与工程实践要点。'
+    '当前频道是「学习·问答」，你是计算机专业知识的学习助教：用通俗、准确的方式讲解计算机专业知识，多举实际例子（命令、配置、代码），必要时指出常见误区与工程实践要点。',
+  prophet:
+    '当前频道是「致知己·预言家」，你是预言分析师：围绕用户的预测/推断，基于检索到的资料给出充分全面的说明与推演（支持与反对的依据都要讲）；欢迎质疑，逐条回应，证据不足时明说；绝不替用户下最终结论，判断由用户自己做。'
 }
 
 /** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
@@ -1189,9 +1204,27 @@ export interface GenerateLearnCardResult {
   summary: string
 }
 
-/** 知识点卡片生成（按需/泵/手动添加共用）：注入领域+主题上下文，模板见学习库 specs §八；
+/** 同节点在飞去重（渲染层并行队列 + 预生成泵 + 现场生成可能对同一张卡并发）：
+ *  同节点共享同一 Promise。附随调用方沿用首个调用方的 signal——
+ *  学习卡生成现有 UI 无取消入口（randomOne 取消为唯一路径，撞车概率可忽略），共享可接受。 */
+const learnCardInflight = new Map<number, Promise<GenerateLearnCardResult>>()
+
+export function generateLearnCard(
+  nodeId: number,
+  signal?: AbortSignal
+): Promise<GenerateLearnCardResult> {
+  const going = learnCardInflight.get(nodeId)
+  if (going) return going
+  const p = doGenerateLearnCard(nodeId, signal).finally(() => {
+    learnCardInflight.delete(nodeId)
+  })
+  learnCardInflight.set(nodeId, p)
+  return p
+}
+
+/** 知识点卡片生成（按需/泵/手动添加/渲染层队列共用）：注入领域+主题上下文，模板见学习库 specs §八；
  *  写 md/learn/<id>.md 并置 content_ready=1。 */
-export async function generateLearnCard(
+async function doGenerateLearnCard(
   nodeId: number,
   signal?: AbortSignal
 ): Promise<GenerateLearnCardResult> {
@@ -1308,6 +1341,210 @@ export async function expandLearnTopic(
   return { points: pts.length }
 }
 
+// ---------- 学习库 v2.0（每日小测 + 实战任务，2026-09-12-学习库v2.0升级-design.md） ----------
+
+/** 每日小测出卷（设计 §二）：读今日已学卡正文，每卡 1 题混合题型，一次调用。
+ *  大 JSON 易坏——解析失败重试一次（同 expandLearnTopic 惯例）；无有效题则抛错。 */
+export async function generateLearnQuiz(
+  nodeIds: number[],
+  signal?: AbortSignal
+): Promise<LearnQuizQuestion[]> {
+  const d = getDb()
+  const cards = nodeIds
+    .map((id) =>
+      d
+        .prepare(
+          `SELECT n.id, n.title, dom.name AS domain_name FROM learn_nodes n
+           JOIN learn_domains dom ON n.domain_id = dom.id
+           WHERE n.id = ? AND n.state = 'learned' AND n.content_ready = 1 AND n.deleted_at IS NULL`
+        )
+        .get(id) as { id: number; title: string; domain_name: string } | undefined
+    )
+    .filter((c): c is { id: number; title: string; domain_name: string } => c != null)
+  if (cards.length < 2) throw new Error('可测卡片不足 2 张')
+  const bodies = cards
+    .map((c) => {
+      let md = ''
+      try {
+        md = mdRead(`md/learn/${c.id}.md`)
+      } catch {
+        md = ''
+      }
+      return `【卡 ${c.id}】${c.title}（${c.domain_name}）\n${md.slice(0, 2500)}`
+    })
+    .join('\n\n')
+  const prompt = `以下是今天学习的 ${cards.length} 张知识卡片正文：\n\n${bodies}\n\n请基于以上内容出 ${cards.length} 道测试题（每张卡恰好 1 题，nodeId 用卡片 id），题型按内容适合度从「choice 单选 / blank 填空 / short 简答」中混合选择。题目要具体、能检验真实理解，不要出送分题。
+以 JSON 对象返回，格式：{"questions":[{"nodeId":123,"type":"choice","question":"题面（可用 markdown）","options":["选项文本","选项文本"],"answerIndex":0,"acceptable":["等价答案"],"answer":"参考答案（一句话）","analysis":"解析（一两句）"}]}。options/answerIndex 仅 choice 必有（2-4 个选项，不带字母前缀）；acceptable 仅 blank 必有（2-4 个等价答案）；answer/analysis 所有题必有；不要输出其他任何内容。`
+  const call = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+      jsonMode: true,
+      scene: 'learn:quiz',
+      signal
+    })
+  let parsed: Record<string, unknown>
+  try {
+    parsed = parseJsonObject((await call()).content)
+  } catch (e) {
+    if (signal?.aborted) throw e
+    parsed = parseJsonObject((await call()).content)
+  }
+  const byId = new Map(cards.map((c) => [c.id, c]))
+  const qs = ((Array.isArray(parsed.questions) ? parsed.questions : []) as Record<string, unknown>[])
+    .map((q) => ({
+      nodeId: Number(q.nodeId),
+      type: (q.type === 'choice' || q.type === 'blank' || q.type === 'short' ? q.type : 'short') as LearnQuizQuestion['type'],
+      question: typeof q.question === 'string' ? q.question.trim() : '',
+      options: Array.isArray(q.options) ? q.options.map(String) : undefined,
+      answerIndex: typeof q.answerIndex === 'number' ? q.answerIndex : undefined,
+      acceptable: Array.isArray(q.acceptable) ? q.acceptable.map(String) : undefined,
+      answer: typeof q.answer === 'string' ? q.answer.trim() : '',
+      analysis: typeof q.analysis === 'string' ? q.analysis.trim() : ''
+    }))
+    .filter(
+      (q) =>
+        byId.has(q.nodeId) &&
+        q.question &&
+        (q.type !== 'choice' || (q.options != null && q.options.length >= 2 && (q.answerIndex ?? -1) >= 0))
+    )
+  if (qs.length === 0) throw new Error('LLM 未返回有效题目')
+  return qs
+}
+
+/** 简答批量批改（设计 §二：交卷时一次调用判全部简答题） */
+export async function gradeLearnQuiz(
+  items: { qIndex: number; question: string; reference: string; userAnswer: string }[],
+  signal?: AbortSignal
+): Promise<{ qIndex: number; correct: boolean; comment: string }[]> {
+  const list = items
+    .map((it) => `- 题${it.qIndex}：${it.question}\n  参考答案：${it.reference}\n  用户作答：${it.userAnswer}`)
+    .join('\n')
+  const prompt = `以下是简答题的题目、参考答案与用户作答，请逐题判断用户作答是否正确（意思对即可，不要求逐字匹配；明显错误或答非所问判错）。以 JSON 对象返回：{"grades":[{"qIndex":0,"correct":true,"comment":"一句点评（20~40 字，错了讲清错在哪）"}]}，grades 与题目一一对应，不要输出其他任何内容：\n\n${list}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.2,
+    jsonMode: true,
+    scene: 'learn:quizGrade',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const parsed = parseJsonObject(res.content)
+  return ((Array.isArray(parsed.grades) ? parsed.grades : []) as Record<string, unknown>[])
+    .map((g) => ({
+      qIndex: Number(g.qIndex),
+      correct: g.correct === true,
+      comment: typeof g.comment === 'string' ? g.comment.trim() : ''
+    }))
+    .filter((g) => items.some((it) => it.qIndex === g.qIndex))
+}
+
+/** 实战任务生成（设计 §三）：30 分钟小任务硬约束，三段式 md（背景场景/任务要求/验收标准） */
+export async function generateLearnTask(
+  topicId: number,
+  signal?: AbortSignal
+): Promise<{ domainId: number; taskMd: string }> {
+  const d = getDb()
+  const t = d
+    .prepare(
+      `SELECT n.id, n.title, dom.id AS domain_id, dom.name AS domain_name
+       FROM learn_nodes n JOIN learn_domains dom ON n.domain_id = dom.id
+       WHERE n.id = ? AND n.level = 1`
+    )
+    .get(topicId) as
+    | { id: number; title: string; domain_id: number; domain_name: string }
+    | undefined
+  if (!t) throw new Error('NOT_FOUND')
+  const points = d
+    .prepare("SELECT id, title FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NULL ORDER BY id")
+    .all(topicId) as { id: number; title: string }[]
+  if (points.length === 0) throw new Error('该主题下还没有知识点，先 AI 展开或手动添加后再出任务')
+  const learnedBodies = points
+    .map((p) => {
+      const row = d.prepare('SELECT state, content_ready FROM learn_nodes WHERE id = ?').get(p.id) as
+        | { state: string; content_ready: number }
+        | undefined
+      if (!row || row.state !== 'learned' || row.content_ready !== 1) return null
+      try {
+        return `【${p.title}】\n${mdRead(`md/learn/${p.id}.md`).slice(0, 1200)}`
+      } catch {
+        return null
+      }
+    })
+    .filter((s): s is string => s != null)
+    .slice(0, 4)
+  const context =
+    learnedBodies.length > 0
+      ? learnedBodies.join('\n\n')
+      : '（该主题暂无已学卡片正文，按知识点标题设计任务）'
+  const prompt = `计算机领域「${t.domain_name}」主题「${t.title}」，包含知识点：${points.map((p) => p.title).join('、')}。
+已学卡片内容节选：
+${context}
+
+请结合${t.domain_name}的真实工作场景，为该主题设计一个实战小任务。硬性要求：单一场景、动手 30 分钟内可完成、不要求搭建大型环境（优先用命令/小脚本/单文件代码/在线工具完成）、任务必须能靠「验收标准」自查完成度。
+输出 markdown（不要用代码围栏包裹整体），结构：
+# 实战任务：{任务名}
+## 背景场景
+{2~3 句真实工作情境}
+## 任务要求
+{3~5 条，具体可执行}
+## 验收标准
+{3~5 条可自查的完成判据}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7,
+    scene: 'learn:task',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const md = stripMdFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return { domainId: t.domain_id, taskMd: md }
+}
+
+/** 实战任务批改（设计 §三）：输入任务 md + 作业全文 + 主题知识点上下文，返回评分与点评 md */
+export async function reviewLearnTask(
+  topicId: number,
+  taskMd: string,
+  homework: string,
+  signal?: AbortSignal
+): Promise<{ score: number; reviewMd: string }> {
+  const d = getDb()
+  const points = d
+    .prepare("SELECT id, title FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NULL ORDER BY id")
+    .all(topicId) as { id: number; title: string }[]
+  const learnedBodies = points
+    .map((p) => {
+      const row = d.prepare('SELECT state, content_ready FROM learn_nodes WHERE id = ?').get(p.id) as
+        | { state: string; content_ready: number }
+        | undefined
+      if (!row || row.state !== 'learned' || row.content_ready !== 1) return null
+      try {
+        return `【${p.title}】\n${mdRead(`md/learn/${p.id}.md`).slice(0, 1000)}`
+      } catch {
+        return null
+      }
+    })
+    .filter((s): s is string => s != null)
+    .slice(0, 4)
+  const context =
+    learnedBodies.length > 0 ? learnedBodies.join('\n\n') : points.map((p) => p.title).join('、')
+  const prompt = `实战任务批改。任务与验收标准：\n${taskMd}\n\n学员作业：\n${homework}\n\n相关知识点参考：\n${context}\n\n请按验收标准逐条核对作业完成度并评分（0-100：全部达成 85+，主体完成 70-84，部分完成 50-69，未完成 <50；有超出预期的亮点可加分）。以 JSON 对象返回：{"score":85,"review":"点评 markdown（三个二级标题：## 亮点 / ## 不足 / ## 改进建议，各 1-3 条，具体到作业内容）"}，不要输出其他任何内容。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+    jsonMode: true,
+    scene: 'learn:taskReview',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const parsed = parseJsonObject(res.content)
+  const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))))
+  const reviewMd = typeof parsed.review === 'string' ? parsed.review.trim() : ''
+  if (!Number.isFinite(score) || !reviewMd) throw new Error('LLM 未返回有效点评')
+  return { score, reviewMd }
+}
+
 // ---------- 辩真阁验证（辩真阁 specs §3） ----------
 
 export interface VerifyResult {
@@ -1402,6 +1639,97 @@ export async function runVerification(
   )
   onProgress(`验证完成，可信度 ${credibility}%`)
   return { recordId: id, credibility }
+}
+
+// ---------- 致知己·预言家（2026-09-12 设计 §三：MCP 检索 → 充分说明 → 推频道，骨架同辩真 runVerification） ----------
+
+export interface ProphetAnalysisResult {
+  recordId: number
+  analysisMdPath: string
+}
+
+/** 预言家分析：LLM 出关键词 → MCP 逐组检索 → LLM 综合「充分全面的说明」→ 写 md 快照 + 推预言家频道（assistant 消息，多轮对话起点） */
+export async function runProphetAnalysis(
+  recordId: number,
+  claim: string,
+  note: string,
+  onProgress: (msg: string) => void,
+  signal?: AbortSignal
+): Promise<ProphetAnalysisResult> {
+  // 动态 import 避免循环依赖（同 runVerification）
+  const { findSearchTool } = await import('./mcp')
+  onProgress(`开始分析预言：${claim}`)
+  const found = await findSearchTool(onProgress, signal)
+  if (!found) throw new Error('未找到可用的搜索工具，请检查 MCP 服务器是否提供 search 类工具')
+  const { mcp, tool } = found
+  onProgress(`使用搜索工具：${tool}`)
+
+  // 1) LLM 生成检索关键词
+  const kwRes = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `我想检验这个预测/推断是否合理：「${claim}」。请生成 3 组适合搜索引擎检索的中英文关键词（每组关键词一行，直接输出，不要编号和解释）。`
+      }
+    ],
+    temperature: 0.5,
+    scene: 'prophet:analyze',
+    signal
+  })
+  const keywords = kwRes.content
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  onProgress(`检索关键词：${keywords.join('｜')}`)
+
+  // 2) 逐组检索
+  const searchResults: string[] = []
+  for (const kw of keywords) {
+    ensureNotCancelled(signal)
+    onProgress(`正在检索：${kw}`)
+    try {
+      const resultText = await mcp.callTool(tool, { query: kw })
+      searchResults.push(`【关键词：${kw}】\n${resultText}`)
+      onProgress(`检索完成（${resultText.length} 字）`)
+    } catch (e) {
+      onProgress(`检索失败：${(e as Error).message}`)
+    }
+  }
+  if (searchResults.length === 0) throw new Error('全部检索失败，无法分析')
+
+  // 3) LLM 综合说明
+  onProgress('正在综合分析…')
+  const analysisRes = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `用户的预测/推断：「${claim}」\n${note ? `用户的补充说明：${note}\n` : ''}\n以下是检索到的资料：\n${searchResults.join(
+          '\n\n'
+        )}\n\n请基于资料对该推断给出充分全面的分析说明（Markdown），依次包含：\n## 观点重述\n## 支持依据\n## 反对与风险\n## 推演逻辑链\n## 不确定性与关键变量\n## 结论倾向\n（结论倾向仅供参考，明确说明最终判断由用户自己下。）引用资料处以 Markdown 链接列出来源。`
+      }
+    ],
+    temperature: 0.4,
+    scene: 'prophet:analyze',
+    signal
+  })
+  const analysis = analysisRes.content.trim()
+  if (!analysis) throw new Error('LLM 未返回内容')
+
+  // 4) md 快照 + 频道推入（取消在写库/推频道前拦截）
+  ensureNotCancelled(signal)
+  const now = nowIso()
+  const mdPath = `md/prophet/${recordId}.md`
+  mdWrite(
+    mdPath,
+    `# 预言：${claim}\n\n${note ? `> 我的补充说明：${note}\n\n` : ''}## AI 分析\n\n${analysis}\n`
+  )
+  getDb()
+    .prepare('UPDATE prophet_records SET analysis_md_path = ?, updated_at = ? WHERE id = ?')
+    .run(mdPath, now, recordId)
+  appendAssistantToChannelSession('prophet', analysis)
+  onProgress('分析完成，说明已推入「致知己·预言家」频道，欢迎继续质疑')
+  return { recordId, analysisMdPath: mdPath }
 }
 
 // ---------- LLM 可用性检查（供渲染层判断是否弹「去配置」） ----------

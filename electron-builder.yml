@@ -1,0 +1,29 @@
+appId: com.bugzi.workspace
+productName: bugzi's workspace
+# node-pty 自带 N-API 预编译（无 ABI 钉死），跳过 @electron/rebuild 源码重编（winpty gyp 在 Windows 必失败）
+npmRebuild: false
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+# node-pty 为原生模块，必须解包到 asar 外（260912 内置终端同款约束）
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+# app.png 复制到 <resources>/app.png：窗口/托盘图标打包态路径（main.ts appIcon），缺了托盘会拿到空图像
+extraResources:
+  - from: resources/app.png
+    to: app.png
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: bugzi's workspace
+artifactName: bugzi-workspace-Setup-${version}.${ext}

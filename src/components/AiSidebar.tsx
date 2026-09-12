@@ -39,7 +39,8 @@ const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
   { id: 'learn', label: '学习·问答', icon: 'school' },
   { id: 'wiki', label: '万象·问答', icon: 'public' },
   { id: 'zhijiji', label: '致知己·追问', icon: 'self_improvement' },
-  { id: 'verify', label: '辩真·核查', icon: 'fact_check' }
+  { id: 'verify', label: '辩真·核查', icon: 'fact_check' },
+  { id: 'prophet', label: '致知己·预言家', icon: 'auto_awesome' }
 ]
 
 /** 各频道激活会话的 settings key（与主进程 services.ACTIVE_SESSION_KEYS 同步） */
@@ -49,7 +50,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   wiki: SettingsKeys.AiActiveSessionWiki,
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify,
-  learn: SettingsKeys.AiActiveSessionLearn
+  learn: SettingsKeys.AiActiveSessionLearn,
+  prophet: SettingsKeys.AiActiveSessionProphet
 }
 
 /** 画像提炼协议标记（主进程 PROFILE_SUGGEST_INSTRUCTION 约定）：<<<PROFILE_SUGGEST:类别|内容>>> */

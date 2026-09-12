@@ -21,12 +21,13 @@ const TABS: { key: string; label: string }[] = [
   { key: 'ledger', label: '记账本' }
 ]
 
-/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；记账本三来源同组；辩真并入万象库块） */
+/** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；记账本三来源同组；辩真并入万象库块；预言家/十二问题并入致知己块） */
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
   if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   if (source === 'verify') return 'wiki'
+  if (source === 'prophet' || source === 'twelve_question') return 'zhijiji'
   return source
 }
 
@@ -45,6 +46,10 @@ function backToOf(source: RecycleRow['source']): string {
       return '万象库·辩真历史记录'
     case 'zhijiji':
       return '致知己主列表'
+    case 'prophet':
+      return '致知己·预言家列表'
+    case 'twelve_question':
+      return '致知己·十二问题列表'
     case 'reasoning_soup':
       return '推理角汤库'
     case 'drafts':
@@ -75,6 +80,8 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'ledger_account') return '账户 · '
   if (source === 'ledger_category') return '分类 · '
   if (source === 'verify') return '辩真 · '
+  if (source === 'prophet') return '预言 · '
+  if (source === 'twelve_question') return '十二问题 · '
   return ''
 }
 
@@ -94,6 +101,8 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'wiki') return `${p.term ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'inspirations') return String(p.title ?? '')
     if (row.source === 'zhijiji') return String(p.title ?? '')
+    if (row.source === 'prophet') return String(p.claim ?? '')
+    if (row.source === 'twelve_question') return String(p.title ?? '')
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
     if (row.source === 'drafts') return String(p.title ?? '')

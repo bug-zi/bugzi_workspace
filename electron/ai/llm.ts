@@ -7,7 +7,7 @@ import { getDb, nowIso } from '../db/db'
 import { getJsonSetting, getSetting } from '../db/settings'
 import type { LlmConfig } from '../../src/shared/types'
 import { SettingsKeys } from '../../src/shared/types'
-import { ensureNotCancelled } from './jobs'
+import { ensureNotCancelled, findJobIdBySignal } from './jobs'
 
 export class LlmNotConfiguredError extends Error {
   constructor() {
@@ -27,8 +27,12 @@ export function getDefaultLlm(): LlmConfig {
 
 // ---------- 模型池溢出路由（260910 设计 §1） ----------
 
-/** 在途调用登记：key = 自增序号；value 含路由计数（按 configId）与活动指示（scene/配置名）所需字段 */
-const activeCalls = new Map<number, { scene: string; configId: string; configName: string }>()
+/** 在途调用登记：key = 自增序号；value 含路由计数（按 configId）与活动指示（scene/配置名/起始时刻/
+ *  signal 反查 jobId 供面板取消）所需字段 */
+const activeCalls = new Map<
+  number,
+  { scene: string; configId: string; configName: string; signal?: AbortSignal; startedAt: number }
+>()
 let callSeq = 0
 
 function countInflight(configId: string): number {
@@ -37,9 +41,16 @@ function countInflight(configId: string): number {
   return n
 }
 
-/** 在途快照广播（活动指示，设计 §5）：调用起止各发一次，payload 只含 scene 与配置名 */
+/** 在途快照广播（活动指示，设计 §5；260912 AI 面板扩展）：调用起止各发一次，
+ *  payload 含 scene/配置名/起始时刻/jobId（无 signal 或未包 job 的调用 jobId 为 null = 面板不可取消） */
 function broadcastActivity(): void {
-  const items = [...activeCalls.values()].map((v) => ({ scene: v.scene, configName: v.configName }))
+  const items = [...activeCalls.entries()].map(([seq, v]) => ({
+    seq,
+    scene: v.scene,
+    configName: v.configName,
+    startedAt: v.startedAt,
+    jobId: v.signal ? findJobIdBySignal(v.signal) : null
+  }))
   BrowserWindow.getAllWindows()[0]?.webContents.send('llm:activity', { items })
 }
 
@@ -142,7 +153,13 @@ export async function chatCompletion(opts: ChatOptions): Promise<ChatResult> {
   )
   const scene = opts.scene ?? 'other'
   const seq = ++callSeq
-  activeCalls.set(seq, { scene, configId: cfg.id, configName: cfg.name })
+  activeCalls.set(seq, {
+    scene,
+    configId: cfg.id,
+    configName: cfg.name,
+    signal: opts.signal,
+    startedAt: Date.now()
+  })
   broadcastActivity()
   const t0 = Date.now()
   try {

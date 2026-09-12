@@ -26,9 +26,14 @@ import {
   generateLearnTree,
   generateLearnCard,
   expandLearnTopic,
+  generateLearnQuiz,
+  gradeLearnQuiz,
+  generateLearnTask,
+  reviewLearnTask,
   generateInspirations,
   refineInspiration,
   runVerification,
+  runProphetAnalysis,
   isLlmConfigured,
   profileDigest,
   compactAiSession,
@@ -109,7 +114,8 @@ import {
 } from './services/ledger'
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow } from '../src/shared/types'
+import { refreshTrayMenu } from './services/tray'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -135,6 +141,14 @@ export function registerIpc(): void {
     setSetting(key, value)
     // 定时设置变更 → 重排格言任务
     if (key === SettingsKeys.MottoSchedule) scheduleMottoTask()
+    return true
+  })
+
+  // ---------- app（开机自启） ----------
+  ipcMain.handle('app:setLaunchOnBoot', (_e, on: boolean) => {
+    setSetting(SettingsKeys.LaunchOnBoot, on ? '1' : '0')
+    app.setLoginItemSettings({ openAtLogin: on })
+    refreshTrayMenu()
     return true
   })
 
@@ -783,6 +797,16 @@ export function registerIpc(): void {
       .prepare('SELECT COUNT(*) AS c FROM learn_nodes WHERE parent_id = ? AND level = 2')
       .get(id) as { c: number }
     if (count.c > 0) throw new Error('TOPIC_NOT_EMPTY')
+    // 级联彻底删该主题实战任务与三份 md（升级设计 §三：任务不入回收站）
+    const tasks = d
+      .prepare('SELECT task_md, homework_md, review_md FROM learn_tasks WHERE topic_id = ?')
+      .all(id) as { task_md: string; homework_md: string | null; review_md: string | null }[]
+    for (const t of tasks) {
+      mdDelete(t.task_md)
+      mdDelete(t.homework_md)
+      mdDelete(t.review_md)
+    }
+    d.prepare('DELETE FROM learn_tasks WHERE topic_id = ?').run(id)
     d.prepare('DELETE FROM learn_nodes WHERE id = ?').run(id)
     return true
   })
@@ -883,6 +907,203 @@ export function registerIpc(): void {
       }
     }
     return d.prepare(`${learnCardSql} AND n.id = ?`).get(picked.id)
+  })
+  // ---------- 学习库 v2.0：每日小测（升级设计 §二；一天一卷，作答实时存库，检验不惩罚） ----------
+  type LearnQuizDbRow = {
+    date: string
+    node_ids: string
+    questions: string
+    answers: string
+    status: string
+    created_at: string
+    graded_at: string | null
+  }
+  /** DB 行 → 渲染层视图：联节点标题；answering 态隐去答案与解析（防抄答案） */
+  const quizViewOf = (row: LearnQuizDbRow): LearnQuizView => {
+    const questions = JSON.parse(row.questions) as LearnQuizQuestion[]
+    const titled = questions.map((q) => {
+      const r = getDb().prepare('SELECT title FROM learn_nodes WHERE id = ?').get(q.nodeId) as
+        | { title: string }
+        | undefined
+      return { ...q, nodeTitle: r?.title ?? '' }
+    })
+    return {
+      date: row.date,
+      status: row.status as LearnQuizView['status'],
+      questions:
+        row.status === 'answering'
+          ? titled.map((q) => ({ ...q, answerIndex: undefined, acceptable: undefined, answer: '', analysis: '' }))
+          : titled,
+      answers: JSON.parse(row.answers) as LearnQuizAnswer[]
+    }
+  }
+  /** blank 归一化：去空格 + 全角转半角 + 小写（宽松比对，命中任一可接受答案即对） */
+  const normBlank = (s: string): string =>
+    String(s)
+      .trim()
+      .toLowerCase()
+      .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+      .replace(/\s+/g, '')
+  const quizRowOfToday = (): LearnQuizDbRow | undefined =>
+    getDb().prepare('SELECT * FROM learn_quiz WHERE date = ?').get(localDateStr()) as
+      | LearnQuizDbRow
+      | undefined
+  ipcMain.handle('learn:quizGet', () => {
+    const row = quizRowOfToday()
+    return row ? quizViewOf(row) : null
+  })
+  ipcMain.handle('learn:quizCreate', async (_e, jobId: string, force?: boolean) => {
+    const d = getDb()
+    const today = localDateStr()
+    const has = quizRowOfToday()
+    if (has && !force) return quizViewOf(has) // 一天一卷幂等：重复点击直接返回既有卷；force=true 换一张（覆盖旧卷）
+    const daily = d.prepare('SELECT new_ids FROM learn_daily WHERE date = ?').get(today) as
+      | { new_ids: string }
+      | undefined
+    const newIds = daily ? (JSON.parse(daily.new_ids) as number[]) : []
+    if (newIds.length === 0) throw new Error('今日还没有可测的卡：先在「今日新学」学会至少 2 张')
+    const learned = d
+      .prepare(
+        `SELECT id FROM learn_nodes WHERE state = 'learned' AND deleted_at IS NULL
+         AND id IN (${newIds.map(() => '?').join(',')})`
+      )
+      .all(...newIds) as { id: number }[]
+    if (learned.length < 2) throw new Error('今日已学会的卡不足 2 张，先学习再小测')
+    const ac = beginJob(jobId)
+    try {
+      const questions = await generateLearnQuiz(learned.map((r) => r.id), ac.signal)
+      d.prepare('DELETE FROM learn_quiz WHERE date = ?').run(today)
+      d.prepare(
+        'INSERT INTO learn_quiz (date, node_ids, questions, answers, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(today, JSON.stringify(learned.map((r) => r.id)), JSON.stringify(questions), '[]', 'answering', nowIso())
+    } finally {
+      endJob(jobId)
+    }
+    return quizViewOf(quizRowOfToday() as LearnQuizDbRow)
+  })
+  ipcMain.handle('learn:quizAnswer', (_e, qIndex: number, answer: string) => {
+    const row = quizRowOfToday()
+    if (!row || row.status !== 'answering') throw new Error('NO_QUIZ')
+    const questions = JSON.parse(row.questions) as LearnQuizQuestion[]
+    const q = questions[qIndex]
+    if (!q) throw new Error('BAD_INDEX')
+    let correct: boolean | null = null
+    if (q.type === 'choice') correct = q.answerIndex === Number(answer)
+    else if (q.type === 'blank')
+      correct = (q.acceptable ?? []).some((a) => normBlank(a) === normBlank(answer))
+    const answers = JSON.parse(row.answers) as LearnQuizAnswer[]
+    const next = answers.filter((a) => a.qIndex !== qIndex)
+    next.push({ qIndex, answer, correct })
+    getDb().prepare('UPDATE learn_quiz SET answers = ? WHERE date = ?').run(JSON.stringify(next), localDateStr())
+    return correct
+  })
+  ipcMain.handle('learn:quizSubmit', async (_e, jobId: string) => {
+    const row = quizRowOfToday()
+    if (!row || row.status !== 'answering') throw new Error('NO_QUIZ')
+    const questions = JSON.parse(row.questions) as LearnQuizQuestion[]
+    const answers = JSON.parse(row.answers) as LearnQuizAnswer[]
+    const missing = questions.length - answers.length
+    if (missing > 0) throw new Error(`还有 ${missing} 题未作答`)
+    const shorts = questions
+      .map((q, i) => ({ q, i }))
+      .filter(({ q, i }) => q.type === 'short' && answers.some((a) => a.qIndex === i))
+    if (shorts.length > 0) {
+      const ac = beginJob(jobId)
+      try {
+        const graded = await gradeLearnQuiz(
+          shorts.map(({ q, i }) => ({
+            qIndex: i,
+            question: q.question,
+            reference: q.answer,
+            userAnswer: answers.find((a) => a.qIndex === i)?.answer ?? ''
+          })),
+          ac.signal
+        )
+        for (const g of graded) {
+          const a = answers.find((x) => x.qIndex === g.qIndex)
+          if (a) {
+            a.correct = g.correct
+            a.aiComment = g.comment
+          }
+        }
+      } finally {
+        endJob(jobId)
+      }
+    }
+    const correct = answers.filter((a) => a.correct === true).length
+    getDb()
+      .prepare('UPDATE learn_quiz SET answers = ?, status = ?, graded_at = ? WHERE date = ?')
+      .run(JSON.stringify(answers), 'graded', nowIso(), localDateStr())
+    return { correct, total: questions.length }
+  })
+  ipcMain.handle('learn:quizRetry', () => {
+    getDb()
+      .prepare("UPDATE learn_quiz SET answers = '[]', status = 'answering', graded_at = NULL WHERE date = ?")
+      .run(localDateStr())
+    return quizViewOf(quizRowOfToday() as LearnQuizDbRow)
+  })
+  // ---------- 学习库 v2.0：实战任务（升级设计 §三；30 分钟小任务，不入回收站） ----------
+  const learnTaskSql = 'SELECT t.*, n.title AS topic_title FROM learn_tasks t JOIN learn_nodes n ON t.topic_id = n.id'
+  const taskRowOf = (id: number): LearnTaskRow =>
+    getDb().prepare(`${learnTaskSql} WHERE t.id = ?`).get(id) as unknown as LearnTaskRow
+  ipcMain.handle('learn:taskList', (_e, topicId: number) =>
+    getDb()
+      .prepare(`${learnTaskSql} WHERE t.topic_id = ? ORDER BY t.id DESC`)
+      .all(topicId) as unknown as LearnTaskRow[]
+  )
+  ipcMain.handle('learn:taskGenerate', async (_e, jobId: string, topicId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      const { domainId, taskMd } = await generateLearnTask(topicId, ac.signal)
+      const r = getDb()
+        .prepare(
+          "INSERT INTO learn_tasks (topic_id, domain_id, status, task_md, created_at) VALUES (?, ?, 'todo', '', ?)"
+        )
+        .run(topicId, domainId, nowIso())
+      const id = Number(r.lastInsertRowid)
+      const path = `md/learn/task/${id}-task.md`
+      mdWrite(path, taskMd)
+      getDb().prepare('UPDATE learn_tasks SET task_md = ? WHERE id = ?').run(path, id)
+    } finally {
+      endJob(jobId)
+    }
+    return taskRowOf(Number((getDb().prepare('SELECT MAX(id) AS m FROM learn_tasks').get() as { m: number }).m))
+  })
+  ipcMain.handle('learn:taskSubmit', async (_e, jobId: string, taskId: number, homework: string) => {
+    const d = getDb()
+    const t = d.prepare('SELECT * FROM learn_tasks WHERE id = ?').get(taskId) as
+      | { topic_id: number; status: string; task_md: string; homework_md: string | null }
+      | undefined
+    if (!t) throw new Error('NOT_FOUND')
+    if (t.status === 'reviewed') throw new Error('TASK_REVIEWED')
+    if (!homework.trim()) throw new Error('作业内容为空')
+    const ac = beginJob(jobId)
+    try {
+      const homeworkPath = t.homework_md ?? `md/learn/task/${taskId}-homework.md`
+      mdWrite(homeworkPath, homework)
+      const taskMd = mdRead(t.task_md)
+      const { score, reviewMd } = await reviewLearnTask(t.topic_id, taskMd, homework, ac.signal)
+      const reviewPath = `md/learn/task/${taskId}-review.md`
+      mdWrite(reviewPath, reviewMd)
+      d.prepare(
+        "UPDATE learn_tasks SET status = 'reviewed', score = ?, homework_md = ?, review_md = ?, submitted_at = ? WHERE id = ?"
+      ).run(score, homeworkPath, reviewPath, nowIso(), taskId)
+    } finally {
+      endJob(jobId)
+    }
+    return taskRowOf(taskId)
+  })
+  ipcMain.handle('learn:taskDelete', (_e, taskId: number) => {
+    const d = getDb()
+    const t = d.prepare('SELECT task_md, homework_md, review_md FROM learn_tasks WHERE id = ?').get(taskId) as
+      | { task_md: string; homework_md: string | null; review_md: string | null }
+      | undefined
+    if (!t) throw new Error('NOT_FOUND')
+    mdDelete(t.task_md)
+    mdDelete(t.homework_md)
+    mdDelete(t.review_md)
+    d.prepare('DELETE FROM learn_tasks WHERE id = ?').run(taskId)
+    return true
   })
   ipcMain.handle('learn:mark', (_e, id: number, action: 'learn' | 'remember' | 'forget') => {
     const d = getDb()
@@ -1564,6 +1785,109 @@ export function registerIpc(): void {
   })
   ipcMain.handle('zhijiji:discard', (_e, id: number) => {
     discardToRecycle('zhijiji', id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+
+  // ---------- 致知己·预言家（DB v36，2026-09-12 设计 §三） ----------
+  ipcMain.handle('prophet:list', () =>
+    getDb().prepare('SELECT * FROM prophet_records WHERE deleted_at IS NULL ORDER BY updated_at DESC').all()
+  )
+  ipcMain.handle('prophet:create', (_e, claim: string, note: string) => {
+    const c = claim.trim()
+    if (!c) throw new Error('CLAIM_REQUIRED')
+    const now = nowIso()
+    const r = getDb()
+      .prepare(
+        "INSERT INTO prophet_records (claim, note, status, judgment_note, created_at, updated_at) VALUES (?, ?, 'open', '', ?, ?)"
+      )
+      .run(c, note.trim(), now, now)
+    return { id: Number(r.lastInsertRowid) }
+  })
+  ipcMain.handle('prophet:analyze', async (_e, jobId: string, id: number) => {
+    const row = getDb().prepare('SELECT claim, note FROM prophet_records WHERE id = ?').get(id) as
+      | { claim: string; note: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    const ac = beginJob(jobId)
+    try {
+      return await runProphetAnalysis(id, row.claim, row.note, (msg) => pushAiSystemMessage(msg, 'prophet'), ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('prophet:judge', (_e, id: number, judgment: string, judgmentNote: string) => {
+    if (judgment !== 'reasonable' && judgment !== 'unreasonable' && judgment !== 'uncertain') {
+      throw new Error('BAD_JUDGMENT')
+    }
+    const now = nowIso()
+    getDb()
+      .prepare(
+        "UPDATE prophet_records SET status = 'judged', judgment = ?, judgment_note = ?, judged_at = ?, updated_at = ? WHERE id = ?"
+      )
+      .run(judgment, judgmentNote.trim(), now, now, id)
+    return true
+  })
+  ipcMain.handle('prophet:discard', (_e, id: number) => {
+    discardToRecycle('prophet', id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
+
+  // ---------- 致知己·十二问题（DB v36，2026-09-12 设计 §四） ----------
+  ipcMain.handle('twelve:list', () =>
+    getDb()
+      .prepare(
+        `SELECT q.id, q.title, q.ord, q.created_at, q.updated_at,
+          (SELECT COUNT(*) FROM twelve_thoughts t WHERE t.question_id = q.id) AS thought_count,
+          (SELECT MAX(t.created_at) FROM twelve_thoughts t WHERE t.question_id = q.id) AS last_thought_at
+        FROM twelve_questions q WHERE q.deleted_at IS NULL ORDER BY q.ord ASC`
+      )
+      .all()
+  )
+  ipcMain.handle('twelve:createQuestion', (_e, title: string) => {
+    const t = title.trim()
+    if (!t) throw new Error('TITLE_REQUIRED')
+    const d = getDb()
+    const n = d.prepare('SELECT COUNT(*) AS c FROM twelve_questions WHERE deleted_at IS NULL').get() as {
+      c: number
+    }
+    if (n.c >= 12) throw new Error('TWELVE_FULL')
+    const now = nowIso()
+    const m = d.prepare('SELECT COALESCE(MAX(ord), 0) AS m FROM twelve_questions').get() as { m: number }
+    const r = d
+      .prepare('INSERT INTO twelve_questions (title, ord, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .run(t, m.m + 1, now, now)
+    return { id: Number(r.lastInsertRowid) }
+  })
+  ipcMain.handle('twelve:renameQuestion', (_e, id: number, title: string) => {
+    const t = title.trim()
+    if (!t) return false
+    getDb().prepare('UPDATE twelve_questions SET title = ?, updated_at = ? WHERE id = ?').run(t, nowIso(), id)
+    return true
+  })
+  ipcMain.handle('twelve:thoughts', (_e, questionId: number) =>
+    getDb()
+      .prepare('SELECT * FROM twelve_thoughts WHERE question_id = ? ORDER BY created_at DESC, id DESC')
+      .all(questionId)
+  )
+  ipcMain.handle('twelve:addThought', (_e, questionId: number, content: string) => {
+    const c = content.trim()
+    if (!c) throw new Error('CONTENT_REQUIRED')
+    const d = getDb()
+    const now = nowIso()
+    const r = d
+      .prepare('INSERT INTO twelve_thoughts (question_id, content, created_at) VALUES (?, ?, ?)')
+      .run(questionId, c, now)
+    d.prepare('UPDATE twelve_questions SET updated_at = ? WHERE id = ?').run(now, questionId)
+    return { id: Number(r.lastInsertRowid), question_id: questionId, content: c, created_at: now }
+  })
+  ipcMain.handle('twelve:deleteThought', (_e, id: number) => {
+    getDb().prepare('DELETE FROM twelve_thoughts WHERE id = ?').run(id)
+    return true
+  })
+  ipcMain.handle('twelve:discardQuestion', (_e, id: number) => {
+    discardToRecycle('twelve_question', id)
     win()?.webContents.send('recycle:changed')
     return true
   })

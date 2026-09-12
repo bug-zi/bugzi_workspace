@@ -11,6 +11,7 @@ import { getDb, nowIso } from '../db/db'
 import { getSetting, setSetting } from '../db/settings'
 import { SettingsKeys } from '../../src/shared/types'
 import { generateWikiCard, isLlmConfigured } from '../ai/services'
+import { runPumpJob } from '../ai/jobs'
 
 /** 每板块后库存量目标（需求定稿：每板块 3 张，存量 < 3 立刻补到 3） */
 export const WIKI_POOL_TARGET = 3
@@ -79,7 +80,7 @@ async function pumpSection(sectionId: number, sectionName: string): Promise<void
         console.warn(`[wikiStock] 板块「${sectionName}」已删除，中止其补充`)
         return
       }
-      const r = await generateWikiCard(null, sectionId, undefined, 'pool')
+      const r = await runPumpJob('wiki', (sig) => generateWikiCard(null, sectionId, sig, 'pool'))
       notifyWikiStockChanged()
       console.info(
         `[wikiStock] 后库 +1「${r.term}」（${sectionName}，现 ${poolCountOf(sectionId)}）`
@@ -140,7 +141,7 @@ export async function ensureDailyLearn(): Promise<void> {
     let inserted = 0
     for (const s of order) {
       try {
-        const r = await generateWikiCard(null, s.id, undefined, 'learn')
+        const r = await runPumpJob('wiki', (sig) => generateWikiCard(null, s.id, sig, 'learn'))
         inserted++
         notifyWikiStockChanged()
         console.info(`[wikiStock] 待学习 +1「${r.term}」（${s.name}）`)

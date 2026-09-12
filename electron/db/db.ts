@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'canvas', 'books', 'covers', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'canvas', 'books', 'covers', 'bg']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -877,6 +877,72 @@ function migrate(): void {
     // （清理只删已读+未收藏；未读与收藏都保留）。无新表、无索引（数据量小）。
     d.exec(`ALTER TABLE articles ADD COLUMN favorited_at TEXT`)
     d.exec('PRAGMA user_version = 34')
+  }
+
+  if (version < 35) {
+    // v35：学习库 v2.0 三件套（2026-09-12-学习库v2.0升级-design.md §五；设计原写 v34，撞车顺延为 v35）——
+    // 每日小测卷（date 主键一天一卷，questions/answers 存 JSON，answering|graded）+
+    // 主题实战任务（todo|submitted|reviewed，任务/作业/点评三份 md 在 md/learn/task/）。
+    // 任务不入回收站（工具性产物），删主题级联彻底删（ipc learn:topicDelete 内处理）。
+    d.exec(`CREATE TABLE learn_quiz (
+      date TEXT PRIMARY KEY,
+      node_ids TEXT NOT NULL,
+      questions TEXT NOT NULL,
+      answers TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'answering',
+      created_at TEXT NOT NULL,
+      graded_at TEXT
+    )`)
+    d.exec(`CREATE TABLE learn_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic_id INTEGER NOT NULL,
+      domain_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'todo',
+      score INTEGER,
+      task_md TEXT NOT NULL,
+      homework_md TEXT,
+      review_md TEXT,
+      created_at TEXT NOT NULL,
+      submitted_at TEXT
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_learn_tasks_topic ON learn_tasks(topic_id)')
+    d.exec('PRAGMA user_version = 35')
+  }
+
+  if (version < 36) {
+    // v36：致知己双 tab（2026-09-12-预言家与十二问题-design.md §五）——
+    // prophet_records：预言条目（判断用户下：reasonable|unreasonable|uncertain，可改判覆盖）；
+    // twelve_questions：费曼式自定义 12 题（应用层限 12，服务端兜底）；
+    // twelve_thoughts：想法碎片（纯增删查，无软删——删题进回收站时想法随题走，单条想法直接彻底删）
+    d.exec(`CREATE TABLE prophet_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      claim TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      judgment TEXT,
+      judgment_note TEXT NOT NULL DEFAULT '',
+      judged_at TEXT,
+      analysis_md_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+    d.exec(`CREATE TABLE twelve_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      ord INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+    d.exec(`CREATE TABLE twelve_thoughts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      question_id INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_twelve_thoughts_q ON twelve_thoughts(question_id)')
+    d.exec('PRAGMA user_version = 36')
   }
 }
 

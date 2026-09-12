@@ -2,7 +2,7 @@
 // 弹窗右侧内嵌追问栏（可收起/拖宽/多会话，与全局边栏同频道同数据），AI 只追问不代笔
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { AiMessageRow, AiSessionRow, ZhijijiQuestion, ZhijijiVersion } from '../../renderer/api'
+import type { AiChannel, AiMessageRow, AiSessionRow, ZhijijiQuestion, ZhijijiVersion } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -10,9 +10,15 @@ import MdView from '../../components/MdView'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { SettingsKeys } from '../../shared/types'
+import ProphetPanel from './ProphetPanel'
+import TwelvePanel from './TwelvePanel'
 
 export interface ZhijijiModuleProps {
   onNavigateToProfile: () => void
+  /** 模块动作请求展开右栏（预言家切频道 / 十二问题问 AI 追问频道）；opts.auto 时切频道后自动发送 */
+  onOpenAi: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
+  /** 通知 App 层 AiSidebar 重载（预言家分析过程消息推送后） */
+  bumpAi: () => void
 }
 
 /** 标签输入解析：逗号（,，）或顿号（、）分隔多个 */
@@ -468,6 +474,15 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   // 删除确认 / LLM 未配置
   const [discardTarget, setDiscardTarget] = useState<ZhijijiQuestion | null>(null)
   const [needConfig, setNeedConfig] = useState(false)
+  // 三 tab（2026-09-12 设计 §二）：沉淀 = 原问题+版本区；tab 不持久化（万象库/推理角惯例）
+  const [tab, setTab] = useState<'core' | 'prophet' | 'twelve'>('core')
+  const switchTab = (t: 'core' | 'prophet' | 'twelve'): void => {
+    setTab(t)
+    if (t !== 'core') {
+      setViewQ(null)
+      setAdding(false)
+    }
+  }
 
   const curVersion = versions.find((v) => v.id === curVerId) ?? null
 
@@ -601,14 +616,31 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         <span className="material-symbols-outlined">self_improvement</span>
         <span className="module-title">致知己</span>
         <span className="module-sub">把属于自己的答案沉淀成版本</span>
-        <div className="zone-actions" style={{ marginLeft: 'auto' }}>
-          <button className="btn" onClick={() => setAdding(true)}>
-            <span className="material-symbols-outlined">add</span>
-            新问题
-          </button>
-        </div>
+        {tab === 'core' && (
+          <div className="zone-actions" style={{ marginLeft: 'auto' }}>
+            <button className="btn" onClick={() => setAdding(true)}>
+              <span className="material-symbols-outlined">add</span>
+              新问题
+            </button>
+          </div>
+        )}
       </div>
 
+      {/* 三 tab：沉淀 ｜ 预言家 ｜ 十二问题（recycle-tabs 同款样式，万象库百科|辩真一致） */}
+      <div className="recycle-tabs">
+        <button className={`recycle-tab${tab === 'core' ? ' active' : ''}`} onClick={() => switchTab('core')}>
+          沉淀
+        </button>
+        <button className={`recycle-tab${tab === 'prophet' ? ' active' : ''}`} onClick={() => switchTab('prophet')}>
+          预言家
+        </button>
+        <button className={`recycle-tab${tab === 'twelve' ? ' active' : ''}`} onClick={() => switchTab('twelve')}>
+          十二问题
+        </button>
+      </div>
+
+      {tab === 'core' && (
+        <>
       <section className="zone">
         <div className="zone-body">
           {questions.length === 0 && (
@@ -760,6 +792,19 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         }}
         onCancel={() => setNeedConfig(false)}
       />
+        </>
+      )}
+
+      {tab === 'prophet' && (
+        <ProphetPanel
+          onOpenAi={props.onOpenAi}
+          bumpAi={props.bumpAi}
+          onNavigateToProfile={props.onNavigateToProfile}
+        />
+      )}
+      {tab === 'twelve' && (
+        <TwelvePanel onOpenAi={props.onOpenAi} onNavigateToProfile={props.onNavigateToProfile} />
+      )}
     </div>
   )
 }

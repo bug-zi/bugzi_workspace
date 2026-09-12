@@ -243,7 +243,11 @@ function Shell() {
               )}
               {m.id === 'inspirations' && <InspirationsModule onOpenAi={openAiWith} />}
               {m.id === 'zhijiji' && (
-                <ZhijijiModule onNavigateToProfile={() => activateModule('profile')} />
+                <ZhijijiModule
+                  onNavigateToProfile={() => activateModule('profile')}
+                  onOpenAi={openAiWith}
+                  bumpAi={() => setAiVersion((v) => v + 1)}
+                />
               )}
               {m.id === 'reasoning' && <ReasoningModule />}
               {m.id === 'wenbi' && (
