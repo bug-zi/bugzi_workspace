@@ -28,16 +28,16 @@ import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项）
+// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'learn', label: '学习库', icon: 'school' },
   { id: 'wiki', label: '万象库', icon: 'public' },
-  { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
-  { id: 'favorites', label: '收藏夹', icon: 'bookmark' },
-  { id: 'feed', label: '信息源', icon: 'rss_feed' },
-  { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
   { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
+  { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
+  { id: 'feed', label: '信息源', icon: 'rss_feed' },
+  { id: 'favorites', label: '收藏夹', icon: 'bookmark' },
+  { id: 'bookshelf', label: '藏书架', icon: 'auto_stories' },
   { id: 'reasoning', label: '推理角', icon: 'psychology' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet' },
   { id: 'recycle', label: '回收站', icon: 'delete' },
@@ -74,9 +74,9 @@ export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone, settings } = useAppSettings()
   const { toast } = useToast()
-  const [module, setModule] = useState<MainView>('wiki')
+  const [module, setModule] = useState<MainView>('learn')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
-  const moduleRef = useRef<MainView>('wiki')
+  const moduleRef = useRef<MainView>('learn')
   useEffect(() => {
     moduleRef.current = module
   }, [module])
