@@ -1,4 +1,4 @@
-// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除
+// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：'zangyue'
 export type ModuleId =
   | 'learn'
   | 'wiki'
@@ -7,8 +7,7 @@ export type ModuleId =
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
-  | 'bookshelf'
-  | 'favorites'
+  | 'zangyue'
   | 'feed'
   | 'ledger'
   | 'recycle'

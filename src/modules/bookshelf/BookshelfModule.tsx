@@ -71,7 +71,12 @@ function fmtNow(): string {
   return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`
 }
 
-export default function BookshelfModule() {
+export interface BookshelfModuleProps {
+  /** 阅读态上报（藏阅阁壳据此隐藏头部与页签条；不传=行为不变） */
+  onReadingChange?: (reading: boolean) => void
+}
+
+export default function BookshelfModule(props: BookshelfModuleProps) {
   const { toast } = useToast()
   const { theme, settings } = useAppSettings()
   const [items, setItems] = useState<BooksRecord[]>([])
@@ -162,7 +167,8 @@ export default function BookshelfModule() {
   useEffect(() => {
     void load()
   }, [load])
-  useModuleActivated('bookshelf', () => {
+  // 260912 收藏夹+藏书架合并藏阅阁：激活 id 随壳（zangyue）
+  useModuleActivated('zangyue', () => {
     void load()
     void refreshStats()
   })
@@ -180,6 +186,14 @@ export default function BookshelfModule() {
   }, [refreshStats])
   // 阅读计时（三条件口径 + 30 秒 flush；书架 v2.0 §五）
   useReadingTimer(reading != null, reading?.id ?? null, readerPageRef)
+
+  // 阅读态上报（ref 转发防 inline prop 身份变化重触发；进/出阅读器各一次）
+  const readingActive = reading != null
+  const onReadingChangeRef = useRef(props.onReadingChange)
+  onReadingChangeRef.current = props.onReadingChange
+  useEffect(() => {
+    onReadingChangeRef.current?.(readingActive)
+  }, [readingActive])
 
   /** 导入：对话框 → 复制解析 → duplicate 弹确认可 force 重导 */
   const doImport = async (paths?: string[], force?: boolean): Promise<void> => {

@@ -1,0 +1,11 @@
+/* ===== 藏阅阁（收藏夹+藏书架合并壳，260912）：定高 flex 列 =====
+   module-page 已是 flex column（App.css 后置打包胜出同特异度），此处只补它没有的 height：
+   36 = main-area 上下 padding（18×2，fav-page/bk-reader-page 同款口径）。
+   头部与页签条不参与伸展；两面板经 display:contents 直接成为 flex 项。 */
+.zy-page {
+  height: calc(100vh - 36px);
+}
+.zy-page > .module-header,
+.zy-page > .recycle-tabs {
+  flex-shrink: 0;
+}

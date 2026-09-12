@@ -1,6 +1,6 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
-// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除）
+// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：两 id 移除，并为 'zangyue'）
 export type ModuleId =
   | 'learn'
   | 'wiki'
@@ -8,8 +8,7 @@ export type ModuleId =
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
-  | 'bookshelf'
-  | 'favorites'
+  | 'zangyue'
   | 'feed'
   | 'ledger'
   | 'recycle'

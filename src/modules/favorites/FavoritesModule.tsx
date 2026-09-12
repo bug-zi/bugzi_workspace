@@ -62,7 +62,8 @@ export default function FavoritesModule() {
   useEffect(() => {
     void load()
   }, [load])
-  useModuleActivated('favorites', () => void load())
+  // 260912 收藏夹+藏书架合并藏阅阁：激活 id 随壳（zangyue）
+  useModuleActivated('zangyue', () => void load())
 
   // 一键建大类输入框打开时，点击外部关闭
   useEffect(() => {
