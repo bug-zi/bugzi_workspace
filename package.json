@@ -1,6 +1,6 @@
 {
   "name": "bugzi_workspace",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "bug子的workspace —— 生活化个人专属工作台",
   "main": "out/main/main.js",
   "author": "bugzi",
