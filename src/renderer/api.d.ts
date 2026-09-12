@@ -501,6 +501,15 @@ export interface VerifyRecord {
   deleted_at: string | null
 }
 
+export interface QaRecord {
+  id: number
+  question: string
+  answer: string
+  md_path: string
+  created_at: string
+  deleted_at: string | null
+}
+
 export interface RecycleRow {
   id: number
   source:
@@ -521,19 +530,33 @@ export interface RecycleRow {
     | 'learn'
     | 'prophet'
     | 'twelve_question'
+    | 'qa'
   item_id: number
   payload: string
   created_at: string
 }
 
-/** 致知己问题（DB v9；列表行聚合版本数） */
+/** 致知己问题（DB v9；列表行聚合版本数；DB v38 起带分级三列） */
 export interface ZhijijiQuestion {
   id: number
   title: string
   tags: string[]
+  /** 来源（260912 分级）：manual 手动 / ai AI 生成 */
+  origin: 'manual' | 'ai'
+  /** 星级 1-5（四维标准 AI 初评，用户可改；NULL = 未评） */
+  stars: number | null
+  /** AI 评星评语（一句，悬停可见；手动改星不清除） */
+  star_note: string | null
   version_count: number
   created_at: string
   updated_at: string
+}
+
+/** AI 出题候选（260912：出题带星一体，采纳才入库标 ai） */
+export interface ZhijijiQuestionCandidate {
+  title: string
+  stars: number
+  note: string
 }
 
 /** 预言家判断（用户三选一；可改判覆盖） */
@@ -872,6 +895,16 @@ export interface Api {
     overwriteVersion(versionId: number, content: string): Promise<boolean>
     renameQuestion(id: number, title: string): Promise<boolean>
     discard(id: number): Promise<boolean>
+    /** AI 出题（260912 分级）：5 条候选带星评语，采纳才入库 */
+    suggestQuestions(jobId: string): Promise<ZhijijiQuestionCandidate[]>
+    /** 候选采纳批量入库（origin='ai'，带生成时评星），返回新问题 id 列表 */
+    adoptQuestions(candidates: ZhijijiQuestionCandidate[]): Promise<number[]>
+    /** 单题 AI 评星（仅写 stars IS NULL 行，用户已手改返回 null） */
+    rateQuestion(jobId: string, id: number): Promise<{ stars: number; note: string } | null>
+    /** 存量补评：全部未评星题一次调用批量评完，返回更新行数 */
+    ratePending(jobId: string): Promise<number>
+    /** 手动改星（1-5；null 清除） */
+    setStars(id: number, stars: number | null): Promise<boolean>
   }
   prophet: {
     list(): Promise<ProphetRecord[]>
@@ -1291,6 +1324,10 @@ export interface Api {
     taskSubmit(jobId: string, taskId: number, homework: string): Promise<LearnTaskRow>
     /** 彻底删任务（级联 md，不入回收站） */
     taskDelete(taskId: number): Promise<boolean>
+    /** AI 深挖：四角度生成结果 md（不落库，确认后 digApply 写入）；可取消；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    dig(jobId: string, nodeId: number): Promise<{ content: string }>
+    /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
+    digApply(nodeId: number, content: string): Promise<{ md: string }>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>
@@ -1311,6 +1348,12 @@ export interface Api {
     get(id: number): Promise<VerifyRecord>
     findDuplicate(claim: string): Promise<{ id: number; claim: string; created_at: string } | null>
     run(jobId: string, claim: string): Promise<{ recordId: number; credibility: number }>
+    discard(id: number): Promise<boolean>
+  }
+  qa: {
+    list(): Promise<QaRecord[]>
+    get(id: number): Promise<QaRecord>
+    run(jobId: string, question: string): Promise<{ recordId: number }>
     discard(id: number): Promise<boolean>
   }
   llm: {

@@ -66,6 +66,15 @@
   flex-direction: column;
   gap: 14px;
 }
+/* 模块内嵌套子面板（辩真/问答，keep-alive 包装下作为外层 module-page 的 flex 项）：
+   纵向排版同 module-page，但去掉 max-width/居中——嵌套下 margin:auto 会使 stretch 失效，
+   宽度收缩成 fit-content 挤在中间（260912 问答标签页冒烟发现） */
+.module-subpage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
 .module-header {
   display: flex;
   align-items: center;
@@ -215,6 +224,19 @@
 }
 
 /* 学习库 v2.0：今日小测与实战任务 */
+/* 深挖结果区（260912 深挖入卡）：弹窗内预览，限高内部滚动 */
+.learn-dig-panel {
+  flex-direction: column;
+  align-items: stretch;
+}
+.learn-dig-md {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
 .quiz-question {
   margin-top: 6px;
 }
@@ -463,6 +485,29 @@
 .zj-twelve-thought-time {
   font-size: 0.82em;
   color: var(--color-text-secondary);
+}
+/* 问题分级（260912）：来源标识 + 星级 */
+.zj-origin {
+  font-size: 1em;
+  vertical-align: -3px;
+  margin-right: 4px;
+  opacity: 0.55;
+}
+.zj-origin.ai {
+  color: var(--color-primary);
+  opacity: 1;
+}
+.zj-star {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-primary);
+}
+.zj-star.dim {
+  color: var(--color-text-secondary);
+}
+.zj-star-n {
+  font-size: 0.85em;
 }
 
 /* ===== 个人中心 ===== */

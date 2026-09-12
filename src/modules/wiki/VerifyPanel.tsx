@@ -93,7 +93,7 @@ export default function VerifyPanel(props: VerifyPanelProps) {
   }
 
   return (
-    <div className="module-page">
+    <div className="module-subpage">
       {/* 输入区 */}
       <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <textarea

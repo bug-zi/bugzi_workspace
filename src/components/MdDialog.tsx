@@ -22,9 +22,9 @@ export interface MdDialogProps {
   /** 关闭弹窗（关闭键/遮罩调用；若正处于编辑态会先保存） */
   onClose: () => void
   onChanged?: () => void
-  /** 万象卡片划词能力开关（仅万象库启用） */
+  /** 划词能力（万象卡片高光+问AI；问答弹窗仅问AI——无词条载体） */
   selectionActions?: {
-    onHighlight: (text: string) => void
+    onHighlight?: (text: string) => void
     onAskAi: (text: string) => void
   }
   /** 头部标题可编辑（灵感泉：标题改后列表同步） */
@@ -54,8 +54,10 @@ export interface MdDialogProps {
     onLearn?: () => void
     onRemember?: () => void
     onForget?: () => void
-    /** 深挖按钮（学习库 v2.0 升级 §四）：显示在操作条左侧，点击带卡文发右栏对话 */
+    /** 深挖按钮（学习库 v2.0 升级 §四）：显示在操作条左侧 */
     onDig?: () => void
+    /** 深挖结果面板（优化建议区 260912，仅学习库传入）：渲染在操作条上方，内容由调用方构造 */
+    digPanel?: ReactNode
   }
   /** 致知己版本化扩展（致知己 specs §2）：版本切换条 + 保存即版本 + 让 AI 追问 */
   versioned?: {
@@ -221,10 +223,10 @@ export default function MdDialog(props: MdDialogProps) {
         })
         return b
       }
-      bubble.append(
-        mkBtn('高光', () => selectionActions.onHighlight(text)),
-        mkBtn('问 AI', () => selectionActions.onAskAi(text))
-      )
+      const { onHighlight } = selectionActions
+      const btns = [mkBtn('问 AI', () => selectionActions.onAskAi(text))]
+      if (onHighlight) btns.unshift(mkBtn('高光', () => onHighlight(text)))
+      bubble.append(...btns)
       document.body.appendChild(bubble)
       const bw = 150
       bubble.style.left = `${Math.max(8, rect.left + rect.width / 2 - bw / 2)}px`
@@ -422,11 +424,15 @@ export default function MdDialog(props: MdDialogProps) {
             )}
           </div>
         )}
+        {/* 深挖结果面板（260912 深挖入卡）：生成/预览/写入确认，编辑态隐藏同操作条口径 */}
+        {studyBar && !editing && studyBar.digPanel && (
+          <div className="dialog-footer learn-dig-panel">{studyBar.digPanel}</div>
+        )}
         {/* 学习库操作条（260911 学习库）：学会了进 1/3/7/15 天复习序列；到期卡记住了升档/忘记了重置；done 态只读 */}
         {studyBar && !editing && (
           <div className="dialog-footer">
             {studyBar.onDig && (
-              <button className="btn" onClick={studyBar.onDig} title="AI 多角度深挖本知识点（右栏对话）">
+              <button className="btn" onClick={studyBar.onDig} title="AI 多角度深挖本知识点，确认后写入卡片">
                 <span className="material-symbols-outlined">travel_explore</span>
                 深挖
               </button>

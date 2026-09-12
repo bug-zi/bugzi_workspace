@@ -12,6 +12,7 @@ import type {
 } from '../../renderer/api'
 import type { AiChannel } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
+import MdView from '../../components/MdView'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import LearnQuizZone from './LearnQuizZone'
@@ -363,21 +364,48 @@ export default function LearnModule(props: LearnModuleProps) {
     [props]
   )
 
-  /** 深挖（升级设计 §四）：带卡文一键自动发右栏「学习·问答」频道（App 层 CHANNEL_BY_MODULE 自动映射） */
+  // 深挖（260912 深挖入卡）：弹窗内生成 → 确认写入卡片；不再自动发右栏（右栏追问走手动问 AI）
+  const [dig, setDig] = useState<{ phase: 'loading' | 'done'; content: string; jobId: string | null } | null>(
+    null
+  )
+
   const onDig = useCallback(
     async (c: LearnCardRow) => {
-      let md = ''
-      try {
-        md = await window.api.md.read(`md/learn/${c.id}.md`)
-      } catch {
-        toast('卡片内容读取失败')
+      if (dig?.phase === 'loading') return
+      if (!(await window.api.ai.configured())) {
+        setGoConfig(true)
         return
       }
-      const pre = `请深挖知识点「${c.title}」（领域：${c.domain_name} · 主题：${c.topic_title ?? '（无）'}）。结合下面的卡片内容，从四个角度展开：1）原理再进一层（卡片没讲到的机制细节）；2）常见误解与易错点；3）知识串联（同主题其他知识点与跨主题关联）；4）实际工作中的坑与经验。\n\n<卡片内容>\n${md}\n</卡片内容>`
-      props.onOpenAi(pre, { auto: true })
+      const jobId = crypto.randomUUID()
+      setDig({ phase: 'loading', content: '', jobId })
+      try {
+        const r = await window.api.learn.dig(jobId, c.id)
+        setDig({ phase: 'done', content: r.content, jobId: null })
+      } catch (e) {
+        setDig(null)
+        handleAiError(e)
+      }
     },
-    [props, toast]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dig]
   )
+
+  const cancelDig = (): void => {
+    if (dig?.jobId) void window.api.ai.cancel(dig.jobId)
+    setDig(null)
+  }
+
+  const onDigApply = async (): Promise<void> => {
+    if (!card || dig?.phase !== 'done') return
+    try {
+      await window.api.learn.digApply(card.id, dig.content)
+      toast('已写入卡片')
+      setDig(null)
+      setMdVersion((v) => v + 1) // key 变化触发 MdDialog 重挂重读
+    } catch (e) {
+      toast(`写入失败：${String((e as Error).message).slice(0, 80)}`)
+    }
+  }
 
   const doDiscardNode = async (): Promise<void> => {
     if (!delNodeTarget) return
@@ -791,17 +819,59 @@ export default function LearnModule(props: LearnModuleProps) {
         </div>
       </div>
 
-      {/* 卡片弹窗（划词能力 + 学习操作条；md 路径派生 md/learn/<id>.md） */}
+      {/* 卡片弹窗（划词能力 + 学习操作条；md 路径派生 md/learn/<id>.md；key 带 mdVersion 供深挖写入后重读） */}
       <MdDialog
-        key={card?.id ?? 'none'}
+        key={card ? `${card.id}-${mdVersion}` : 'none'}
         open={card != null}
         title={card?.title ?? ''}
         titleTag={card ? `${card.domain_name} · ${card.topic_title ?? ''}` : undefined}
         filePath={card ? `md/learn/${card.id}.md` : ''}
-        onClose={() => setCard(null)}
+        onClose={() => {
+          setCard(null)
+          setDig(null)
+        }}
         onChanged={() => setMdVersion((v) => v + 1)}
         selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
-        studyBar={card ? { ...studyBarOf(card), onDig: () => void onDig(card) } : undefined}
+        studyBar={
+          card
+            ? {
+                ...studyBarOf(card),
+                onDig: () => void onDig(card),
+                digPanel:
+                  dig == null ? undefined : (
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {dig.phase === 'loading' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className="module-sub">AI 深挖中…</span>
+                          <button className="btn" onClick={cancelDig} title="取消本次生成">
+                            <span className="material-symbols-outlined">stop_circle</span>
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="learn-dig-md">
+                            <MdView md={dig.content} />
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                            <button className="btn" onClick={() => setDig(null)}>
+                              放弃
+                            </button>
+                            <button className="btn" onClick={() => void onDig(card)}>
+                              重新生成
+                            </button>
+                            <button className="btn btn-primary" onClick={() => void onDigApply()}>
+                              <span className="material-symbols-outlined">save</span>
+                              写入卡片
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )
+              }
+            : undefined
+        }
       />
 
       {taskTopic && <LearnTaskDialog topic={taskTopic} onClose={() => setTaskTopic(null)} />}

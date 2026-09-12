@@ -263,6 +263,13 @@ const api = {
       ipcRenderer.invoke('verify:run', jobId, claim),
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'verify_records', id)
   },
+  qa: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('qa:list'),
+    get: (id: number): Promise<unknown> => ipcRenderer.invoke('qa:get', id),
+    run: (jobId: string, question: string): Promise<{ recordId: number }> =>
+      ipcRenderer.invoke('qa:run', jobId, question),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'qa_records', id)
+  },
   zhijiji: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('zhijiji:list'),
     /** 新问题：默认建空白 v1；aiInit=true 时 LLM 先生成初始参考答案（v0），失败抛错不创建 */
@@ -282,7 +289,21 @@ const api = {
       ipcRenderer.invoke('zhijiji:overwriteVersion', versionId, content),
     renameQuestion: (id: number, title: string): Promise<boolean> =>
       ipcRenderer.invoke('zhijiji:renameQuestion', id, title),
-    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id)
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'zhijiji_questions', id),
+    /** AI 出题（260912 分级）：5 条候选带星评语，采纳才入库 */
+    suggestQuestions: (jobId: string): Promise<{ title: string; stars: number; note: string }[]> =>
+      ipcRenderer.invoke('zhijiji:suggestQuestions', jobId),
+    /** 候选采纳批量入库（origin='ai'，带生成时评星），返回新问题 id 列表 */
+    adoptQuestions: (candidates: { title: string; stars: number; note: string }[]): Promise<number[]> =>
+      ipcRenderer.invoke('zhijiji:adoptQuestions', candidates),
+    /** 单题 AI 评星（仅写 stars IS NULL 行，用户已手改返回 null） */
+    rateQuestion: (jobId: string, id: number): Promise<{ stars: number; note: string } | null> =>
+      ipcRenderer.invoke('zhijiji:rateQuestion', jobId, id),
+    /** 存量补评：全部未评星题一次调用批量评完，返回更新行数 */
+    ratePending: (jobId: string): Promise<number> => ipcRenderer.invoke('zhijiji:ratePending', jobId),
+    /** 手动改星（1-5；null 清除） */
+    setStars: (id: number, stars: number | null): Promise<boolean> =>
+      ipcRenderer.invoke('zhijiji:setStars', id, stars)
   },
   prophet: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('prophet:list'),
@@ -722,7 +743,13 @@ const api = {
     ): Promise<import('../src/shared/types').LearnTaskRow> =>
       ipcRenderer.invoke('learn:taskSubmit', jobId, taskId, homework),
     /** 彻底删任务（级联 md，不入回收站） */
-    taskDelete: (taskId: number): Promise<boolean> => ipcRenderer.invoke('learn:taskDelete', taskId)
+    taskDelete: (taskId: number): Promise<boolean> => ipcRenderer.invoke('learn:taskDelete', taskId),
+    /** AI 深挖：四角度生成结果 md（不落库，确认后 digApply 写入）；可取消；LLM 未配置抛 LLM_NOT_CONFIGURED */
+    dig: (jobId: string, nodeId: number): Promise<{ content: string }> =>
+      ipcRenderer.invoke('learn:dig', jobId, nodeId),
+    /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
+    digApply: (nodeId: number, content: string): Promise<{ md: string }> =>
+      ipcRenderer.invoke('learn:digApply', nodeId, content)
   },
   ledger: {
     /** 账户列表（含实时余额） */

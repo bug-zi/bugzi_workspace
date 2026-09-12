@@ -1545,6 +1545,127 @@ export async function reviewLearnTask(
   return { score, reviewMd }
 }
 
+/** 深挖（优化建议区 260912）：四角度模板生成，返回结果 md；不落库，确认后经 learn:digApply 写入卡片 */
+export async function digLearnCard(nodeId: number, signal?: AbortSignal): Promise<string> {
+  const d = getDb()
+  const n = d
+    .prepare(
+      `SELECT n.id, n.title, dom.name AS domain_name, t.title AS topic_title
+       FROM learn_nodes n JOIN learn_domains dom ON n.domain_id = dom.id
+       LEFT JOIN learn_nodes t ON n.parent_id = t.id
+       WHERE n.id = ? AND n.deleted_at IS NULL`
+    )
+    .get(nodeId) as { id: number; title: string; domain_name: string; topic_title: string | null } | undefined
+  if (!n) throw new Error('NOT_FOUND')
+  let md = ''
+  try {
+    md = mdRead(`md/learn/${n.id}.md`)
+  } catch {
+    md = ''
+  }
+  if (!md.trim()) throw new Error('卡片内容为空，先打开卡片确认已生成')
+  const prompt = `请深挖知识点「${n.title}」（领域：${n.domain_name} · 主题：${n.topic_title ?? '（无）'}）。结合下面的卡片内容，从四个角度展开：1）原理再进一层（卡片没讲到的机制细节）；2）常见误解与易错点；3）知识串联（同主题其他知识点与跨主题关联）；4）实际工作中的坑与经验。用简体中文 Markdown 输出，不要用代码围栏包裹整体，不要输出与深挖无关的开场白或结束语。
+
+<卡片内容>
+${md}
+</卡片内容>`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.6,
+    scene: 'learn:dig',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const out = stripMdFence(res.content)
+  if (!out) throw new Error('LLM 未返回内容')
+  return out
+}
+
+/** AI 出题（260912 问题分级）：画像 + 已有问题避重 + 高星特征 → 5 条候选，出题带星一体 */
+export async function suggestZhijiQuestions(
+  signal?: AbortSignal
+): Promise<{ title: string; stars: number; note: string }[]> {
+  const d = getDb()
+  const existing = d
+    .prepare(
+      'SELECT title FROM zhijiji_questions WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 30'
+    )
+    .all() as { title: string }[]
+  const highStars = d
+    .prepare(
+      'SELECT title, star_note FROM zhijiji_questions WHERE deleted_at IS NULL AND stars >= 4 ORDER BY stars DESC LIMIT 10'
+    )
+    .all() as { title: string; star_note: string | null }[]
+  const digest = profileDigest()
+  const prompt = `${digest}${digest ? '\n\n' : ''}请为「致知己」自我认知问题库出 5 个候选问题。这些问题是用户写给自己的开放性问题，答案会随时间沉淀成多个版本，用来照见自己的变化。
+出题依据：
+1. 用户画像（若有）：往用户真正关心的领域与特质上靠。
+2. 已有问题清单（避免重复、避免同质化）：${existing.length ? existing.map((q) => `「${q.title}」`).join('、') : '（暂无）'}。
+3. 高星问题特征（用户打 4-5 星的问题代表其重视的方向，新题可呼应但不得雷同）：${highStars.length ? highStars.map((q) => `「${q.title}」${q.star_note ? `（${q.star_note}）` : ''}`).join('、') : '（暂无）'}。
+评星标准（综合四维给 1-5 星）：开放性（无标准答案越问越深）；自我认知价值（能否照见价值观与思维模式）；可演化性（答案值得随时间重写多版本）；具体度（不空泛、落到具体领域/情境）。
+以 JSON 对象返回，格式：{"questions":[{"title":"问题（20~40 字，开放性问句）","stars":4,"note":"一句评语（15~30 字，说明为什么是这个星级）"}]}，questions 恰好 5 项，不要输出其他任何内容。`
+  const call = () =>
+    chatCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.8,
+      jsonMode: true,
+      scene: 'zhijiji:suggest',
+      signal
+    })
+  let parsed: Record<string, unknown>
+  try {
+    parsed = parseJsonObject((await call()).content)
+  } catch (e) {
+    if (signal?.aborted) throw e
+    parsed = parseJsonObject((await call()).content)
+  }
+  const clampStars = (v: unknown): number => Math.min(5, Math.max(1, Math.round(Number(v) || 3)))
+  const qs = ((Array.isArray(parsed.questions) ? parsed.questions : []) as Record<string, unknown>[])
+    .map((q) => ({
+      title: typeof q.title === 'string' ? q.title.trim() : '',
+      stars: clampStars(q.stars),
+      note: typeof q.note === 'string' ? q.note.trim() : ''
+    }))
+    .filter((q) => q.title)
+  if (qs.length === 0) throw new Error('LLM 未返回有效问题')
+  return qs
+}
+
+/** AI 评星（260912 问题分级）：四维标准批量评（单题传长度 1 数组）；返回与输入按 index 对齐 */
+export async function rateZhijiQuestions(
+  items: { id: number; title: string }[],
+  signal?: AbortSignal
+): Promise<{ id: number; stars: number; note: string }[]> {
+  const list = items.map((it, i) => `${i + 1}. ${it.title}`).join('\n')
+  const prompt = `请给以下自我认知开放性问题逐条评星（1-5 星）。评星标准（综合四维）：开放性（无标准答案越问越深）；自我认知价值（能否照见价值观与思维模式）；可演化性（答案值得随时间重写多版本）；具体度（不空泛、落到具体领域/情境）。
+以 JSON 对象返回：{"ratings":[{"index":1,"stars":4,"note":"一句评语（15~30 字，说明为什么是这个星级）"}]}，ratings 与问题一一对应，不要输出其他任何内容。
+
+${list}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+    jsonMode: true,
+    scene: 'zhijiji:rate',
+    signal
+  })
+  ensureNotCancelled(signal)
+  const parsed = parseJsonObject(res.content)
+  const clampStars = (v: unknown): number => Math.min(5, Math.max(1, Math.round(Number(v) || 3)))
+  return ((Array.isArray(parsed.ratings) ? parsed.ratings : []) as Record<string, unknown>[])
+    .map((r) => {
+      const idx = Number(r.index) - 1
+      const it = items[idx]
+      return it
+        ? {
+            id: it.id,
+            stars: clampStars(r.stars),
+            note: typeof r.note === 'string' ? r.note.trim() : ''
+          }
+        : null
+    })
+    .filter((x): x is { id: number; stars: number; note: string } => x != null)
+}
+
 // ---------- 辩真阁验证（辩真阁 specs §3） ----------
 
 export interface VerifyResult {
@@ -1639,6 +1760,91 @@ export async function runVerification(
   )
   onProgress(`验证完成，可信度 ${credibility}%`)
   return { recordId: id, credibility }
+}
+
+// ---------- 万象库·知识问答（2026-09-12-知识问答标签页-design.md §五：骨架同辩真 runVerification，
+// 去掉可信度、安静模式不推频道——onProgress 仅 console 记录） ----------
+
+export interface QaAnswerResult {
+  recordId: number
+}
+
+/** 知识问答：LLM 出关键词 → MCP 逐组检索 → LLM 综合回答 → 写 qa_records + md 快照。
+ *  强制联网（无 MCP 搜索工具即抛错，不降级纯 LLM）；不注入画像（科普问答与用户画像无关）。 */
+export async function runQaAnswer(question: string, signal?: AbortSignal): Promise<QaAnswerResult> {
+  // 动态 import 避免循环依赖（同 runVerification）
+  const { findSearchTool } = await import('./mcp')
+  const found = await findSearchTool((msg) => console.info(`[qa] ${msg}`), signal)
+  if (!found) throw new Error('未找到可用的搜索工具，请检查 MCP 服务器是否提供 search 类工具')
+  const { mcp, tool } = found
+
+  // 1) LLM 生成检索关键词
+  const kwRes = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `我想弄明白这个知识问题：「${question}」。请生成 3 组适合搜索引擎检索的中英文关键词（每组关键词一行，直接输出，不要编号和解释）。`
+      }
+    ],
+    temperature: 0.5,
+    scene: 'qa:ask',
+    signal
+  })
+  const keywords = kwRes.content
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  console.info(`[qa] 检索关键词：${keywords.join('｜')}`)
+
+  // 2) 逐组检索
+  const searchResults: string[] = []
+  for (const kw of keywords) {
+    ensureNotCancelled(signal)
+    try {
+      const resultText = await mcp.callTool(tool, { query: kw })
+      searchResults.push(`【关键词：${kw}】\n${resultText}`)
+      console.info(`[qa] 检索完成（${kw}，${resultText.length} 字）`)
+    } catch (e) {
+      console.warn(`[qa] 检索失败（${kw}）：`, (e as Error).message)
+    }
+  }
+  if (searchResults.length === 0) throw new Error('全部检索失败，无法回答')
+
+  // 3) LLM 综合回答
+  console.info('[qa] 正在综合回答…')
+  const answerRes = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `我的问题：「${question}」\n\n以下是检索到的资料：\n${searchResults.join('\n\n')}\n\n请基于资料回答这个问题。要求：用简体中文 Markdown，结构清晰、通俗讲清来龙去脉（机制/原因/过程），面向非专业读者；若资料不足以完全回答，如实说明还缺什么；若引用了具体来源请在回答末尾以 Markdown 链接列出「## 来源」。`
+      }
+    ],
+    temperature: 0.3,
+    scene: 'qa:ask',
+    signal
+  })
+  const answer = answerRes.content.trim()
+  if (!answer) throw new Error('LLM 未返回内容')
+
+  // 4) 写记录 + md（取消在写库前拦截）
+  ensureNotCancelled(signal)
+  const d = getDb()
+  const now = nowIso()
+  const r = d
+    .prepare('INSERT INTO qa_records (question, answer, md_path, created_at) VALUES (?, ?, ?, ?)')
+    .run(question, answer, 'PENDING', now)
+  const id = Number(r.lastInsertRowid)
+  const mdPath = `md/qa/${id}.md`
+  d.prepare('UPDATE qa_records SET md_path = ? WHERE id = ?').run(mdPath, id)
+  mdWrite(
+    mdPath,
+    `# 问：${question}\n\n提问时间：${now}\n\n${answer}\n\n## 检索关键词\n${keywords
+      .map((k) => `- ${k}`)
+      .join('\n')}\n`
+  )
+  console.info(`[qa] 回答完成，记录 #${id}`)
+  return { recordId: id }
 }
 
 // ---------- 致知己·预言家（2026-09-12 设计 §三：MCP 检索 → 充分说明 → 推频道，骨架同辩真 runVerification） ----------

@@ -22,6 +22,7 @@ export type RecycleSource =
   | 'learn'
   | 'prophet'
   | 'twelve_question'
+  | 'qa'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -40,7 +41,8 @@ const TABLES: Record<RecycleSource, string> = {
   canvases: 'canvases',
   learn: 'learn_nodes',
   prophet: 'prophet_records',
-  twelve_question: 'twelve_questions'
+  twelve_question: 'twelve_questions',
+  qa: 'qa_records'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -50,6 +52,7 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   wiki: 'md_path',
   inspirations: 'md_path',
   verify: 'md_path',
+  qa: 'md_path',
   zhijiji: null,
   reasoning_soup: null,
   reasoning_game: 'md_path',
@@ -119,6 +122,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'verify':
       // 回历史记录列表：仅清标记
       d.prepare('UPDATE verify_records SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'qa':
+      // 回问答历史列表：仅清标记
+      d.prepare('UPDATE qa_records SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
     case 'zhijiji':
       // 回主列表：清标记 + 触碰 updated_at（浮回列表顶部，版本 md 原样保留）

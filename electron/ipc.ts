@@ -30,9 +30,13 @@ import {
   gradeLearnQuiz,
   generateLearnTask,
   reviewLearnTask,
+  digLearnCard,
+  suggestZhijiQuestions,
+  rateZhijiQuestions,
   generateInspirations,
   refineInspiration,
   runVerification,
+  runQaAnswer,
   runProphetAnalysis,
   isLlmConfigured,
   profileDigest,
@@ -115,7 +119,7 @@ import {
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -324,18 +328,29 @@ export function registerIpc(): void {
     | 'wiki_entries'
     | 'inspirations'
     | 'verify_records'
+    | 'qa_records'
     | 'zhijiji_questions'
     | 'turtle_soups'
     | 'turtle_games'
     | 'drafts'
   const RECYCLE_MAP: Record<
     string,
-    'mottos' | 'wiki' | 'inspirations' | 'verify' | 'zhijiji' | 'reasoning_soup' | 'reasoning_game' | 'drafts' | 'canvases'
+    | 'mottos'
+    | 'wiki'
+    | 'inspirations'
+    | 'verify'
+    | 'qa'
+    | 'zhijiji'
+    | 'reasoning_soup'
+    | 'reasoning_game'
+    | 'drafts'
+    | 'canvases'
   > = {
     mottos: 'mottos',
     wiki_entries: 'wiki',
     inspirations: 'inspirations',
     verify_records: 'verify',
+    qa_records: 'qa',
     zhijiji_questions: 'zhijiji',
     turtle_soups: 'reasoning_soup',
     turtle_games: 'reasoning_game',
@@ -1183,6 +1198,31 @@ export function registerIpc(): void {
     return true
   })
 
+  // ---------- 深挖（优化建议区 260912）：生成 → 确认 → 原子写入卡片 md ----------
+  ipcMain.handle('learn:dig', async (_e, jobId: string, nodeId: number) => {
+    const ac = beginJob(jobId)
+    try {
+      return { content: await digLearnCard(nodeId, ac.signal) }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  // 原子写入：读全文 → 末尾追加日期小节 → 写回，收敛主进程单点防渲染层读改写竞态
+  ipcMain.handle('learn:digApply', (_e, nodeId: number, content: string) => {
+    const path = `md/learn/${nodeId}.md`
+    let md = ''
+    try {
+      md = mdRead(path)
+    } catch {
+      md = ''
+    }
+    const c = String(content ?? '').trim()
+    if (!c) throw new Error('EMPTY_CONTENT')
+    const next = `${md.replace(/\s*$/, '')}\n\n## 深挖（${yyMMdd()}）\n\n${c}\n`
+    mdWrite(path, next)
+    return { md: next }
+  })
+
   // ---------- 灵感泉 ----------
   ipcMain.handle('inspirations:list', () =>
     getDb().prepare('SELECT * FROM inspirations WHERE deleted_at IS NULL ORDER BY sort, id').all()
@@ -1677,11 +1717,27 @@ export function registerIpc(): void {
     }
   })
 
+  // ---------- 万象库·知识问答（2026-09-12-知识问答标签页-design.md §四：安静模式，onProgress 仅 console） ----------
+  ipcMain.handle('qa:list', () =>
+    getDb().prepare('SELECT * FROM qa_records WHERE deleted_at IS NULL ORDER BY id DESC').all()
+  )
+  ipcMain.handle('qa:get', (_e, id: number) =>
+    getDb().prepare('SELECT * FROM qa_records WHERE id = ?').get(id)
+  )
+  ipcMain.handle('qa:run', async (_e, jobId: string, question: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await runQaAnswer(question, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+
   // ---------- 致知己（DB v9，致知己 specs §2：问题 + 多版本答案，AI 只追问不代笔） ----------
   ipcMain.handle('zhijiji:list', () => {
     const rows = getDb()
       .prepare(
-        `SELECT q.id, q.title, q.tags, q.created_at, q.updated_at,
+        `SELECT q.id, q.title, q.tags, q.origin, q.stars, q.star_note, q.created_at, q.updated_at,
           (SELECT COUNT(*) FROM zhijiji_versions v WHERE v.question_id = q.id) AS version_count
         FROM zhijiji_questions q WHERE q.deleted_at IS NULL ORDER BY q.updated_at DESC`
       )
@@ -1786,6 +1842,87 @@ export function registerIpc(): void {
   ipcMain.handle('zhijiji:discard', (_e, id: number) => {
     discardToRecycle('zhijiji', id)
     win()?.webContents.send('recycle:changed')
+    return true
+  })
+
+  // ---------- 致知己问题分级（优化建议区 260912）：来源 + 星级 + AI 出题 ----------
+  ipcMain.handle('zhijiji:suggestQuestions', async (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await suggestZhijiQuestions(ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  // 候选采纳批量入库：origin='ai' + 生成时评星落库；每条开空白 v1（同手动创建的空白路径）
+  ipcMain.handle('zhijiji:adoptQuestions', (_e, candidates: ZhijijiQuestionCandidate[]) => {
+    const d = getDb()
+    const now = nowIso()
+    const adopted: number[] = []
+    for (const c of candidates) {
+      const t = String(c?.title ?? '').trim()
+      if (!t) continue
+      const stars = Math.min(5, Math.max(1, Math.round(Number(c.stars) || 3)))
+      const r = d
+        .prepare(
+          "INSERT INTO zhijiji_questions (title, tags, origin, stars, star_note, created_at, updated_at) VALUES (?, '[]', 'ai', ?, ?, ?, ?)"
+        )
+        .run(t, stars, String(c.note ?? '').trim() || null, now, now)
+      const qid = Number(r.lastInsertRowid)
+      const mdPath = `md/zhijiji/${qid}-v1.md`
+      mdCreate(mdPath, '')
+      d.prepare(
+        'INSERT INTO zhijiji_versions (question_id, seq, date, md_path, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?)'
+      ).run(qid, yyMMdd(), mdPath, now, now)
+      adopted.push(qid)
+    }
+    return adopted
+  })
+  // 单题 AI 评星（手动新问题创建后异步调用）：仅写 stars IS NULL 行，不覆盖用户已改的星
+  ipcMain.handle('zhijiji:rateQuestion', async (_e, jobId: string, questionId: number) => {
+    const row = getDb()
+      .prepare('SELECT id, title FROM zhijiji_questions WHERE id = ? AND deleted_at IS NULL')
+      .get(questionId) as { id: number; title: string } | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    const ac = beginJob(jobId)
+    try {
+      const [r] = await rateZhijiQuestions([row], ac.signal)
+      if (!r) throw new Error('LLM 未返回评星')
+      const res = getDb()
+        .prepare('UPDATE zhijiji_questions SET stars = ?, star_note = ? WHERE id = ? AND stars IS NULL')
+        .run(r.stars, r.note, questionId)
+      if (res.changes === 0) return null // 用户已手动改星，评星结果弃用
+      return { stars: r.stars, note: r.note }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  // 存量补评：全部未评星题一次调用批量评完
+  ipcMain.handle('zhijiji:ratePending', async (_e, jobId: string) => {
+    const rows = getDb()
+      .prepare('SELECT id, title FROM zhijiji_questions WHERE stars IS NULL AND deleted_at IS NULL')
+      .all() as { id: number; title: string }[]
+    if (rows.length === 0) return 0
+    const ac = beginJob(jobId)
+    try {
+      const ratings = await rateZhijiQuestions(rows, ac.signal)
+      let n = 0
+      for (const r of ratings) {
+        const res = getDb()
+          .prepare('UPDATE zhijiji_questions SET stars = ?, star_note = ? WHERE id = ? AND stars IS NULL')
+          .run(r.stars, r.note, r.id)
+        n += Number(res.changes)
+      }
+      return n
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('zhijiji:setStars', (_e, id: number, stars: number | null) => {
+    const v = stars == null ? null : Math.min(5, Math.max(1, Math.round(Number(stars))))
+    getDb()
+      .prepare('UPDATE zhijiji_questions SET stars = ? WHERE id = ?')
+      .run(v, id)
     return true
   })
 

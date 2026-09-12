@@ -944,6 +944,32 @@ function migrate(): void {
     d.exec('CREATE INDEX IF NOT EXISTS idx_twelve_thoughts_q ON twelve_thoughts(question_id)')
     d.exec('PRAGMA user_version = 36')
   }
+
+  if (version < 37) {
+    // v37：万象库问答标签页（2026-09-12-知识问答标签页-design.md §三）——
+    // qa_records：单轮知识问答存档（问题 + 回答 + md 快照；无可信度字段，安静模式不推频道）
+    d.exec(`CREATE TABLE qa_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      md_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+    d.exec('PRAGMA user_version = 37')
+  }
+
+  if (version < 38) {
+    // v38：致知己问题分级（优化建议区待完成 260912）——来源（manual/ai）+ 星级（1-5 可空）+ AI 评语。
+    // 存量行靠 DEFAULT 兜底 origin='manual'，stars 保持 NULL（不强评，「AI 补评」入口按需补）。
+    // 版本号撞车顺延：v37 已被同日并行会话万象库问答（qa_records）占用。
+    d.exec(`
+      ALTER TABLE zhijiji_questions ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual';
+      ALTER TABLE zhijiji_questions ADD COLUMN stars INTEGER;
+      ALTER TABLE zhijiji_questions ADD COLUMN star_note TEXT;
+    `)
+    d.exec('PRAGMA user_version = 38')
+  }
 }
 
 // ---------- 通用工具 ----------

@@ -484,6 +484,16 @@ export interface VerifyRecord {
   deleted_at: string | null
 }
 
+/** 万象库知识问答（qa_records，DB v37；单轮问答存档，展示一律读 md 快照） */
+export interface QaRecord {
+  id: number
+  question: string
+  answer: string
+  md_path: string
+  created_at: string
+  deleted_at: string | null
+}
+
 /** 藏书架阅读背景偏好（260911 新功能开发区）：全局一份，存 settings books_reading_bg（JSON 串） */
 export interface BooksReadingBg {
   /** theme=跟随主题（默认现状）/ color=纯色预设 / image=自定义图片 */
@@ -754,20 +764,34 @@ export interface RecycleItem {
     | 'learn'
     | 'prophet'
     | 'twelve_question'
+    | 'qa'
   item_id: number
   payload: string
   created_at: string
 }
 
-// 致知己问题（zhijiji_questions，DB v9；列表行聚合版本数）
+// 致知己问题（zhijiji_questions，DB v9；列表行聚合版本数；DB v38 起带分级三列）
 export interface ZhijijiQuestion {
   id: number
   title: string
   /** 领域标签（JSON 列解析而来） */
   tags: string[]
+  /** 来源（260912 分级）：manual 手动 / ai AI 生成 */
+  origin: 'manual' | 'ai'
+  /** 星级 1-5（四维标准 AI 初评，用户可改；NULL = 未评） */
+  stars: number | null
+  /** AI 评星评语（一句，悬停可见；手动改星不清除） */
+  star_note: string | null
   version_count: number
   created_at: string
   updated_at: string
+}
+
+/** AI 出题候选（260912：出题带星一体，采纳才入库标 ai） */
+export interface ZhijijiQuestionCandidate {
+  title: string
+  stars: number
+  note: string
 }
 
 // 致知己答案版本（zhijiji_versions，DB v9；标识 v{seq}-{date}）

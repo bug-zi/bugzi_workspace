@@ -27,6 +27,7 @@ function tabOf(source: RecycleRow['source']): string {
   if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   if (source === 'verify') return 'wiki'
+  if (source === 'qa') return 'wiki'
   if (source === 'prophet' || source === 'twelve_question') return 'zhijiji'
   return source
 }
@@ -44,6 +45,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '灵感泉草稿区'
     case 'verify':
       return '万象库·辩真历史记录'
+    case 'qa':
+      return '万象库·问答历史'
     case 'zhijiji':
       return '致知己主列表'
     case 'prophet':
@@ -80,6 +83,7 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'ledger_account') return '账户 · '
   if (source === 'ledger_category') return '分类 · '
   if (source === 'verify') return '辩真 · '
+  if (source === 'qa') return '问答 · '
   if (source === 'prophet') return '预言 · '
   if (source === 'twelve_question') return '十二问题 · '
   return ''
@@ -102,6 +106,7 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'inspirations') return String(p.title ?? '')
     if (row.source === 'zhijiji') return String(p.title ?? '')
     if (row.source === 'prophet') return String(p.claim ?? '')
+    if (row.source === 'qa') return String(p.question ?? '')
     if (row.source === 'twelve_question') return String(p.title ?? '')
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
