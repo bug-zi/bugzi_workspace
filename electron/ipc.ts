@@ -126,6 +126,7 @@ import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './services/terminal'
 import type { TerminalCreateOpts } from './services/terminal'
+import { getUpdateState, checkForUpdates, downloadUpdate, installUpdate } from './services/updater'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -153,6 +154,18 @@ export function registerIpc(): void {
     setSetting(SettingsKeys.LaunchOnBoot, on ? '1' : '0')
     app.setLoginItemSettings({ openAtLogin: on })
     refreshTrayMenu()
+    return true
+  })
+
+  // ---------- 更新（个人档「版本与更新」） ----------
+  ipcMain.handle('app:updateState', () => getUpdateState())
+  ipcMain.handle('app:updateCheck', () => checkForUpdates())
+  ipcMain.handle('app:updateDownload', () => {
+    downloadUpdate()
+    return true
+  })
+  ipcMain.handle('app:updateInstall', () => {
+    installUpdate()
     return true
   })
 

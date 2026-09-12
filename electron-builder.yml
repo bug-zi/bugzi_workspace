@@ -1,5 +1,11 @@
 appId: com.bugzi.workspace
 productName: bugzi's workspace
+# 应用内更新（个人档「版本与更新」）：打包自动产出 latest.yml + .blockmap 到 release/；
+# 本地 dist 不自动发布（无 CI 时 electron-builder 不触发 publish），发版走 gh release create（见 Task 8）
+publish:
+  provider: github
+  owner: bug-zi
+  repo: bugzi_workspace
 # node-pty 自带 N-API 预编译（无 ABI 钉死），跳过 @electron/rebuild 源码重编（winpty gyp 在 Windows 必失败）
 npmRebuild: false
 directories:

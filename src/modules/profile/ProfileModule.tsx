@@ -1,5 +1,5 @@
 // 个人中心模块（个人中心 specs 全量 + 我的画像：致知己 specs §3）
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LlmConfig, McpConfig, McpResearch, ProfileFactRow } from '../../renderer/api'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
@@ -7,7 +7,7 @@ import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { FONT_FAMILIES } from '../../theme/fonts'
 import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
-import type { LlmUsageRecord, LlmUsageStats, TerminalSettings } from '../../shared/types'
+import type { LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
@@ -68,6 +68,31 @@ export default function ProfileModule() {
   const [termCfg, setTermCfg] = useState<TerminalSettings>(TERMINAL_DEFAULTS)
   const [launchOnBoot, setLaunchOnBoot] = useState(false)
   const [closeAction, setCloseAction] = useState<'tray' | 'exit'>('tray')
+  // 版本与更新（260913）：快照唯一数据源为主进程事件推送，本组件仅镜像；keep-alive 下挂载一次订阅常驻
+  const [update, setUpdate] = useState<UpdateSnapshot | null>(null)
+  const lastNoticeRef = useRef('')
+  useEffect(() => {
+    void window.api.updater.getState().then(setUpdate)
+    return window.api.updater.onUpdateEvent(setUpdate)
+  }, [])
+  // 一次性提示（启动静默检查发现新版）；ref 守卫防重复推送多次弹
+  useEffect(() => {
+    if (update?.notice && update.notice !== lastNoticeRef.current) {
+      lastNoticeRef.current = update.notice
+      toast(update.notice)
+    }
+  }, [update, toast])
+
+  const checkUpdate = useCallback(async (): Promise<void> => {
+    try {
+      const r = await window.api.updater.check()
+      if (r.status === 'up-to-date') toast('已是最新版本')
+      else if (r.status === 'error') toast('检查失败，请稍后再试')
+      else if (r.status === 'disabled') toast('开发模式下不可用')
+    } catch {
+      toast('检查失败，请稍后再试')
+    }
+  }, [toast])
   // 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文
   const [facts, setFacts] = useState<ProfileFactRow[]>([])
   const [factForm, setFactForm] = useState<{ id: number | null; category: string; content: string } | null>(null)
@@ -764,6 +789,69 @@ export default function ProfileModule() {
               {migrating ? '迁移中…' : '修改'}
             </button>
           </div>
+        </div>
+      </section>
+
+      {/* 版本与更新（260913）：GitHub Releases · 启动静默检查 + 手动下载 */}
+      <section className="zone">
+        <div className="zone-header"><span>版本</span></div>
+        <div className="zone-body" style={{ padding: 0 }}>
+          <div className="setting-row">
+            <span className="setting-label">当前版本</span>
+            <span className="grow" style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)' }}>
+              v{update?.currentVersion ?? '…'}
+            </span>
+            {(update?.phase === 'idle' || update?.phase === 'disabled') && (
+              <button className="btn" onClick={() => void checkUpdate()}>
+                <span className="material-symbols-outlined">system_update_alt</span>
+                检查更新
+              </button>
+            )}
+            {update?.phase === 'checking' && (
+              <button className="btn" disabled>
+                <span className="material-symbols-outlined">progress_activity</span>
+                检查中…
+              </button>
+            )}
+            {update?.phase === 'available' && (
+              <button className="btn" onClick={() => window.api.updater.download()}>
+                <span className="material-symbols-outlined">download</span>
+                下载更新
+              </button>
+            )}
+            {update?.phase === 'downloaded' && (
+              <button className="btn" onClick={() => window.api.updater.install()}>
+                <span className="material-symbols-outlined">restart_alt</span>
+                重启并安装
+              </button>
+            )}
+          </div>
+          {update?.phase === 'downloading' && (
+            <div style={{ padding: '2px 16px 12px' }}>
+              <div style={{ fontSize: '0.85em', color: 'var(--color-text-secondary)', marginBottom: 6 }}>
+                正在下载更新… {update.percent}%
+              </div>
+              <div style={{ height: 4, borderRadius: 2, background: 'var(--color-primary-soft)', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    width: `${update.percent}%`,
+                    height: '100%',
+                    background: 'var(--color-primary)',
+                    transition: 'width .3s'
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {update?.phase === 'available' && (
+            <div className="setting-row">
+              <span className="setting-label">发现新版本</span>
+              <span className="grow module-sub">
+                v{update.availableVersion}（{update.releaseDate ? update.releaseDate.slice(0, 10) : ''}），
+                下载完成后可一键更新
+              </span>
+            </div>
+          )}
         </div>
       </section>
 

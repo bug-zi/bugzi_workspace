@@ -12,6 +12,7 @@ import { ensureLearnStock } from './services/learnStock'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
 import { createTray } from './services/tray'
+import { initUpdater } from './services/updater'
 import { getSetting } from './db/settings'
 import { SettingsKeys } from '../src/shared/types'
 
@@ -110,6 +111,8 @@ if (!app.requestSingleInstanceLock()) {
     // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
     createTray(appIcon, showMainWindow)
     app.setLoginItemSettings({ openAtLogin: getSetting(SettingsKeys.LaunchOnBoot) === '1' })
+    // 应用内更新（个人档「版本与更新」）：启动静默检查在 updater.ts 内部错峰 5s 触发，失败静默
+    initUpdater(() => BrowserWindow.getAllWindows()[0] ?? null)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

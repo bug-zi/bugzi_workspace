@@ -869,3 +869,27 @@ export const ErrCode = {
   NotFound: 'NOT_FOUND',
   Conflict: 'CONFLICT'
 } as const
+
+// ---------- 应用更新（个人档「版本与更新」，260913） ----------
+
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'disabled'
+
+/** 更新状态快照（主进程全内存；app:updateState 返回值 / app:updateEvent 推送载荷） */
+export interface UpdateSnapshot {
+  currentVersion: string
+  phase: UpdatePhase
+  /** available/downloaded 态的新版本号 */
+  availableVersion: string | null
+  /** 新版本发布时间（ISO 串，UI slice(0,10) 显日期） */
+  releaseDate: string | null
+  /** downloading 态 0-100 */
+  percent: number
+  /** 一次性提示文案（仅启动静默检查发现新版时置一次；渲染层 toast 用） */
+  notice: string | null
+}
+
+export interface UpdateCheckResult {
+  status: 'up-to-date' | 'available' | 'error' | 'disabled'
+  version?: string
+  releaseDate?: string
+}

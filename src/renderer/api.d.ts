@@ -813,6 +813,16 @@ export interface Api {
     /** 开机自启：写 settings + 立即生效 + 托盘菜单勾选态刷新 */
     setLaunchOnBoot(on: boolean): Promise<boolean>
   }
+  updater: {
+    /** 状态快照（个人档「版本」小节挂载时同步） */
+    getState(): Promise<import('../shared/types').UpdateSnapshot>
+    /** 手动检查（与启动静默检查同内核，主进程并发去重） */
+    check(): Promise<import('../shared/types').UpdateCheckResult>
+    download(): Promise<boolean>
+    install(): Promise<boolean>
+    /** 状态机任何变化实时推送，返回取消订阅 */
+    onUpdateEvent(cb: (s: import('../shared/types').UpdateSnapshot) => void): () => void
+  }
   md: {
     read(path: string): Promise<string>
     write(path: string, content: string): Promise<boolean>
