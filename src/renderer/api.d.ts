@@ -1,5 +1,6 @@
-// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：'zangyue'
+// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：'zangyue'；260912 新增总导览 'zonglan'
 export type ModuleId =
+  | 'zonglan'
   | 'learn'
   | 'wiki'
   | 'inspirations'

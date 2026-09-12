@@ -5,12 +5,17 @@
 import { useCallback, useState } from 'react'
 import BookshelfModule from '../bookshelf/BookshelfModule'
 import FavoritesModule from '../favorites/FavoritesModule'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import './zangyue.css'
 
 export default function ZangyueModule() {
   const [tab, setTab] = useState<'bookshelf' | 'favorites'>('bookshelf')
   const [readerActive, setReaderActive] = useState(false)
   const onReadingChange = useCallback((v: boolean) => setReaderActive(v), [])
+  // 总导览深链（260912）：续读直达——先落书架页签（阅读器打开后页签条本就隐藏，返回时已在书架）
+  useModuleNavigate('zangyue', (target) => {
+    if (target === 'read') setTab('bookshelf')
+  })
   return (
     <div className="module-page zy-page" style={{ maxWidth: 1200 }}>
       {!readerActive && (

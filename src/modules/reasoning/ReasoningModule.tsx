@@ -4,11 +4,16 @@ import { useState } from 'react'
 import TurtlePanel from './TurtlePanel'
 import WallPanel from './WallPanel'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 
 export default function ReasoningModule() {
   const [board, setBoard] = useState<'turtle' | 'wall'>('turtle')
   // v1.3 题库预生成：进入推理角模块触发补充泵（存量达标即 no-op；覆盖「LLM 事后才配置好」场景）
   useModuleActivated('reasoning', () => void window.api.reasoning.stockCheck())
+  // 总导览深链（260912）：切到思维墙（每日一题在板块顶部，无子页签）
+  useModuleNavigate('reasoning', (target) => {
+    if (target === 'daily') setBoard('wall')
+  })
   return (
     <div className="module-page">
       <div className="module-header">

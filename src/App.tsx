@@ -5,6 +5,7 @@ import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
 import CanvasSidebar from './components/CanvasSidebar'
+import OverviewModule from './modules/zonglan/OverviewModule'
 import LearnModule from './modules/learn/LearnModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
@@ -27,8 +28,9 @@ import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项）
+// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项；260912 总导览置顶 11→12 项）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
+  { id: 'zonglan', label: '总导览', icon: 'space_dashboard' },
   { id: 'learn', label: '学习库', icon: 'school' },
   { id: 'wiki', label: '万象库', icon: 'public' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
@@ -68,13 +70,15 @@ export default function App() {
 export const MODULE_ACTIVATED_EVENT = 'bugzi:module-activated'
 // 模块失活事件（优化建议区第26轮：海龟汤净用时——切走模块暂停计时）
 export const MODULE_DEACTIVATED_EVENT = 'bugzi:module-deactivated'
+// 模块深链导航事件（260912 总导览）：detail ModuleNavDetail——目标模块 useModuleNavigate 监听切内部视图
+export const MODULE_NAVIGATE_EVENT = 'bugzi:module-navigate'
 
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone, settings } = useAppSettings()
   const { toast } = useToast()
-  const [module, setModule] = useState<MainView>('learn')
+  const [module, setModule] = useState<MainView>('zonglan')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
-  const moduleRef = useRef<MainView>('learn')
+  const moduleRef = useRef<MainView>('zonglan')
   useEffect(() => {
     moduleRef.current = module
   }, [module])
@@ -235,6 +239,7 @@ function Shell() {
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
               aria-hidden={m.id !== module}
             >
+              {m.id === 'zonglan' && <OverviewModule onNavigate={activateModule} />}
               {m.id === 'learn' && <LearnModule onOpenAi={openAiWith} />}
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />

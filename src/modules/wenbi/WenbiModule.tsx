@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import type { AiChannel } from '../../shared/types'
 import MottosModule from '../mottos/MottosModule'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import JournalPanel from './JournalPanel'
 import WritingPanel from './WritingPanel'
 
@@ -14,6 +15,10 @@ export interface WenbiModuleProps {
 export default function WenbiModule(props: WenbiModuleProps) {
   // 默认格言库（承袭其曾是启动首页的地位）；module-hidden 保活，tab 状态会话内保留、重启回默认
   const [board, setBoard] = useState<'mottos' | 'writing' | 'journal'>('mottos')
+  // 总导览深链（260912）：切到格言库
+  useModuleNavigate('wenbi', (target) => {
+    if (target === 'mottos') setBoard('mottos')
+  })
   return (
     <div className="module-page" style={{ maxWidth: 1200 }}>
       <div className="module-header">

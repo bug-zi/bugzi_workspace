@@ -10,6 +10,7 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import VerifyPanel from './VerifyPanel'
 import QaPanel from './QaPanel'
 
@@ -117,6 +118,13 @@ export default function WikiModule(props: WikiModuleProps) {
   }, [loadSections, loadHighlights, loadLearn])
 
   // keep-alive：切回万象库时刷新板块/词条/高光/待学习（后台生成可能已入库）+ 后库泵触发
+  // 总导览深链（260912）：切到百科 tab 的待学习区视图
+  useModuleNavigate('wiki', (target) => {
+    if (target === 'learn-zone') {
+      setTab('wiki')
+      setView({ kind: 'learn' })
+    }
+  })
   useModuleActivated('wiki', () => {
     void loadSections()
     void loadHighlights()

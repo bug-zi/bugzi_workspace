@@ -1,0 +1,180 @@
+/* ===== 总导览（260912）：今日驱动聚合页；全部双主题变量，无彩亮色 ===== */
+.zl-quote {
+  cursor: pointer;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 12px 16px;
+}
+.zl-quote-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.1em;
+  line-height: 1.8;
+}
+.zl-quote-src {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.zl-quote-refresh {
+  flex-shrink: 0;
+  align-self: center;
+}
+.zl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  /* 原生 button 默认近黑文字（buttontext），深色宝蓝底上不可读，显式落到主题文字色 */
+  color: var(--color-text);
+}
+.zl-row > .material-symbols-outlined {
+  color: var(--color-primary);
+  flex-shrink: 0;
+  transition: transform 0.25s ease;
+}
+.zl-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zl-row-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.zl-row-title {
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zl-muted {
+  opacity: 0.55;
+}
+.zl-list {
+  margin: 0;
+  padding: 0 0 0 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.zl-list li {
+  list-style: none;
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zl-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.8em;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+}
+.zl-numbar {
+  display: flex;
+  gap: 12px;
+}
+.zl-num {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px;
+  cursor: pointer;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.zl-num:hover {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.zl-num-val {
+  font-size: 1.2em;
+  font-weight: 500;
+  color: var(--color-primary-deep);
+}
+
+/* ===== 悬停动效（可点击卡片统一：抬升 + 主题色描边光晕 + 高光扫过 + 图标微动；仅 transform/opacity，reduced-motion 降级） ===== */
+.zl-row,
+.zl-quote,
+.zl-num {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.15s;
+}
+.zl-row:not(:disabled):hover,
+.zl-quote:hover,
+.zl-num:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+.zl-row:not(:disabled):active,
+.zl-quote:active,
+.zl-num:active {
+  transform: translateY(0);
+}
+/* 高光扫过（进入时从左划到右，移出即归位不回放） */
+.zl-row::after,
+.zl-quote::after,
+.zl-num::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 55%;
+  height: 100%;
+  transform: translateX(-130%) skewX(-18deg);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-primary) 14%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+.zl-row:not(:disabled):hover::after,
+.zl-quote:hover::after,
+.zl-num:hover::after {
+  transform: translateX(300%) skewX(-18deg);
+  transition: transform 0.7s ease;
+}
+.zl-row:not(:disabled):hover > .material-symbols-outlined {
+  transform: scale(1.18) rotate(-6deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zl-row,
+  .zl-quote,
+  .zl-num,
+  .zl-row > .material-symbols-outlined {
+    transition: none;
+  }
+  .zl-row:not(:disabled):hover,
+  .zl-quote:hover,
+  .zl-num:hover {
+    transform: none;
+  }
+  .zl-row::after,
+  .zl-quote::after,
+  .zl-num::after {
+    display: none;
+  }
+}

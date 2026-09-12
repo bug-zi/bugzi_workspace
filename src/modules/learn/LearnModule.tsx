@@ -20,6 +20,7 @@ import LearnTaskDialog from './LearnTaskDialog'
 import { cancelLearnGen, enqueueLearnGen, setLearnQueueHandlers, useLearnQueue } from '../../services/learnGenQueue'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 
 export interface LearnModuleProps {
   /** 问 AI：频道由 App 层 CHANNEL_BY_MODULE（learn → 学习·问答）自动映射 */
@@ -167,6 +168,10 @@ export default function LearnModule(props: LearnModuleProps) {
     void loadHighlights()
     if (domainId != null) void loadTree(domainId)
     void window.api.learn.stockCheck()
+  })
+  // 总导览深链（260912）：切到今日学习
+  useModuleNavigate('learn', (target) => {
+    if (target === 'today') setTab('daily')
   })
 
   // 泵产出渐进到达（learn:stockChanged）：今日列表与树进度刷新

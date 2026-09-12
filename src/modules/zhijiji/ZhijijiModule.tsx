@@ -10,6 +10,7 @@ import GoConfigDialog from '../../components/GoConfigDialog'
 import MdView from '../../components/MdView'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
 import ProphetPanel from './ProphetPanel'
 import TwelvePanel from './TwelvePanel'
@@ -493,6 +494,11 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
       setAdding(false)
     }
   }
+
+  // 总导览「十二问题」数字块深链（target = 'twelve' → 直切该页签）
+  useModuleNavigate('zhijiji', (target) => {
+    if (target === 'twelve') switchTab('twelve')
+  })
 
   const curVersion = versions.find((v) => v.id === curVerId) ?? null
 

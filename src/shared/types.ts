@@ -1,7 +1,8 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
-// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：两 id 移除，并为 'zangyue'）
+// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：两 id 移除，并为 'zangyue'；260912 新增总导览 'zonglan' 居首）
 export type ModuleId =
+  | 'zonglan'
   | 'learn'
   | 'wiki'
   | 'inspirations'
@@ -13,6 +14,14 @@ export type ModuleId =
   | 'ledger'
   | 'recycle'
   | 'profile'
+
+// 模块深链导航事件 detail（260912 总导览）：App.tsx MODULE_NAVIGATE_EVENT 的载荷，
+// 目标模块经 useModuleNavigate 监听后按 target 切内部视图
+export interface ModuleNavDetail {
+  module: ModuleId
+  target: string
+  payload?: Record<string, unknown>
+}
 
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet'

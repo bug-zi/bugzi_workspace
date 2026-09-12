@@ -8,6 +8,7 @@ import MdDialog from '../../components/MdDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import EpubReader, { type EpubReaderHandle } from './EpubReader'
 import PdfReader, { type PdfReaderHandle } from './PdfReader'
 import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, epubChapterAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
@@ -80,6 +81,9 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   const { toast } = useToast()
   const { theme, settings } = useAppSettings()
   const [items, setItems] = useState<BooksRecord[]>([])
+  /** items 最新值（总导览续读深链查书用） */
+  const itemsRef = useRef(items)
+  itemsRef.current = items
   const [reading, setReading] = useState<BooksRecord | null>(null)
   const [readerLabel, setReaderLabel] = useState('')
   const [delTarget, setDelTarget] = useState<BooksRecord | null>(null)
@@ -171,6 +175,18 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   useModuleActivated('zangyue', () => {
     void load()
     void refreshStats()
+  })
+  // 总导览深链（260912）：续读直达——找书 openBook 进阅读器（列表未载完则现拉一次）
+  useModuleNavigate('zangyue', (target, payload) => {
+    if (target !== 'read') return
+    const bookId = payload?.bookId
+    if (typeof bookId !== 'number') return
+    void (async () => {
+      const hit =
+        itemsRef.current.find((b) => b.id === bookId) ??
+        (await window.api.books.list()).find((b) => b.id === bookId)
+      if (hit) void openBook(hit)
+    })()
   })
 
   /** 阅读统计加载（失败静默，不阻断书架；书架 v2.0 §五） */
