@@ -1046,13 +1046,15 @@ export interface WikiQuizQuestion {
   options: string[]
   /** 正确选项下标 0..3 */
   answer: number
+  /** 题目解析（260915 优化区：提交后无论对错都展示；讲清正确项为什么对、干扰项错在哪） */
+  explanation: string
 }
 
 /** 解析 LLM 返回的测题数组（兼容 ```json 与 {"questions":[...]} 对象包裹，同 parseJsonArray 容错） */
 function parseQuizArray(
   raw: string,
   idByTerm: Map<string, number>
-): { entryId: number; term: string; question: string; options: string[]; answer: number }[] {
+): { entryId: number; term: string; question: string; options: string[]; answer: number; explanation: string }[] {
   const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
   let parsed: unknown = JSON.parse(text)
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -1067,10 +1069,11 @@ function parseQuizArray(
       ? item.options.filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
       : []
     const answer = typeof item.answer === 'number' ? item.answer : -1
+    const explanation = typeof item.explanation === 'string' ? item.explanation.trim() : ''
     const entryId = idByTerm.get(term)
     // 选项至少 2 个、答案在范围内、能对上来源词条才收
     if (entryId != null && question && options.length >= 2 && answer >= 0 && answer < options.length) {
-      out.push({ entryId, term, question, options, answer })
+      out.push({ entryId, term, question, options, answer, explanation })
     }
   }
   if (out.length === 0) throw new Error('LLM 返回题目为空或字段缺失')
@@ -1105,7 +1108,7 @@ export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQu
     cards.push(`【词条：${r.term}】\n${md.slice(0, 1200)}`)
   }
   if (cards.length === 0) throw new Error('卡片内容读取失败')
-  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是 ${cards.length} 张知识卡片。请基于每张卡片的内容各出一道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"对应的词条名","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0,"explanation":"题目解析（一两句话：讲清正确答案为什么对、干扰项错在哪，60~120字）"}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 ${cards.length} 项，不要输出其他任何内容。\n\n${cards.join('\n\n')}`
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
@@ -1123,7 +1126,13 @@ export interface LearnTreeResult {
   points: number
 }
 
-/** 领域建树（骨架）：5~8 主题 × 5~8 知识点（仅 title+一句话简介，content_ready=0），事务写入后 tree_ready=1 */
+/** 知识树说明文档路径（每棵树一份 md：我的期望 + 树内容总览；260915 优化区） */
+export function learnTreeDocPath(domainId: number): string {
+  return `md/learn/tree-${domainId}.md`
+}
+
+/** 领域建树（骨架）：5~8 主题 × 5~8 知识点（仅 title+一句话简介，content_ready=0），事务写入后 tree_ready=1。
+ *  建树前读取树说明文档中的「我的期望」注入 prompt；建树后把树内容总览追加写入文档。 */
 export async function generateLearnTree(
   domainId: number,
   signal?: AbortSignal
@@ -1133,7 +1142,14 @@ export async function generateLearnTree(
     | { id: number; name: string }
     | undefined
   if (!dom) throw new Error('NOT_FOUND')
-  const prompt = `请为计算机专业领域「${dom.name}」设计一份知识树骨架：恰好 5~8 个主题，每个主题下恰好 5~8 个知识点。要求：主题覆盖该领域系统学习的主干，从基础到进阶有清晰的先后学习逻辑；知识点是具体、可独立学习的最小单元（具体协议、算法、机制、命令族等），标题用行业通用术语，不与主题名重复。
+  let intro = ''
+  try {
+    intro = mdRead(learnTreeDocPath(domainId)).trim()
+  } catch {
+    /* 旧领域可能还没有说明文档 */
+  }
+  const introBlock = intro ? `\n用户对这棵知识树的期望说明（设计骨架时优先遵循，写在树说明文档中）：\n${intro.slice(0, 1500)}\n` : ''
+  const prompt = `请为计算机专业领域「${dom.name}」设计一份知识树骨架：恰好 5~8 个主题，每个主题下恰好 5~8 个知识点。要求：主题覆盖该领域系统学习的主干，从基础到进阶有清晰的先后学习逻辑；知识点是具体、可独立学习的最小单元（具体协议、算法、机制、命令族等），标题用行业通用术语，不与主题名重复。${introBlock}
 以 JSON 对象返回，最外层是对象，格式：{"topics":[{"title":"主题名","points":[{"title":"知识点名","summary":"一句话简介（20~40 字，说清它是什么、为什么重要）"}]}]}，不要输出其他任何内容。`
   const call = () =>
     chatCompletion({
@@ -1191,11 +1207,76 @@ export async function generateLearnTree(
     }
     d.prepare('UPDATE learn_domains SET tree_ready = 1 WHERE id = ?').run(domainId)
     d.exec('COMMIT')
-    return { topics: clean.length, points }
   } catch (e) {
     d.exec('ROLLBACK')
     throw e
   }
+  // 树说明文档补树内容总览（保留「我的期望」等既有内容；写文档失败不影响建树结果）
+  try {
+    const base = intro ? intro.trimEnd() + '\n\n' : `# 「${dom.name}」知识树\n\n`
+    mdWrite(learnTreeDocPath(domainId), base + treeInventoryBlock(clean, `AI 建树于 ${nowIso().slice(0, 10)}`))
+  } catch {
+    /* 文档写入失败不回滚建树 */
+  }
+  return { topics: clean.length, points: clean.reduce((n, t) => n + t.points.length, 0) }
+}
+
+/** 树内容总览 md 块（知识点清单，AI 无关） */
+function treeInventoryBlock(
+  topics: { title: string; points: { title: string; summary: string }[] }[],
+  meta: string
+): string {
+  const total = topics.reduce((n, t) => n + t.points.length, 0)
+  const lines: string[] = [
+    '## 树内容总览',
+    '',
+    `> ${meta} · ${topics.length} 个主题 · ${total} 个知识点`,
+    ''
+  ]
+  topics.forEach((t, i) => {
+    lines.push(`${i + 1}. **${t.title}**`)
+    for (const p of t.points) lines.push(`   - ${p.title}${p.summary ? ` — ${p.summary}` : ''}`)
+  })
+  return lines.join('\n') + '\n'
+}
+
+/** 打开树说明文档前确保存在（存量领域/文档缺失兜底）：已建树按 DB 现状补总览快照，未建树只写头与引导 */
+export function ensureLearnTreeDoc(domainId: number): string {
+  const d = getDb()
+  const dom = d.prepare('SELECT id, name, tree_ready FROM learn_domains WHERE id = ?').get(domainId) as
+    | { id: number; name: string; tree_ready: 0 | 1 }
+    | undefined
+  if (!dom) throw new Error('NOT_FOUND')
+  const path = learnTreeDocPath(domainId)
+  let existing = ''
+  try {
+    existing = mdRead(path)
+  } catch {
+    /* 不存在则创建 */
+  }
+  if (existing.trim()) return path
+  let body = `# 「${dom.name}」知识树\n\n## 我的期望\n\n（暂无——可在此写下希望这棵树包含哪些知识点、侧重什么方向，AI 建树时会参考。双击即可编辑。）\n`
+  if (dom.tree_ready === 1) {
+    const topics = (
+      d
+        .prepare(
+          'SELECT id, title FROM learn_nodes WHERE domain_id = ? AND level = 1 AND deleted_at IS NULL ORDER BY id'
+        )
+        .all(domainId) as { id: number; title: string }[]
+    ).map((t) => ({
+      title: t.title,
+      points: (
+        d
+          .prepare(
+            'SELECT title, summary FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NULL ORDER BY id'
+          )
+          .all(t.id) as { title: string; summary: string }[]
+      ).map((p) => ({ title: p.title, summary: p.summary }))
+    }))
+    body += '\n' + treeInventoryBlock(topics, `按当前树结构快照（${nowIso().slice(0, 10)} 生成）`)
+  }
+  mdWrite(path, body)
+  return path
 }
 
 export interface GenerateLearnCardResult {

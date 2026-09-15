@@ -78,7 +78,8 @@ export interface MdDialogProps {
   footerBar?: ReactNode
   /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
   autoEdit?: boolean
-  /** 右侧内嵌栏（致知己追问，优化建议区第13轮）：传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
+  /** 右侧内嵌栏（共享组件 ChannelChatPanel：致知己追问栏第13轮 / 学习库问 AI 拓展坞第42轮）：
+   *  传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
   sidePanel?: ReactNode
 }
 

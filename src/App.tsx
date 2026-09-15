@@ -22,6 +22,8 @@ import NoisePage from './modules/noise/NoisePage'
 import LlmActivity from './components/LlmActivity'
 import TerminalPanel from './components/terminal/TerminalPanel'
 import { noiseEngine } from './services/noiseEngine'
+import { musicEngine } from './services/musicEngine'
+import { activeAudioKind } from './services/audioExclusive'
 import { sceneById } from './services/noiseScenes'
 import { useToast } from './components/Toast'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
@@ -46,9 +48,9 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
 
 /** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道；
  *  辩真阁已并入万象库，'verify' 频道由万象库辩真板块经 openAiWith 的 channel 覆盖直达；
- *  格言库已并入文笔坊，'motto' 频道由文笔坊格言面板显式传 channel 覆盖直达 */
+ *  格言库已并入文笔坊，'motto' 频道由文笔坊格言面板显式传 channel 覆盖直达；
+ *  学习库划词问 AI 直发弹窗拓展坞（'learn' 频道），不再经模块映射走右栏 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
-  learn: 'learn',
   wiki: 'wiki',
   zhijiji: 'zhijiji'
 }
@@ -140,6 +142,18 @@ function Shell() {
     })
   }, [])
 
+  // 轻音乐启动恢复（音乐吧设计 §五）：只灌参数不播放——重启默认暂停
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.MusicState).then((raw) => {
+      if (!raw) return
+      try {
+        musicEngine.loadPersisted(JSON.parse(raw) as { trackId?: number; loopMode?: string; volume?: number })
+      } catch {
+        /* 坏数据静默容错 */
+      }
+    })
+  }, [])
+
   // 白噪音队列配置恢复（播放队列轮）：只灌配置不运行——重启默认暂停、从头开始
   useEffect(() => {
     void window.api.settings.get(SettingsKeys.NoisePlayQueue).then((raw) => {
@@ -168,6 +182,17 @@ function Shell() {
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
+  // 深链集中切换（260915 优化区：原仅总导览 onNavigate；现在任何常驻模块都可派发事件跳转，
+  // 如学习库深挖完成后轻提示点击跨模块跳回）：目标模块内部视图由其 useModuleNavigate 自行处理
+  useEffect(() => {
+    const onNav = (e: Event): void => {
+      const detail = (e as CustomEvent<{ module: ModuleId }>).detail
+      if (detail && detail.module) activateModule(detail.module)
+    }
+    window.addEventListener(MODULE_NAVIGATE_EVENT, onNav)
+    return () => window.removeEventListener(MODULE_NAVIGATE_EVENT, onNav)
+  }, [activateModule])
+
   // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.channel 显式覆盖——万象库辩真板块直连核查频道；
   // opts.auto 时切频道后自动发送）
   const openAiWith = useCallback(
@@ -189,10 +214,15 @@ function Shell() {
     if (!aiForceOpen) return
   }, [aiForceOpen])
 
-  // 白噪音播放态（引擎版本号驱动：图标高亮与页面播放按钮同步）
+  // 音源播放态（双引擎版本号驱动：左栏/右栏图标与页面播放按钮同步）
   useSyncExternalStore(noiseEngine.subscribe, noiseEngine.getSnapshot)
+  useSyncExternalStore(musicEngine.subscribe, musicEngine.getSnapshot)
   const noisePlaying = noiseEngine.isPlaying()
+  const musicPlaying = musicEngine.isPlaying()
   const noiseSceneLabel = sceneById(noiseEngine.getState().sceneId)?.label ?? ''
+  // 活跃音源口径：谁在播控谁；都停着控上次音源（从未播过默认白噪音）
+  const activeKind = noisePlaying ? 'noise' : musicPlaying ? 'music' : activeAudioKind()
+  const anyPlaying = noisePlaying || musicPlaying
 
   return (
     <>
@@ -202,17 +232,23 @@ function Shell() {
         <nav className="sidebar">
           {MODULES.map((m) => (
             <Fragment key={m.id}>
-              {/* 白噪音控件列于记账本与回收站之间（260908 开发者指令：进列表不再钉底部） */}
+              {/* 音乐吧控件列于记账本与回收站之间（260908 进列表；260915 更名音乐吧） */}
               {m.id === 'recycle' && (
                 <button
                   className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
                   onClick={() => activateModule('noise')}
-                  title={noisePlaying ? '白噪音播放中 · 点击打开混音器' : '打开白噪音混音器'}
+                  title={
+                    noisePlaying
+                      ? '白噪音播放中 · 点击打开音乐吧'
+                      : musicPlaying
+                        ? '轻音乐播放中 · 点击打开音乐吧'
+                        : '打开音乐吧'
+                  }
                 >
-                  <span className={`material-symbols-outlined${noisePlaying ? ' noise-playing' : ''}`}>
+                  <span className={`material-symbols-outlined${anyPlaying ? ' noise-playing' : ''}`}>
                     graphic_eq
                   </span>
-                  <span className="nav-label">白噪音</span>
+                  <span className="nav-label">音乐吧</span>
                 </button>
               )}
               <button
@@ -239,8 +275,8 @@ function Shell() {
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
               aria-hidden={m.id !== module}
             >
-              {m.id === 'zonglan' && <OverviewModule onNavigate={activateModule} />}
-              {m.id === 'learn' && <LearnModule onOpenAi={openAiWith} />}
+              {m.id === 'zonglan' && <OverviewModule />}
+              {m.id === 'learn' && <LearnModule />}
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
@@ -300,16 +336,22 @@ function Shell() {
               <span className="material-symbols-outlined">terminal</span>
             </button>
           )}
-          {/* 白噪音快捷播放/暂停（260911 新功能开发区）：主题按钮上方，显隐同款（三面板收起）；
-              点击 toggle，播放中图标主题色高亮（同左栏入口） */}
+          {/* 音源快捷播放/暂停（260911 新功能开发区；260915 改活跃音源口径）：主题按钮上方，显隐同款（三面板收起） */}
           {rightPanel === null && (
             <button
               className="right-col-noise"
-              onClick={() => void noiseEngine.toggle().catch(() => toast('音频初始化失败'))}
-              title={`白噪音 · ${noiseSceneLabel} · ${noisePlaying ? '播放中，点击暂停' : '已暂停，点击播放'}`}
+              onClick={() => {
+                if (activeKind === 'music') void musicEngine.toggle()
+                else void noiseEngine.toggle().catch(() => toast('音频初始化失败'))
+              }}
+              title={
+                activeKind === 'music'
+                  ? `轻音乐 · ${musicPlaying ? '播放中，点击暂停' : '已暂停，点击播放'}`
+                  : `白噪音 · ${noiseSceneLabel} · ${noisePlaying ? '播放中，点击暂停' : '已暂停，点击播放'}`
+              }
             >
-              <span className={`material-symbols-outlined${noisePlaying ? ' noise-playing' : ''}`}>
-                graphic_eq
+              <span className={`material-symbols-outlined${anyPlaying ? ' noise-playing' : ''}`}>
+                {activeKind === 'music' ? 'music_note' : 'graphic_eq'}
               </span>
             </button>
           )}

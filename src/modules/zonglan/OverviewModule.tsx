@@ -1,19 +1,15 @@
 // 总导览（左栏置顶 · 启动默认页，260912 新功能开发区）：今日驱动——问候 +
-// 学习队列 / 待消化 / 每日一题 / 续读 四今日块 + 轻数字条 + 底部格言轮播。纯渲染层
-// 并行聚合既有 IPC（零 AI、零主进程改动，逐块独立 catch）；深链 = 派发
-// MODULE_NAVIGATE_EVENT + onNavigate 切模块（设计 §五，目标模块 useModuleNavigate 监听切内部视图）。
+// 每日要求 / 待消化 / 每日一题 / 续读 四今日块 + 轻数字条 + 底部格言轮播。纯渲染层
+// 并行聚合既有 IPC（零 AI、零主进程改动，逐块独立 catch）；深链 = 派发 MODULE_NAVIGATE_EVENT，
+// App 集中切模块、目标模块 useModuleNavigate 切内部视图（260915 起单一导航路径）。
 import { useCallback, useEffect, useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
-import type { LearnDailyRow, ModuleId, MottoRecord } from '../../shared/types'
+import type { ModuleId, MottoRecord } from '../../shared/types'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import './zonglan.css'
-
-export interface OverviewModuleProps {
-  onNavigate: (module: ModuleId) => void
-}
 
 /** 今日 YYYY-MM-DD（wall.month 的 WallDayCell.date 同格式比对） */
 function todayStr(now: Date): string {
@@ -28,13 +24,19 @@ function nextMottoIdx(len: number, cur: number): number {
   return n
 }
 
-export default function OverviewModule(props: OverviewModuleProps) {
+export default function OverviewModule() {
   const { settings } = useAppSettings()
 
   // ----- 各块状态（null = 加载失败 → 该块显示「--」/失败态，不拖垮整页） -----
   const [settledMottos, setSettledMottos] = useState<MottoRecord[]>([])
   const [mottoIdx, setMottoIdx] = useState(0)
-  const [queue, setQueue] = useState<{ newItems: LearnDailyRow[]; reviewItems: LearnDailyRow[] } | null>(null)
+  const [learnReq, setLearnReq] = useState<{
+    goal: number
+    done: number
+    streak: number
+    quizStatus: 'answering' | 'graded' | null
+    learned: number
+  } | null>(null)
   const [learnCount, setLearnCount] = useState<number | null>(null)
   const [wallState, setWallState] = useState<{ done: boolean; streak: number } | null>(null)
   const [reading, setReading] = useState<{ id: number; title: string; percent: number; todayLabel: string } | null>(null)
@@ -42,14 +44,10 @@ export default function OverviewModule(props: OverviewModuleProps) {
   const [monthExpense, setMonthExpense] = useState<string | null>(null)
   const [twelve, setTwelve] = useState<string | null>(null)
 
-  /** 深链：先派发导航事件（目标模块常驻监听切内部视图），再切模块 */
-  const go = useCallback(
-    (module: ModuleId, target?: string, payload?: Record<string, unknown>) => {
-      window.dispatchEvent(new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module, target, payload } }))
-      props.onNavigate(module)
-    },
-    [props]
-  )
+  /** 深链：派发导航事件（App 集中切模块，目标模块 useModuleNavigate 切内部视图） */
+  const go = useCallback((module: ModuleId, target?: string, payload?: Record<string, unknown>) => {
+    window.dispatchEvent(new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module, target, payload } }))
+  }, [])
 
   // ----- 逐块加载（各自 catch） -----
   const loadMottos = useCallback(async (): Promise<void> => {
@@ -64,9 +62,15 @@ export default function OverviewModule(props: OverviewModuleProps) {
   const loadDaily = useCallback(async (): Promise<void> => {
     try {
       const d = await window.api.learn.daily()
-      setQueue({ newItems: d.new, reviewItems: d.review })
+      setLearnReq({
+        goal: d.goal,
+        done: d.done,
+        streak: d.streak,
+        quizStatus: d.quizStatus,
+        learned: d.learned.length
+      })
     } catch {
-      setQueue(null)
+      setLearnReq(null)
     }
   }, [])
   const loadLearnCount = useCallback(async (): Promise<void> => {
@@ -155,7 +159,6 @@ export default function OverviewModule(props: OverviewModuleProps) {
   const now = new Date()
   const name = settings[SettingsKeys.UserName]?.trim()
   const greetLine = `${name || '你好'}，${now.getMonth() + 1}月${now.getDate()}日 周${'日一二三四五六'[now.getDay()]}`
-  const hasQueue = queue != null && (queue.newItems.length > 0 || queue.reviewItems.length > 0)
 
   return (
     <div className="module-page" style={{ maxWidth: 1200 }}>
@@ -165,37 +168,26 @@ export default function OverviewModule(props: OverviewModuleProps) {
         <span className="module-sub">{greetLine}</span>
       </div>
 
-      {/* 今日学习（整卡深链「今日学习」tab，不逐卡定位） */}
-      <button
-        className="card zl-row"
-        onClick={() => go('learn', 'today')}
-        title="进入学习库·今日学习"
-      >
+      {/* 今日学习（整卡深链「今日学习」tab；260915 起显示每日要求状态行） */}
+      <button className="card zl-row" onClick={() => go('learn', 'today')} title="进入学习库·今日学习">
         <span className="material-symbols-outlined">school</span>
         <div className="zl-row-main">
           <div className="zl-row-line">
             <span className="zl-row-title">今日学习</span>
             <span className="module-sub">
-              {queue ? `新学 ${queue.newItems.length} · 复习 ${queue.reviewItems.length}` : '加载失败'}
+              {learnReq
+                ? learnReq.done
+                  ? `今日要求已完成 · 连胜 ${learnReq.streak} 天`
+                  : `新学 ${learnReq.learned}/${learnReq.goal} · 小测${
+                      learnReq.quizStatus === 'graded'
+                        ? '已交卷'
+                        : learnReq.quizStatus === 'answering'
+                          ? '作答中'
+                          : '未出卷'
+                    } · 连胜 ${learnReq.streak} 天`
+                : '加载失败'}
             </span>
           </div>
-          {hasQueue && queue && (
-            <ul className="zl-list">
-              {queue.newItems.slice(0, 5).map((n) => (
-                <li key={`n${n.id}`}>
-                  <span className="zl-tag">新学</span>
-                  {n.title}
-                </li>
-              ))}
-              {queue.reviewItems.slice(0, 5).map((n) => (
-                <li key={`r${n.id}`}>
-                  <span className="zl-tag">复习</span>
-                  {n.title}
-                </li>
-              ))}
-            </ul>
-          )}
-          {queue && !hasQueue && <div className="module-sub">队列为空（LLM 未配置或尚未生成）· 点击去学习库</div>}
         </div>
       </button>
 

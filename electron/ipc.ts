@@ -7,7 +7,7 @@ import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from '.
 import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
-import { ensureDailyQueue, ensureLearnStock, addDaysLocal } from './services/learnStock'
+import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -24,6 +24,7 @@ import {
   suggestWikiTerm,
   generateWikiQuiz,
   generateLearnTree,
+  ensureLearnTreeDoc,
   generateLearnCard,
   expandLearnTopic,
   generateLearnQuiz,
@@ -119,13 +120,14 @@ import {
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './services/terminal'
 import type { TerminalCreateOpts } from './services/terminal'
+import { listMusic, importTracks, playlistCreate, playlistRename, playlistDelete, trackMove, trackDelete, setTrackDuration, readTrackFile } from './services/music'
 import { getUpdateState, checkForUpdates, downloadUpdate, installUpdate } from './services/updater'
 
 function win(): BrowserWindow | undefined {
@@ -239,6 +241,25 @@ export function registerIpc(): void {
   } catch {
     /* 静默 */
   }
+
+  // ---------- 音乐吧·轻音乐（260915 新功能开发区） ----------
+  ipcMain.handle('music:list', () => listMusic())
+  ipcMain.handle('music:import', async (): Promise<MusicImportSummary> => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择轻音乐（可多选）',
+      filters: [{ name: '音乐', extensions: ['mp3'] }],
+      properties: ['openFile', 'multiSelections']
+    })
+    if (r.canceled || r.filePaths.length === 0) return { imported: 0, skipped: 0, failed: 0 }
+    return importTracks(r.filePaths)
+  })
+  ipcMain.handle('music:playlistCreate', (_e, name: string) => playlistCreate(name))
+  ipcMain.handle('music:playlistRename', (_e, id: number, name: string) => playlistRename(id, name))
+  ipcMain.handle('music:playlistDelete', (_e, id: number) => playlistDelete(id))
+  ipcMain.handle('music:trackMove', (_e, id: number, playlistId: number | null) => trackMove(id, playlistId))
+  ipcMain.handle('music:trackDelete', (_e, id: number) => trackDelete(id))
+  ipcMain.handle('music:duration', (_e, id: number, sec: number) => setTrackDuration(id, sec))
+  ipcMain.handle('music:file', (_e, id: number) => readTrackFile(id))
 
   // ---------- 头像上传 / 背景素材库 ----------
   ipcMain.handle(
@@ -746,20 +767,33 @@ export function registerIpc(): void {
       )
       .all()
   )
-  ipcMain.handle('learn:domainCreate', (_e, name: string) => {
+  ipcMain.handle('learn:domainCreate', (_e, name: string, intro?: string) => {
     const d = getDb()
     const max = d.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM learn_domains').get() as {
       m: number
     }
+    let id: number
     try {
       const r = d
         .prepare('INSERT INTO learn_domains (name, sort, created_at) VALUES (?, ?, ?)')
         .run(name, max.m + 1, nowIso())
-      return Number(r.lastInsertRowid)
+      id = Number(r.lastInsertRowid)
     } catch {
       throw new Error('CONFLICT:' + name) // name UNIQUE 撞名
     }
+    // 树说明文档随建树创建（260915 优化区）：期望说明写入「我的期望」，AI 建树时读取参考
+    try {
+      mdWrite(
+        `md/learn/tree-${id}.md`,
+        `# 「${name}」知识树\n\n## 我的期望\n\n${intro?.trim() || '（暂无——可在此写下希望这棵树包含哪些知识点、侧重什么方向，AI 建树时会参考。双击即可编辑。）'}\n`
+      )
+    } catch {
+      /* 文档创建失败不阻断领域创建 */
+    }
+    return id
   })
+  /** 树说明文档路径（确保存在：存量领域首开按 DB 现状补总览快照） */
+  ipcMain.handle('learn:treeDoc', (_e, domainId: number) => ensureLearnTreeDoc(domainId))
   ipcMain.handle('learn:domainRename', (_e, id: number, name: string) => {
     try {
       getDb().prepare('UPDATE learn_domains SET name = ? WHERE id = ?').run(name, id)
@@ -891,30 +925,64 @@ export function registerIpc(): void {
     }
     return d.prepare(`${learnCardSql} AND n.id = ?`).get(id)
   })
+  /** 每日要求完成判定（mark learn 与 quizSubmit 两处共用，check-and-set）：
+   *  新学达标 + 今日卷已交 → done=1；返回是否本次刚达成（渲染层 toast 用） */
+  const completeDailyIfReady = (): boolean => {
+    const d = getDb()
+    const today = localDateStr()
+    const row = d.prepare('SELECT goal, done FROM learn_daily WHERE date = ?').get(today) as
+      | { goal: number; done: number }
+      | undefined
+    if (!row || row.done) return false
+    const learnedCount = d
+      .prepare(
+        "SELECT COUNT(*) AS c FROM learn_nodes WHERE deleted_at IS NULL AND learned_at IS NOT NULL AND substr(learned_at, 1, 10) = ?"
+      )
+      .get(today) as { c: number }
+    if (learnedCount.c < row.goal) return false
+    const quiz = d.prepare('SELECT status FROM learn_quiz WHERE date = ?').get(today) as
+      | { status: string }
+      | undefined
+    if (!quiz || quiz.status !== 'graded') return false
+    d.prepare('UPDATE learn_daily SET done = 1 WHERE date = ?').run(today)
+    return true
+  }
   ipcMain.handle('learn:daily', () => {
-    ensureDailyQueue() // 幂等定档（纯 SQL）；随后 fire-and-forget 泵补内容
+    ensureDailyQueue() // 幂等定档（纯 SQL）；随后 fire-and-forget 泵补备学池
     void ensureLearnStock()
     const d = getDb()
-    const row = d
-      .prepare('SELECT new_ids, review_ids FROM learn_daily WHERE date = ?')
-      .get(localDateStr()) as { new_ids: string; review_ids: string } | undefined
-    if (!row) return { new: [], review: [] }
-    const byId = new Map<number, LearnDailyRow>()
-    const all = [
-      ...(JSON.parse(row.new_ids) as number[]),
-      ...(JSON.parse(row.review_ids) as number[])
-    ]
-    if (all.length > 0) {
-      const rows = d
-        .prepare(`${learnCardSql} AND n.id IN (${all.map(() => '?').join(',')})`)
-        .all(...all) as unknown as LearnDailyRow[]
-      for (const r of rows) byId.set(r.id, r)
+    const today = localDateStr()
+    const row = d.prepare('SELECT goal, review_ids, done FROM learn_daily WHERE date = ?').get(today) as
+      | { goal: number; review_ids: string; done: number }
+      | undefined
+    if (!row) {
+      return { learned: [], review: [], goal: 0, done: 0, streak: 0, quizStatus: null, quizAnswered: 0, quizTotal: 0 }
     }
-    const pick = (arr: number[]): LearnDailyRow[] =>
-      arr.map((i) => byId.get(i)).filter((r): r is LearnDailyRow => r != null)
+    const reviewIds = JSON.parse(row.review_ids) as number[]
+    const reviewRows =
+      reviewIds.length > 0
+        ? (d
+            .prepare(`${learnCardSql} AND n.id IN (${reviewIds.map(() => '?').join(',')})`)
+            .all(...reviewIds) as unknown as LearnDailyRow[])
+        : []
+    // 今日已学动态列表（learned_at 本地日期 = 今天；取代原 new_ids 定档列表）
+    const learned = d
+      .prepare(
+        `${learnCardSql} AND n.learned_at IS NOT NULL AND substr(n.learned_at, 1, 10) = ? ORDER BY n.learned_at`
+      )
+      .all(today) as unknown as LearnDailyRow[]
+    const quiz = d.prepare('SELECT status, answers, questions FROM learn_quiz WHERE date = ?').get(today) as
+      | { status: string; answers: string; questions: string }
+      | undefined
     return {
-      new: pick(JSON.parse(row.new_ids) as number[]),
-      review: pick(JSON.parse(row.review_ids) as number[])
+      learned,
+      review: reviewRows,
+      goal: row.goal,
+      done: row.done,
+      streak: learnStreak(),
+      quizStatus: (quiz?.status as 'answering' | 'graded' | null) ?? null,
+      quizAnswered: quiz ? (JSON.parse(quiz.answers) as unknown[]).length : 0,
+      quizTotal: quiz ? (JSON.parse(quiz.questions) as unknown[]).length : 0
     }
   })
   ipcMain.handle('learn:randomOne', async (_e, jobId: string) => {
@@ -985,18 +1053,14 @@ export function registerIpc(): void {
     const today = localDateStr()
     const has = quizRowOfToday()
     if (has && !force) return quizViewOf(has) // 一天一卷幂等：重复点击直接返回既有卷；force=true 换一张（覆盖旧卷）
-    const daily = d.prepare('SELECT new_ids FROM learn_daily WHERE date = ?').get(today) as
-      | { new_ids: string }
-      | undefined
-    const newIds = daily ? (JSON.parse(daily.new_ids) as number[]) : []
-    if (newIds.length === 0) throw new Error('今日还没有可测的卡：先在「今日新学」学会至少 2 张')
+    // 取卡口径（每日要求设计 §五）：今日已学（learned_at 本地日期 = 今天）的卡
     const learned = d
       .prepare(
         `SELECT id FROM learn_nodes WHERE state = 'learned' AND deleted_at IS NULL
-         AND id IN (${newIds.map(() => '?').join(',')})`
+         AND learned_at IS NOT NULL AND substr(learned_at, 1, 10) = ? ORDER BY learned_at`
       )
-      .all(...newIds) as { id: number }[]
-    if (learned.length < 2) throw new Error('今日已学会的卡不足 2 张，先学习再小测')
+      .all(today) as { id: number }[]
+    if (learned.length < 2) throw new Error('今日已学的卡不足 2 张，先学习再小测')
     const ac = beginJob(jobId)
     try {
       const questions = await generateLearnQuiz(learned.map((r) => r.id), ac.signal)
@@ -1062,7 +1126,8 @@ export function registerIpc(): void {
     getDb()
       .prepare('UPDATE learn_quiz SET answers = ?, status = ?, graded_at = ? WHERE date = ?')
       .run(JSON.stringify(answers), 'graded', nowIso(), localDateStr())
-    return { correct, total: questions.length }
+    const completed = completeDailyIfReady() // 交卷即判定（每日要求设计 §三：先学满后交卷也触发）
+    return { correct, total: questions.length, completed }
   })
   ipcMain.handle('learn:quizRetry', () => {
     getDb()
@@ -1143,12 +1208,14 @@ export function registerIpc(): void {
     if (!n) throw new Error('NOT_FOUND')
     const today = localDateStr()
     if (action === 'learn') {
-      if (n.state !== 'todo') return false
-      // 学会了：进第 1 档，次日复习（设计 §二状态机）
+      if (n.state !== 'todo') return { ok: false, completed: false }
+      // 学会了：进第 1 档 + 记学会时刻（每日要求计数依据，本地时间）；备学池消耗后补池
       d.prepare(
-        "UPDATE learn_nodes SET state = 'learned', review_stage = 1, next_review_at = ? WHERE id = ?"
-      ).run(addDaysLocal(1), id)
-      return true
+        "UPDATE learn_nodes SET state = 'learned', review_stage = 1, next_review_at = ?, learned_at = ? WHERE id = ?"
+      ).run(addDaysLocal(1), localNowIso(), id)
+      void ensureLearnStock()
+      const completed = completeDailyIfReady()
+      return { ok: true, completed }
     }
     // remember/forget 仅到期卡可用（渲染层双钮也只在到期卡显示）
     if (
@@ -1158,7 +1225,7 @@ export function registerIpc(): void {
       n.next_review_at == null ||
       n.next_review_at > today
     ) {
-      return false
+      return { ok: false, completed: false }
     }
     if (action === 'forget') {
       // 忘记了：重置回第 1 档，明天再来
@@ -1166,7 +1233,7 @@ export function registerIpc(): void {
         addDaysLocal(1),
         id
       )
-      return true
+      return { ok: true, completed: false }
     }
     const nextStage = n.review_stage + 1
     if (nextStage >= 5) {
@@ -1180,7 +1247,7 @@ export function registerIpc(): void {
         id
       )
     }
-    return true
+    return { ok: true, completed: false }
   })
   ipcMain.handle('learn:stockCheck', () => {
     void ensureLearnStock()

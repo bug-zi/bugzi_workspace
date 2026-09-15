@@ -284,3 +284,9 @@
   background: var(--color-surface);
   color: var(--color-text);
 }
+
+/* ===== 音乐吧·轻音乐控制条（260915）===== */
+.music-panel .music-controls input[type='range'] {
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}

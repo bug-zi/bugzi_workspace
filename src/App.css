@@ -958,6 +958,52 @@
   font-weight: 600;
   color: var(--color-primary-deep);
 }
+/* 预选态（260915 优化区：提交前可改选，仅描边提示不做对错判定） */
+.quiz-opt.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+/* 提交前行：提交按钮恒靠右（260915 反馈修订删去改选提示文案，选中时左侧补「已预选 X」） */
+.quiz-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+/* 提交后解析区（无论对错都展示；主题色软底 + 左缘主题色条） */
+.quiz-analysis {
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.quiz-analysis-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88em;
+  font-weight: 600;
+  color: var(--color-primary-deep);
+}
+.quiz-analysis-head .material-symbols-outlined {
+  font-size: 17px;
+}
+.quiz-analysis-body {
+  font-size: 0.92em;
+  line-height: 1.8;
+  color: var(--color-text);
+}
+/* 查看相关知识点卡片（整行左对齐，弱化为普通按钮） */
+.quiz-related-btn {
+  align-self: flex-start;
+}
 
 /* ===== 推理角（推理角 specs §2）===== */
 /* 对局视图头部（返回 + 汤名 + 难度/题材 + 统计） */
@@ -1712,4 +1758,18 @@
 }
 .right-col-terminal:hover {
   background: var(--color-primary-soft);
+}
+
+/* ===== 学习库·今日要求进度条（260915 每日要求） ===== */
+.learn-goal-bar {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.learn-goal-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: currentColor;
+  transition: width 0.3s;
 }

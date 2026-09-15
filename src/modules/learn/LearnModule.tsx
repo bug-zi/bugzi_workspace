@@ -1,6 +1,6 @@
 // 学习库模块（学习库 specs 全量）：今日学习 / 知识树 / 高光笔记 三 tab
 // 知识树（领域→主题→知识点，懒建树）+ 每日新学 3-5 张 + 间隔复习 1/3/7/15 天 + 划词高光/问 AI。
-// 卡片 md 在 md/learn/<id>.md（扁平路径）；问 AI 走「学习·问答」频道（App 层 CHANNEL_BY_MODULE 映射）。
+// 卡片 md 在 md/learn/<id>.md（扁平路径）；划词问 AI 直发弹窗右侧拓展坞（学习·问答频道，与右栏同会话数据）。
 import { useCallback, useEffect, useState } from 'react'
 import type {
   LearnDomain,
@@ -10,8 +10,9 @@ import type {
   LearnHighlightRow,
   LearnNode
 } from '../../renderer/api'
-import type { AiChannel } from '../../shared/types'
+import { SettingsKeys } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
+import { ChannelChatPanel, ChannelChatRail, CHAT_PANEL_W_DEFAULT, CHAT_PANEL_W_MAX, CHAT_PANEL_W_MIN } from '../../components/ChannelChatPanel'
 import MdView from '../../components/MdView'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -21,11 +22,7 @@ import { cancelLearnGen, enqueueLearnGen, setLearnQueueHandlers, useLearnQueue }
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
-
-export interface LearnModuleProps {
-  /** 问 AI：频道由 App 层 CHANNEL_BY_MODULE（learn → 学习·问答）自动映射 */
-  onOpenAi: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
-}
+import { MODULE_NAVIGATE_EVENT } from '../../App'
 
 /** 本地日期 YYYY-MM-DD（到期判断用，与主进程 localDateStr 同口径） */
 function todayStr(): string {
@@ -77,12 +74,23 @@ function fmtTime(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export default function LearnModule(props: LearnModuleProps) {
+/** 深挖后台任务（260915 后台化）：按卡片 id 分桶——弹窗可关、切页可走，完成轻提示点击跳回 */
+type DigJob = { phase: 'loading' | 'done'; content: string; jobId: string | null; title: string }
+
+export default function LearnModule() {
   const { toast } = useToast()
   const [tab, setTab] = useState<'daily' | 'tree' | 'notes'>('daily')
   // 今日学习
-  const [dailyNew, setDailyNew] = useState<LearnDailyRow[]>([])
-  const [dailyReview, setDailyReview] = useState<LearnDailyRow[]>([])
+  const [learnedList, setLearnedList] = useState<LearnDailyRow[]>([])
+  const [reviewList, setReviewList] = useState<LearnDailyRow[]>([])
+  const [req, setReq] = useState<{
+    goal: number
+    done: number
+    streak: number
+    quizStatus: 'answering' | 'graded' | null
+    quizAnswered: number
+    quizTotal: number
+  } | null>(null)
   // 知识树
   const [domains, setDomains] = useState<LearnDomain[]>([])
   const [domainId, setDomainId] = useState<number | null>(null)
@@ -117,6 +125,10 @@ export default function LearnModule(props: LearnModuleProps) {
   const [domainMenu, setDomainMenu] = useState<{ left: number; top: number } | null>(null)
   const [addDomainOpen, setAddDomainOpen] = useState(false)
   const [newDomainName, setNewDomainName] = useState('')
+  // 建树期望说明（260915 优化区）：写入树说明文档「我的期望」，AI 建树时读取参考
+  const [newDomainIntro, setNewDomainIntro] = useState('')
+  // 树说明文档弹窗（领域管理菜单 / 未建树引导入口）
+  const [treeDocOpen, setTreeDocOpen] = useState<{ path: string; name: string } | null>(null)
   const [renameDomainOpen, setRenameDomainOpen] = useState(false)
   const [renameDomainName, setRenameDomainName] = useState('')
   const [addTopicOpen, setAddTopicOpen] = useState(false)
@@ -136,8 +148,16 @@ export default function LearnModule(props: LearnModuleProps) {
 
   const loadDaily = useCallback(async () => {
     const v = await window.api.learn.daily()
-    setDailyNew(v.new)
-    setDailyReview(v.review)
+    setLearnedList(v.learned)
+    setReviewList(v.review)
+    setReq({
+      goal: v.goal,
+      done: v.done,
+      streak: v.streak,
+      quizStatus: v.quizStatus,
+      quizAnswered: v.quizAnswered,
+      quizTotal: v.quizTotal
+    })
   }, [])
 
   const loadHighlights = useCallback(async () => {
@@ -169,9 +189,17 @@ export default function LearnModule(props: LearnModuleProps) {
     if (domainId != null) void loadTree(domainId)
     void window.api.learn.stockCheck()
   })
-  // 总导览深链（260912）：切到今日学习
-  useModuleNavigate('learn', (target) => {
+  // 总导览深链（260912）：切到今日学习；深挖/队列生成完成跳转（260915）：立即打开该卡片弹窗
+  useModuleNavigate('learn', (target, payload) => {
     if (target === 'today') setTab('daily')
+    if (target === 'open-card') {
+      const nid = Number(payload?.nodeId)
+      if (!Number.isFinite(nid)) return
+      window.api.learn
+        .getCard(crypto.randomUUID(), nid)
+        .then((c) => setCard(c))
+        .catch(() => toast('卡片打开失败'))
+    }
   })
 
   // 泵产出渐进到达（learn:stockChanged）：今日列表与树进度刷新
@@ -193,24 +221,37 @@ export default function LearnModule(props: LearnModuleProps) {
     else setFailMsg(msg)
   }
 
+  /** 跨模块跳回打开某张卡片（深挖完成提示 / 队列生成完成提示共用）：派发深链事件（App 切模块，本模块 handler 开卡） */
+  const jumpToCard = useCallback((nodeId: number) => {
+    window.dispatchEvent(
+      new CustomEvent(MODULE_NAVIGATE_EVENT, {
+        detail: { module: 'learn' as const, target: 'open-card', payload: { nodeId } }
+      })
+    )
+  }, [])
+
   /** 待加载队列：就绪后行内实时补上 content_ready（免整树重拉） */
   const markCardReady = useCallback((id: number) => {
     const patch = <T extends LearnNode>(rows: T[]): T[] =>
       rows.map((r) => (r.id === id ? { ...r, content_ready: 1 as const } : r))
-    setDailyNew((rows) => patch(rows))
+    setLearnedList((rows) => patch(rows))
     setTree((topics) => topics.map((t) => ({ ...t, points: patch(t.points) })))
   }, [])
 
-  /** 队列回调注册：就绪回写行 content_ready；失败按既有口径提示（取消静默、未配置去配置） */
+  /** 队列回调注册：就绪回写行 content_ready + 完成轻提示（点击跳回开卡，260915 反馈修订）；
+   *  失败按既有口径提示（取消静默、未配置去配置） */
   useEffect(() => {
     setLearnQueueHandlers({
-      onReady: (id) => markCardReady(id),
+      onReady: (id, title) => {
+        markCardReady(id)
+        toast(`「${title}」已生成，点击查看`, { onClick: () => jumpToCard(id) })
+      },
       onFail: (_id, title, msg) => {
         if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
         else if (!msg.includes('已取消')) toast(`「${title}」生成失败，可再次点击重试`)
       }
     })
-  }, [markCardReady, toast])
+  }, [markCardReady, toast, jumpToCard])
 
   /** 打开卡片：已生成秒开弹窗；未生成 → 加入待加载队列（行内排队/生成中反馈，就绪后行恢复常态再点查看） */
   const openCard = (n: { id: number; content_ready: number; title?: string }): void => {
@@ -264,6 +305,14 @@ export default function LearnModule(props: LearnModuleProps) {
     } finally {
       setTreeJob(null)
     }
+  }
+
+  /** 打开树说明文档（每棵树一份 md：我的期望 + 树内容总览；不存在则按现状创建） */
+  const openTreeDoc = (did: number, name: string): void => {
+    void window.api.learn
+      .treeDoc(did)
+      .then((path) => setTreeDocOpen({ path, name }))
+      .catch(() => toast('树说明文档打开失败'))
   }
 
   /** AI 展开主题 */
@@ -324,22 +373,22 @@ export default function LearnModule(props: LearnModuleProps) {
 
   const onLearn = async (): Promise<void> => {
     if (!card) return
-    await window.api.learn.mark(card.id, 'learn')
-    toast('已学会，明天复习')
+    const r = await window.api.learn.mark(card.id, 'learn')
+    toast(r.completed ? '今日要求完成！' : '已学会，明天复习')
     await refreshAfterMark()
   }
 
   const onRemember = async (): Promise<void> => {
     if (!card) return
-    const ok = await window.api.learn.mark(card.id, 'remember')
-    if (ok) toast(card.review_stage >= 4 ? '已记住，毕业！' : `已记住，${[3, 7, 15][card.review_stage - 1]} 天后复习`)
+    const r = await window.api.learn.mark(card.id, 'remember')
+    if (r.ok) toast(card.review_stage >= 4 ? '已记住，毕业！' : `已记住，${[3, 7, 15][card.review_stage - 1]} 天后复习`)
     await refreshAfterMark()
   }
 
   const onForget = async (): Promise<void> => {
     if (!card) return
-    await window.api.learn.mark(card.id, 'forget')
-    toast('没关系，明天再来')
+    const r = await window.api.learn.mark(card.id, 'forget')
+    if (r.ok) toast('没关系，明天再来')
     await refreshAfterMark()
   }
 
@@ -362,50 +411,103 @@ export default function LearnModule(props: LearnModuleProps) {
     [card, loadHighlights, toast]
   )
 
+  // 问 AI 拓展坞（优化建议区第42轮）：弹窗右侧内嵌「学习·问答」频道会话视图（与右栏同频道同数据），
+  // 布局偏好持久化；划词问 AI 直发坞内，交互不出弹窗
+  const [askPrompt, setAskPrompt] = useState<{ text: string; n: number } | null>(null)
+  const [askPanelW, setAskPanelW] = useState(CHAT_PANEL_W_DEFAULT)
+  const [askCollapsed, setAskCollapsed] = useState(false)
+
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.LearnAskPanelWidth).then((v) => {
+      const n = v ? Number(v) : NaN
+      if (Number.isFinite(n) && n >= CHAT_PANEL_W_MIN && n <= CHAT_PANEL_W_MAX) setAskPanelW(n)
+    })
+    void window.api.settings.get(SettingsKeys.LearnAskPanelCollapsed).then((v) => setAskCollapsed(v === '1'))
+  }, [])
+
+  const changeAskW = (w: number): void => {
+    setAskPanelW(w)
+    void window.api.settings.set(SettingsKeys.LearnAskPanelWidth, String(w))
+  }
+  const toggleAsk = (): void => {
+    const next = !askCollapsed
+    setAskCollapsed(next)
+    void window.api.settings.set(SettingsKeys.LearnAskPanelCollapsed, next ? '1' : '0')
+  }
+
   const onAskAi = useCallback(
-    (text: string) => {
-      props.onOpenAi(`关于知识点「${card?.title ?? ''}」：「${text}」\n\n请帮我讲解。`)
-    },
-    [props]
-  )
-
-  // 深挖（260912 深挖入卡）：弹窗内生成 → 确认写入卡片；不再自动发右栏（右栏追问走手动问 AI）
-  const [dig, setDig] = useState<{ phase: 'loading' | 'done'; content: string; jobId: string | null } | null>(
-    null
-  )
-
-  const onDig = useCallback(
-    async (c: LearnCardRow) => {
-      if (dig?.phase === 'loading') return
+    async (text: string) => {
       if (!(await window.api.ai.configured())) {
         setGoConfig(true)
         return
       }
-      const jobId = crypto.randomUUID()
-      setDig({ phase: 'loading', content: '', jobId })
-      try {
-        const r = await window.api.learn.dig(jobId, c.id)
-        setDig({ phase: 'done', content: r.content, jobId: null })
-      } catch (e) {
-        setDig(null)
-        handleAiError(e)
-      }
+      if (askCollapsed) toggleAsk()
+      setAskPrompt((p) => ({
+        text: `关于知识点「${card?.title ?? ''}」：「${text}」\n\n请帮我讲解。`,
+        n: (p?.n ?? 0) + 1
+      }))
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dig]
+    [card, askCollapsed]
   )
 
-  const cancelDig = (): void => {
-    if (dig?.jobId) void window.api.ai.cancel(dig.jobId)
-    setDig(null)
+  // 深挖（260912 深挖入卡 → 260915 后台化）：请求即入后台（弹窗可关、可切模块继续别的操作），
+  // 完成后轻提示、点击立即跳回该卡片；仍保留「确认后写入」——跳回后在弹窗内点「写入卡片」落库
+  const [digJobs, setDigJobs] = useState<Record<number, DigJob>>({})
+
+  const onDig = useCallback(
+    (c: LearnCardRow) => {
+      if (digJobs[c.id]?.phase === 'loading') return
+      void (async () => {
+        if (!(await window.api.ai.configured())) {
+          setGoConfig(true)
+          return
+        }
+        const jobId = crypto.randomUUID()
+        setDigJobs((m) => ({ ...m, [c.id]: { phase: 'loading', content: '', jobId, title: c.title } }))
+        try {
+          const r = await window.api.learn.dig(jobId, c.id)
+          setDigJobs((m) => ({ ...m, [c.id]: { phase: 'done', content: r.content, jobId: null, title: c.title } }))
+          toast(`「${c.title}」深挖完成，点击查看`, { onClick: () => jumpToCard(c.id) })
+        } catch (e) {
+          setDigJobs((m) => {
+            const next = { ...m }
+            delete next[c.id]
+            return next
+          })
+          const msg = String((e as Error).message)
+          if (msg.includes('已取消')) toast('已取消')
+          else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig(true)
+          else toast(`「${c.title}」深挖失败：${msg.slice(0, 80)}`)
+        }
+      })()
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [digJobs, toast, jumpToCard]
+  )
+
+  /** 取消生成中/放弃已生成的深挖结果 */
+  const cancelDig = (nodeId: number): void => {
+    const job = digJobs[nodeId]
+    if (job?.jobId) void window.api.ai.cancel(job.jobId)
+    setDigJobs((m) => {
+      const next = { ...m }
+      delete next[nodeId]
+      return next
+    })
   }
 
   const onDigApply = async (): Promise<void> => {
-    if (!card || dig?.phase !== 'done') return
+    if (!card) return
+    const job = digJobs[card.id]
+    if (job?.phase !== 'done') return
     try {
-      await window.api.learn.digApply(card.id, dig.content)
+      await window.api.learn.digApply(card.id, job.content)
       toast('已写入卡片')
-      setDig(null)
+      setDigJobs((m) => {
+        const next = { ...m }
+        delete next[card.id]
+        return next
+      })
       setMdVersion((v) => v + 1) // key 变化触发 MdDialog 重挂重读
     } catch (e) {
       toast(`写入失败：${String((e as Error).message).slice(0, 80)}`)
@@ -425,10 +527,16 @@ export default function LearnModule(props: LearnModuleProps) {
   }
 
   const currentDomain = domains.find((d) => d.id === domainId) ?? null
-  const learnedToday = dailyNew.filter((n) => n.state === 'learned').length
+  const quizLabel =
+    req == null
+      ? ''
+      : req.quizStatus === 'graded'
+        ? '已交卷'
+        : req.quizStatus === 'answering'
+          ? `${req.quizAnswered}/${req.quizTotal} 已答`
+          : '未出卷'
   const queueLoading = queue.items.filter((i) => i.phase === 'loading').length
   const queueTotal = queue.items.length
-  const anyTreeReady = domains.some((d) => d.tree_ready === 1)
 
   /** 学习操作条（弹窗 footer）：todo→学会了；到期→记住了/忘记了；其余只读态 */
   const studyBarOf = (c: LearnCardRow) => {
@@ -520,7 +628,7 @@ export default function LearnModule(props: LearnModuleProps) {
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'daily' ? ' active' : ''}`} onClick={() => setTab('daily')}>
           今日学习
-          <span className="zone-count">{dailyNew.length + dailyReview.length}</span>
+          <span className="zone-count">{learnedList.length + reviewList.length}</span>
         </button>
         <button className={`recycle-tab${tab === 'tree' ? ' active' : ''}`} onClick={() => setTab('tree')}>
           知识树
@@ -533,6 +641,28 @@ export default function LearnModule(props: LearnModuleProps) {
 
       {/* ===== 今日学习 ===== */}
       <div className={tab === 'daily' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'daily'}>
+        {/* 今日要求卡（每日要求设计 §五）：目标进度 + 小测状态 + 打卡态 */}
+        <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="material-symbols-outlined">flag</span>
+            <strong>今日要求</strong>
+            <span className="zone-count">
+              {req?.done
+                ? `已完成 · 连胜 ${req.streak} 天`
+                : `未完成${req && req.streak > 0 ? ` · 连胜 ${req.streak} 天` : ''}`}
+            </span>
+            <span className="module-sub" style={{ marginLeft: 'auto' }}>
+              新学 {learnedList.length}/{req?.goal ?? '--'} · 小测{quizLabel}
+            </span>
+          </div>
+          <div className="learn-goal-bar">
+            <div
+              className="learn-goal-fill"
+              style={{ width: `${Math.min(100, req && req.goal > 0 ? (learnedList.length / req.goal) * 100 : 0)}%` }}
+            />
+          </div>
+        </div>
+
         <div className="card" style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
           <button className="btn btn-primary" onClick={() => void runRandom()} disabled={randomJob != null}>
             <span className={`material-symbols-outlined${randomJob ? ' spin' : ''}`}>casino</span>
@@ -552,26 +682,19 @@ export default function LearnModule(props: LearnModuleProps) {
         <div className="zone">
           <div className="zone-header" style={{ cursor: 'default' }}>
             <span className="material-symbols-outlined">fiber_new</span>
-            <span>今日新学</span>
-            <span className="zone-count">{dailyNew.length}</span>
+            <span>今日已学</span>
+            <span className="zone-count">{learnedList.length}</span>
           </div>
           <div className="zone-body">
-            {dailyNew.length === 0 && (
+            {learnedList.length === 0 && (
               <div className="empty-state">
-                <span className="material-symbols-outlined">school</span>
-                {anyTreeReady
-                  ? '树都学完了，去知识树 AI 展开主题或手动添加知识点'
-                  : '还没有已建树领域，去「知识树」生成知识树'}
+                <span className="material-symbols-outlined">radio_button_unchecked</span>
+                今日还没学会新知识点——去「知识树」自己挑一张，或点「随机来一条」
               </div>
             )}
-            {dailyNew.map((n) => (
-              <div
-                className={`row-item${n.content_ready === 0 ? ' row-pending' : ''}`}
-                key={n.id}
-                onClick={() => openCard(n)}
-                style={{ cursor: queue.phaseOf(n.id) === 'loading' ? 'wait' : undefined }}
-              >
-                <RowIcon n={n} gen={queue.phaseOf(n.id) ?? undefined} />
+            {learnedList.map((n) => (
+              <div className="row-item" key={n.id} onClick={() => openCard(n)}>
+                <RowIcon n={n} />
                 <div className="row-main">
                   <div className="row-title">
                     {n.title}
@@ -594,16 +717,16 @@ export default function LearnModule(props: LearnModuleProps) {
           <div className="zone-header" style={{ cursor: 'default' }}>
             <span className="material-symbols-outlined">history_edu</span>
             <span>到期复习</span>
-            <span className="zone-count">{dailyReview.length}</span>
+            <span className="zone-count">{reviewList.length}</span>
           </div>
           <div className="zone-body">
-            {dailyReview.length === 0 && (
+            {reviewList.length === 0 && (
               <div className="empty-state">
                 <span className="material-symbols-outlined">history_edu</span>
                 今日暂无到期复习卡
               </div>
             )}
-            {dailyReview.map((n) => (
+            {reviewList.map((n) => (
               <div className="row-item" key={n.id} onClick={() => openCard(n)}>
                 <RowIcon n={n} />
                 <div className="row-main">
@@ -617,7 +740,11 @@ export default function LearnModule(props: LearnModuleProps) {
           </div>
         </div>
 
-        <LearnQuizZone learnedCount={learnedToday} onWrongChange={setWrongNodes} />
+        <LearnQuizZone
+          learnedCount={learnedList.length}
+          onWrongChange={setWrongNodes}
+          onChanged={() => void loadDaily()}
+        />
       </div>
 
       {/* ===== 知识树 ===== */}
@@ -650,21 +777,33 @@ export default function LearnModule(props: LearnModuleProps) {
               <div className="empty-state">
                 <span className="material-symbols-outlined">park</span>
                 <div>「{currentDomain.name}」还没有知识树</div>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => void runGenerateTree(currentDomain.id)}
-                  disabled={treeJob != null}
-                >
-                  <span className={`material-symbols-outlined${treeJob ? ' spin' : ''}`}>park</span>
-                  {treeJob ? '生成中…' : '生成知识树'}
-                </button>
-                {treeJob && (
-                  <button className="btn" onClick={() => void window.api.ai.cancel(treeJob)}>
-                    <span className="material-symbols-outlined">stop_circle</span>
-                    取消
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => void runGenerateTree(currentDomain.id)}
+                    disabled={treeJob != null}
+                  >
+                    <span className={`material-symbols-outlined${treeJob ? ' spin' : ''}`}>park</span>
+                    {treeJob ? '生成中…' : '生成知识树'}
                   </button>
-                )}
-                <div className="module-sub">AI 生成 5-8 个主题 × 每主题 5-8 个知识点的骨架</div>
+                  <button
+                    className="btn"
+                    title="查看/编辑树说明文档：期望说明会作为 AI 建树的参考"
+                    onClick={() => openTreeDoc(currentDomain.id, currentDomain.name)}
+                  >
+                    <span className="material-symbols-outlined">description</span>
+                    树说明文档
+                  </button>
+                  {treeJob && (
+                    <button className="btn" onClick={() => void window.api.ai.cancel(treeJob)}>
+                      <span className="material-symbols-outlined">stop_circle</span>
+                      取消
+                    </button>
+                  )}
+                </div>
+                <div className="module-sub">
+                  AI 生成 5-8 个主题 × 每主题 5-8 个知识点的骨架；树说明文档中的「我的期望」会作为建树参考
+                </div>
               </div>
             </div>
           </div>
@@ -824,31 +963,29 @@ export default function LearnModule(props: LearnModuleProps) {
         </div>
       </div>
 
-      {/* 卡片弹窗（划词能力 + 学习操作条；md 路径派生 md/learn/<id>.md；key 带 mdVersion 供深挖写入后重读） */}
+      {/* 卡片弹窗（划词能力 + 学习操作条；md 路径派生 md/learn/<id>.md；key 带 mdVersion 供深挖写入后重读）
+          深挖后台化（260915）：关闭弹窗不清深挖任务，完成轻提示可跨模块跳回 */}
       <MdDialog
         key={card ? `${card.id}-${mdVersion}` : 'none'}
         open={card != null}
         title={card?.title ?? ''}
         titleTag={card ? `${card.domain_name} · ${card.topic_title ?? ''}` : undefined}
         filePath={card ? `md/learn/${card.id}.md` : ''}
-        onClose={() => {
-          setCard(null)
-          setDig(null)
-        }}
+        onClose={() => setCard(null)}
         onChanged={() => setMdVersion((v) => v + 1)}
-        selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
+        selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi: (t) => void onAskAi(t) }}
         studyBar={
           card
             ? {
                 ...studyBarOf(card),
                 onDig: () => void onDig(card),
                 digPanel:
-                  dig == null ? undefined : (
+                  digJobs[card.id] == null ? undefined : (
                     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {dig.phase === 'loading' ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span className="module-sub">AI 深挖中…</span>
-                          <button className="btn" onClick={cancelDig} title="取消本次生成">
+                      {digJobs[card.id]!.phase === 'loading' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span className="module-sub">后台深挖中… 可先关闭弹窗，完成后轻提示点击跳回</span>
+                          <button className="btn" onClick={() => cancelDig(card.id)} title="取消本次生成">
                             <span className="material-symbols-outlined">stop_circle</span>
                             取消
                           </button>
@@ -856,13 +993,13 @@ export default function LearnModule(props: LearnModuleProps) {
                       ) : (
                         <>
                           <div className="learn-dig-md">
-                            <MdView md={dig.content} />
+                            <MdView md={digJobs[card.id]!.content} />
                           </div>
                           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                            <button className="btn" onClick={() => setDig(null)}>
+                            <button className="btn" onClick={() => cancelDig(card.id)}>
                               放弃
                             </button>
-                            <button className="btn" onClick={() => void onDig(card)}>
+                            <button className="btn" onClick={() => onDig(card)}>
                               重新生成
                             </button>
                             <button className="btn btn-primary" onClick={() => void onDigApply()}>
@@ -876,6 +1013,29 @@ export default function LearnModule(props: LearnModuleProps) {
                   )
               }
             : undefined
+        }
+        sidePanel={
+          card ? (
+            askCollapsed ? (
+              <ChannelChatRail title="问 AI" onExpand={toggleAsk} />
+            ) : (
+              <ChannelChatPanel
+                channel="learn"
+                sessionKey={SettingsKeys.AiActiveSessionLearn}
+                title="问 AI"
+                icon="school"
+                iconTitle="学习·问答频道 · 与右侧边栏同一会话"
+                placeholder="问 AI…"
+                emptyHint="划词点「问 AI」，答案直接出现在这里；也可直接输入提问"
+                width={askPanelW}
+                onWidthChange={changeAskW}
+                onCollapse={toggleAsk}
+                autoAsk={askPrompt}
+                onAutoAskConsumed={() => setAskPrompt(null)}
+                onNeedConfig={() => setGoConfig(true)}
+              />
+            )
+          ) : undefined
         }
       />
 
@@ -893,6 +1053,18 @@ export default function LearnModule(props: LearnModuleProps) {
             className="ctx-menu"
             style={{ position: 'fixed', top: domainMenu.top, left: Math.max(8, domainMenu.left - 150), zIndex: 300 }}
           >
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                const did = currentDomain.id
+                const name = currentDomain.name
+                setDomainMenu(null)
+                openTreeDoc(did, name)
+              }}
+            >
+              <span className="material-symbols-outlined">description</span>
+              树说明文档
+            </button>
             <button
               className="btn btn-ghost"
               onClick={() => {
@@ -978,19 +1150,26 @@ export default function LearnModule(props: LearnModuleProps) {
         </>
       )}
 
-      {/* 新建领域 */}
+      {/* 新建领域（260915 优化区：附期望说明——写入树说明文档，AI 建树时读取参考） */}
       {addDomainOpen && (
         <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setAddDomainOpen(false)}>
-          <div className="dialog" style={{ width: 380 }}>
+          <div className="dialog" style={{ width: 420 }}>
             <div className="dialog-header">新建领域</div>
-            <div className="dialog-body">
+            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input
                 className="field"
                 value={newDomainName}
                 onChange={(e) => setNewDomainName(e.target.value)}
                 placeholder="领域名（如：编译原理）"
               />
-              <div className="module-sub">创建后进入该领域点「生成知识树」建骨架</div>
+              <textarea
+                className="field"
+                style={{ resize: 'vertical', minHeight: 84, lineHeight: 1.7 }}
+                value={newDomainIntro}
+                onChange={(e) => setNewDomainIntro(e.target.value)}
+                placeholder="希望这棵知识树包含哪些知识点、侧重什么方向？（可选，会写入树说明文档「我的期望」，AI 建树时优先遵循）"
+              />
+              <div className="module-sub">创建后进入该领域点「生成知识树」建骨架；期望说明可随时在树说明文档中修改</div>
             </div>
             <div className="dialog-footer">
               <button className="btn" onClick={() => setAddDomainOpen(false)}>
@@ -1001,10 +1180,11 @@ export default function LearnModule(props: LearnModuleProps) {
                 disabled={!newDomainName.trim()}
                 onClick={() => {
                   void window.api.learn
-                    .domainCreate(newDomainName.trim())
+                    .domainCreate(newDomainName.trim(), newDomainIntro.trim() || undefined)
                     .then(async (id) => {
                       setAddDomainOpen(false)
                       setNewDomainName('')
+                      setNewDomainIntro('')
                       await loadDomains()
                       setDomainId(id)
                       await loadTree(id)
@@ -1021,6 +1201,18 @@ export default function LearnModule(props: LearnModuleProps) {
           </div>
         </div>
       )}
+
+      {/* 树说明文档（每棵树一份 md：我的期望 + 树内容总览，双击可编辑） */}
+      <MdDialog
+        key={treeDocOpen?.path ?? 'tree-doc-none'}
+        open={treeDocOpen != null}
+        title={treeDocOpen ? `「${treeDocOpen.name}」知识树说明` : ''}
+        filePath={treeDocOpen?.path ?? ''}
+        onClose={() => setTreeDocOpen(null)}
+        onChanged={() => {
+          if (domainId != null) void loadTree(domainId)
+        }}
+      />
 
       {/* 领域改名 */}
       {renameDomainOpen && currentDomain && (

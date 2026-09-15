@@ -24,6 +24,10 @@ const ZONES: { status: 'draft' | 'settled' | 'formal'; label: string }[] = [
   { status: 'formal', label: '正式区' }
 ]
 
+/** 拖拽边缘自动滚动参数（优化建议区第42轮）：触发带 64px，贴边全速 12px/帧（约 720px/s，随贴近边缘渐增） */
+const DRAG_EDGE = 64
+const DRAG_MAX_SPEED = 12
+
 export default function MottosModule(props: MottosModuleProps) {
   const { toast } = useToast()
   const [mottos, setMottos] = useState<MottoRecord[]>([])
@@ -121,6 +125,20 @@ export default function MottosModule(props: MottosModuleProps) {
   }, [])
   // 拖拽排序（区内）
   const dragIdRef = useRef<number | null>(null)
+  // 拖拽边缘自动滚动（优化建议区第42轮）：条目多时把句子拖到滚动区顶部/底部附近，
+  // 视口缓缓上/下移动够到屏外目标行。rAF 循环不依赖 dragover 触发频率，速度随贴近边缘渐增
+  const dragScrollRef = useRef<{ el: HTMLElement | null; dir: number; raf: number; lastOver: number }>({
+    el: null,
+    dir: 0,
+    raf: 0,
+    lastOver: 0
+  })
+  useEffect(
+    () => () => {
+      if (dragScrollRef.current.raf) cancelAnimationFrame(dragScrollRef.current.raf)
+    },
+    []
+  )
   // 快速导航（优化建议区）：跳转到目标区——折叠则先展开，再平滑滚动到该区
   const zoneRefs = useRef<Record<string, HTMLElement | null>>({})
   const jumpToZone = (status: string): void => {
@@ -440,20 +458,67 @@ export default function MottosModule(props: MottosModuleProps) {
     return { text: extra > 0 ? `${shown.join('、')} +${extra}` : shown.join('、'), title: list.join('、') }
   }
 
-  // 区内拖拽排序（HTML5 DnD，模式同灵感泉）
+  // 区内拖拽排序（HTML5 DnD，模式同灵感泉）+ 边缘自动滚动
   const onDragStart = (e: React.DragEvent, m: MottoRecord): void => {
     dragIdRef.current = m.id
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', String(m.id))
     ;(e.currentTarget as HTMLElement).classList.add('dragging')
+    dragScrollRef.current.el = findScrollParent(e.currentTarget as HTMLElement)
   }
+
+  const stopDragScroll = (): void => {
+    const a = dragScrollRef.current
+    if (a.raf) cancelAnimationFrame(a.raf)
+    a.raf = 0
+    a.dir = 0
+    a.el = null
+  }
+
+  const stepDragScroll = (): void => {
+    const a = dragScrollRef.current
+    // 护栏：指针拖出滚动区后 dragover 停发，0.5s 内自动停，防止挂着不放越滚越远
+    if (!a.el || a.dir === 0 || performance.now() - a.lastOver > 500) {
+      a.raf = 0
+      return
+    }
+    a.el.scrollTop += a.dir * DRAG_MAX_SPEED
+    a.raf = requestAnimationFrame(stepDragScroll)
+  }
+
+  /** 拖拽经过页面：指针进入滚动区上/下触发带则记录方向并启动滚动循环，速度随贴近边缘渐增 */
+  const onPageDragOver = (e: React.DragEvent): void => {
+    const a = dragScrollRef.current
+    if (!a.el) return
+    a.lastOver = performance.now()
+    const r = a.el.getBoundingClientRect()
+    const y = e.clientY
+    if (y < r.top + DRAG_EDGE) a.dir = -Math.min(1, (r.top + DRAG_EDGE - y) / DRAG_EDGE)
+    else if (y > r.bottom - DRAG_EDGE) a.dir = Math.min(1, (y - (r.bottom - DRAG_EDGE)) / DRAG_EDGE)
+    else a.dir = 0
+    if (a.dir !== 0 && !a.raf) a.raf = requestAnimationFrame(stepDragScroll)
+  }
+
+  /** 从被拖行向上找滚动容器（主栏 .main-area 是全局滚动区，不经 ref 拿） */
+  const findScrollParent = (el: HTMLElement): HTMLElement | null => {
+    let p = el.parentElement
+    while (p) {
+      const oy = getComputedStyle(p).overflowY
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && p.scrollHeight > p.clientHeight) return p
+      p = p.parentElement
+    }
+    return null
+  }
+
   const onDragEnd = (e: React.DragEvent): void => {
     ;(e.currentTarget as HTMLElement).classList.remove('dragging')
     dragIdRef.current = null
+    stopDragScroll()
   }
   /** 拖到某行上 → 插入该位置：目标 sort 减半差，随后全区归一化 */
   const onDropToRow = async (e: React.DragEvent, target: MottoRecord): Promise<void> => {
     e.preventDefault()
+    stopDragScroll()
     const id = Number(e.dataTransfer.getData('text/plain')) || dragIdRef.current
     if (!id || id === target.id) return
     const source = mottos.find((m) => m.id === id)
@@ -471,7 +536,7 @@ export default function MottosModule(props: MottosModuleProps) {
   }
 
   return (
-    <div className="mottos-page">
+    <div className="mottos-page" onDragOver={onPageDragOver}>
       {/* 吸顶导航栏（优化建议区 + v2.0）：左侧区导航跳转，右侧标签筛选 + 搜索，滚动时常驻可用 */}
       <div className="zone-nav">
         {ZONES.map((z) => (

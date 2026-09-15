@@ -297,6 +297,14 @@ select {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   animation: toast-in 0.2s ease;
 }
+/* 可点击轻提示（260915 优化区：深挖完成点击跳转）——容器 pointer-events:none 需逐项放开 */
+.toast-clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
 @keyframes toast-in {
   from {
     opacity: 0;

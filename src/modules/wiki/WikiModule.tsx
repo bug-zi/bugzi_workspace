@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion, WikiLearnRow } from '../../renderer/api'
 import type { AiChannel } from '../../shared/types'
+import { MODULE_NAVIGATE_EVENT } from '../../App'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -89,8 +90,12 @@ export default function WikiModule(props: WikiModuleProps) {
   const quizLoading = quizJob != null
   const [quizQuestions, setQuizQuestions] = useState<WikiQuizQuestion[]>([])
   const [quizIdx, setQuizIdx] = useState(0)
+  // 预选（未提交可改选；260915 优化区：点「提交答案」才正式作答）
   const [quizPick, setQuizPick] = useState<number | null>(null)
+  // 已提交的作答（下标对齐题号，计分依据）
   const [quizPicks, setQuizPicks] = useState<number[]>([])
+  // 当前题是否已提交（提交前仅预选高亮；提交后亮对错 + 解析）
+  const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [quizFinished, setQuizFinished] = useState(false)
 
   const loadSections = useCallback(async () => {
@@ -118,11 +123,15 @@ export default function WikiModule(props: WikiModuleProps) {
   }, [loadSections, loadHighlights, loadLearn])
 
   // keep-alive：切回万象库时刷新板块/词条/高光/待学习（后台生成可能已入库）+ 后库泵触发
-  // 总导览深链（260912）：切到百科 tab 的待学习区视图
+  // 总导览深链（260912）：切到百科 tab 的待学习区视图；深链 quiz（260915 反馈修订）：出题完成跳转
   useModuleNavigate('wiki', (target) => {
     if (target === 'learn-zone') {
       setTab('wiki')
       setView({ kind: 'learn' })
+    }
+    if (target === 'quiz') {
+      setTab('wiki')
+      setView({ kind: 'quiz' })
     }
   })
   useModuleActivated('wiki', () => {
@@ -284,7 +293,14 @@ export default function WikiModule(props: WikiModuleProps) {
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   }
 
-  // ---------- 测一测（优化建议区：随机 5 张卡片各 1 题，逐题反馈） ----------
+  // ---------- 测一测（优化建议区：随机 5 题逐题反馈） ----------
+  /** 出题完成跳转（260915 反馈修订：后台生成轻提示点击即回，跨模块经 App 集中深链切模块） */
+  const jumpToQuiz = useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module: 'wiki' as const, target: 'quiz' } })
+    )
+  }, [])
+
   const startQuiz = async (): Promise<void> => {
     if (quizJob) return
     const jobId = crypto.randomUUID()
@@ -294,33 +310,48 @@ export default function WikiModule(props: WikiModuleProps) {
     setQuizIdx(0)
     setQuizPick(null)
     setQuizPicks([])
+    setQuizSubmitted(false)
     setQuizFinished(false)
     try {
       setQuizQuestions(await window.api.wiki.quiz(jobId))
+      toast('出题完成，点击开始作答', { onClick: jumpToQuiz })
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('已取消')) toast('已取消')
       else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
-      else setFailMsg(msg)
+      else toast(`出题失败：${msg.slice(0, 80)}`)
       setView({ kind: 'overview' })
     } finally {
       setQuizJob(null)
     }
   }
 
+  /** 预选（提交前可反复改选） */
   const pickOption = (i: number): void => {
-    if (quizPick != null) return
+    if (quizSubmitted) return
     setQuizPick(i)
-    setQuizPicks((arr) => [...arr, i])
+  }
+
+  /** 提交答案：正式作答并计分，亮出对错与解析 */
+  const submitAnswer = (): void => {
+    if (quizPick == null || quizSubmitted) return
+    setQuizPicks((arr) => [...arr, quizPick])
+    setQuizSubmitted(true)
   }
 
   const quizNext = (): void => {
-    if (quizPick == null) return
+    if (!quizSubmitted) return
     if (quizIdx + 1 >= quizQuestions.length) setQuizFinished(true)
     else {
       setQuizIdx((v) => v + 1)
       setQuizPick(null)
+      setQuizSubmitted(false)
     }
+  }
+
+  /** 查看本题关联的知识点卡片（弹窗覆盖在答题页上，关闭即回） */
+  const openQuizCard = (entryId: number): void => {
+    void window.api.wiki.entry(entryId).then((x: WikiEntry) => setCardEntry(x))
   }
 
   const quizScore = (): number => quizPicks.filter((p, i) => quizQuestions[i] && p === quizQuestions[i].answer).length
@@ -644,14 +675,25 @@ export default function WikiModule(props: WikiModuleProps) {
                 </div>
                 <div className="quiz-question">{quizQuestions[quizIdx].question}</div>
                 {quizQuestions[quizIdx].options.map((opt, i) => {
-                  const isAnswer = i === quizQuestions[quizIdx].answer
-                  const picked = quizPick === i
-                  const cls = quizPick == null ? '' : isAnswer ? ' correct' : picked ? ' wrong' : ''
+                  const q = quizQuestions[quizIdx]
+                  // 提交前：仅预选高亮；提交后：亮正确项与所选错项
+                  const submittedPick = quizSubmitted ? quizPicks[quizIdx] : null
+                  const isAnswer = i === q.answer
+                  const cls =
+                    submittedPick == null
+                      ? quizPick === i
+                        ? ' selected'
+                        : ''
+                      : isAnswer
+                        ? ' correct'
+                        : i === submittedPick
+                          ? ' wrong'
+                          : ''
                   return (
                     <button
                       key={i}
                       className={`quiz-opt${cls}`}
-                      disabled={quizPick != null}
+                      disabled={quizSubmitted}
                       onClick={() => pickOption(i)}
                     >
                       <span className="quiz-opt-key">{'ABCD'[i]}</span>
@@ -659,17 +701,41 @@ export default function WikiModule(props: WikiModuleProps) {
                     </button>
                   )
                 })}
-                {quizPick != null && (
-                  <div className="quiz-feedback">
-                    <span>
-                      {quizPick === quizQuestions[quizIdx].answer
-                        ? '回答正确'
-                        : `答错了，正确答案是 ${'ABCD'[quizQuestions[quizIdx].answer]}`}
-                    </span>
-                    <button className="btn btn-primary" onClick={quizNext}>
-                      {quizIdx + 1 >= quizQuestions.length ? '查看成绩' : '下一题'}
+                {!quizSubmitted && (
+                  <div className="quiz-actions">
+                    {quizPick != null && <span className="module-sub">已预选 {'ABCD'[quizPick]}</span>}
+                    <button className="btn btn-primary" disabled={quizPick == null} onClick={submitAnswer}>
+                      <span className="material-symbols-outlined">check_circle</span>
+                      提交答案
                     </button>
                   </div>
+                )}
+                {quizSubmitted && (
+                  <>
+                    {quizQuestions[quizIdx].explanation && (
+                      <div className="quiz-analysis">
+                        <div className="quiz-analysis-head">
+                          <span className="material-symbols-outlined">lightbulb</span>
+                          <span>解析</span>
+                        </div>
+                        <div className="quiz-analysis-body">{quizQuestions[quizIdx].explanation}</div>
+                      </div>
+                    )}
+                    <button className="btn quiz-related-btn" onClick={() => openQuizCard(quizQuestions[quizIdx].entryId)}>
+                      <span className="material-symbols-outlined">menu_book</span>
+                      查看相关知识点卡片「{quizQuestions[quizIdx].term}」
+                    </button>
+                    <div className="quiz-feedback">
+                      <span>
+                        {quizPicks[quizIdx] === quizQuestions[quizIdx].answer
+                          ? '回答正确'
+                          : `答错了，正确答案是 ${'ABCD'[quizQuestions[quizIdx].answer]}`}
+                      </span>
+                      <button className="btn btn-primary" onClick={quizNext}>
+                        {quizIdx + 1 >= quizQuestions.length ? '查看成绩' : '下一题'}
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
             )}

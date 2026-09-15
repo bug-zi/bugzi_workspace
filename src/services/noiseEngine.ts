@@ -2,6 +2,7 @@
 // 主链：各层 Gain → master Gain → destination；暂停 = AudioContext 挂起 + 事件调度器停表（层节点保留，恢复不重建）。
 import { SCENES, sceneById, type EventLayerDef, type NoiseLayerDef, type SteadyLayerDef } from './noiseScenes'
 import { nextValidId, shuffleIds } from './queueOrder'
+import { markAudioActive, registerAudioStopper, stopOthers } from './audioExclusive'
 
 /** 稳态层实例资源 */
 interface SteadyNodes {
@@ -121,6 +122,8 @@ class NoiseEngine {
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume()
     this.running = true
+    stopOthers('noise') // 互斥：开播白噪音即停轻音乐（音乐吧设计 §二）
+    markAudioActive('noise')
     this.startSchedulers()
     if (this.queueActiveId != null) this.startQueueTimer() // 队列恢复计时（remainMs 续跑）
     this.emit()
@@ -806,3 +809,6 @@ class NoiseEngine {
 }
 
 export const noiseEngine = new NoiseEngine()
+
+// 互斥注册（音乐吧设计 §二）：轻音乐开播时经 stopOthers 调本 stop 暂停白噪音
+registerAudioStopper('noise', () => noiseEngine.pause())

@@ -222,9 +222,9 @@ const api = {
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
     suggestTerm: (jobId: string, sectionId: number | null): Promise<string> =>
       ipcRenderer.invoke('wiki:suggestTerm', jobId, sectionId),
-    /** 测一测：随机 5 张卡片各出 1 道四选一 */
+    /** 测一测：随机 5 张卡片各出 1 道四选一（带题目解析） */
     quiz: (jobId: string): Promise<
-      { entryId: number; term: string; question: string; options: string[]; answer: number }[]
+      { entryId: number; term: string; question: string; options: string[]; answer: number; explanation: string }[]
     > => ipcRenderer.invoke('wiki:quiz', jobId),
     /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
     deleteForeverEntry: (id: number): Promise<boolean> =>
@@ -671,7 +671,10 @@ const api = {
     /** 领域列表（含树进度统计；出厂 8 领域 seed 见 DB v33） */
     domains: (): Promise<import('../src/shared/types').LearnDomain[]> =>
       ipcRenderer.invoke('learn:domains'),
-    domainCreate: (name: string): Promise<number> => ipcRenderer.invoke('learn:domainCreate', name),
+    domainCreate: (name: string, intro?: string): Promise<number> =>
+      ipcRenderer.invoke('learn:domainCreate', name, intro),
+    /** 树说明文档路径（每棵树一份 md：我的期望 + 树内容总览；不存在则按现状创建） */
+    treeDoc: (domainId: number): Promise<string> => ipcRenderer.invoke('learn:treeDoc', domainId),
     domainRename: (id: number, name: string): Promise<boolean> =>
       ipcRenderer.invoke('learn:domainRename', id, name),
     /** 删领域（需无主题行，否则抛 DOMAIN_NOT_EMPTY；二次确认在渲染层） */
@@ -703,17 +706,16 @@ const api = {
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard: (jobId: string, id: number): Promise<import('../src/shared/types').LearnCardRow> =>
       ipcRenderer.invoke('learn:getCard', jobId, id),
-    /** 今日队列（新学 3-5 + 到期复习 ≤10，定档不重抽；触发幂等定档 + 后台泵） */
-    daily: (): Promise<{
-      new: import('../src/shared/types').LearnDailyRow[]
-      review: import('../src/shared/types').LearnDailyRow[]
-    }> => ipcRenderer.invoke('learn:daily'),
+    /** 今日要求汇总（learned_at 今日动态列表 + 复习 + goal/done/streak/小测状态；触发幂等定档 + 后台泵） */
+    daily: (): Promise<import('../src/shared/types').LearnDailySummary> => ipcRenderer.invoke('learn:daily'),
     /** 随机来一条：优先抽已生成的未学卡秒开；无则现场生成（可取消） */
     randomOne: (jobId: string): Promise<import('../src/shared/types').LearnCardRow> =>
       ipcRenderer.invoke('learn:randomOne', jobId),
-    /** 状态机三操作：learn=学会了(进第1档) | remember=记住了(升档) | forget=忘记了(重置第1档) */
-    mark: (id: number, action: 'learn' | 'remember' | 'forget'): Promise<boolean> =>
-      ipcRenderer.invoke('learn:mark', id, action),
+    /** 状态机三操作：learn=学会了(记 learned_at) | remember | forget；completed=本次操作使今日要求达成 */
+    mark: (
+      id: number,
+      action: 'learn' | 'remember' | 'forget'
+    ): Promise<{ ok: boolean; completed: boolean }> => ipcRenderer.invoke('learn:mark', id, action),
     /** 预生成泵触发（进模块）：fire-and-forget 秒回 */
     stockCheck: (): Promise<boolean> => ipcRenderer.invoke('learn:stockCheck'),
     /** 泵产出渐进通知（照 wiki.onStockChanged 模式），返回取消订阅 */
@@ -739,8 +741,8 @@ const api = {
     /** 单题作答（实时存库；choice/blank 返回本地判定，short 返回 null） */
     quizAnswer: (qIndex: number, answer: string): Promise<boolean | null> =>
       ipcRenderer.invoke('learn:quizAnswer', qIndex, answer),
-    /** 交卷：简答批量 AI 批改后整卷 graded */
-    quizSubmit: (jobId: string): Promise<{ correct: number; total: number }> =>
+    /** 交卷：简答批量 AI 批改后整卷 graded；completed=本次使今日要求达成 */
+    quizSubmit: (jobId: string): Promise<{ correct: number; total: number; completed: boolean }> =>
       ipcRenderer.invoke('learn:quizSubmit', jobId),
     /** 重做：清空作答回 answering（同卷） */
     quizRetry: (): Promise<import('../src/shared/types').LearnQuizView> =>
@@ -766,6 +768,20 @@ const api = {
     /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
     digApply: (nodeId: number, content: string): Promise<{ md: string }> =>
       ipcRenderer.invoke('learn:digApply', nodeId, content)
+  },
+  music: {
+    list: (): Promise<import('../src/shared/types').MusicListResult> => ipcRenderer.invoke('music:list'),
+    importDialog: (): Promise<import('../src/shared/types').MusicImportSummary> =>
+      ipcRenderer.invoke('music:import'),
+    playlistCreate: (name: string): Promise<number> => ipcRenderer.invoke('music:playlistCreate', name),
+    playlistRename: (id: number, name: string): Promise<void> =>
+      ipcRenderer.invoke('music:playlistRename', id, name),
+    playlistDelete: (id: number): Promise<void> => ipcRenderer.invoke('music:playlistDelete', id),
+    trackMove: (id: number, playlistId: number | null): Promise<void> =>
+      ipcRenderer.invoke('music:trackMove', id, playlistId),
+    trackDelete: (id: number): Promise<void> => ipcRenderer.invoke('music:trackDelete', id),
+    duration: (id: number, sec: number): Promise<void> => ipcRenderer.invoke('music:duration', id, sec),
+    file: (id: number): Promise<Uint8Array> => ipcRenderer.invoke('music:file', id)
   },
   ledger: {
     /** 账户列表（含实时余额） */

@@ -970,6 +970,41 @@ function migrate(): void {
     `)
     d.exec('PRAGMA user_version = 38')
   }
+
+  if (version < 39) {
+    // v39：音乐吧轻音乐（2026-09-15-音乐吧-轻音乐-design.md §三）——歌单 + 曲目两张表。
+    // 曲目文件复制进 userData/music/<id>.mp3（DB 存相对路径，同书籍入库模式）；
+    // playlist_id NULL=未分组；删歌单只置空归属不删曲（设计 §四）。
+    d.exec(`CREATE TABLE music_playlists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE music_tracks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      duration_sec REAL,
+      playlist_id INTEGER,
+      added_at TEXT NOT NULL
+    )`)
+    d.exec('PRAGMA user_version = 39')
+  }
+
+  if (version < 40) {
+    // v40：学习库每日要求（2026-09-15-每日要求-design.md §二）——learn_nodes 加 learned_at
+    //（本地时间 ISO，今日已学判定依据）；learn_daily 重建：new_ids 定档机制废除 → goal（每日
+    // 随机 8-10）+ done（显式落库防删卡丢历史）；旧队列数据一并作废（断签无惩罚故无需补记录）。
+    d.exec('ALTER TABLE learn_nodes ADD COLUMN learned_at TEXT')
+    d.exec('DROP TABLE learn_daily')
+    d.exec(`CREATE TABLE learn_daily (
+      date TEXT PRIMARY KEY,
+      goal INTEGER NOT NULL,
+      review_ids TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0
+    )`)
+    d.exec('PRAGMA user_version = 40')
+  }
 }
 
 // ---------- 通用工具 ----------

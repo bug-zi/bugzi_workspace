@@ -104,6 +104,34 @@ export interface WikiQuizQuestion {
   options: string[]
   /** 正确选项下标 0..3 */
   answer: number
+  /** 题目解析（提交后无论对错都展示） */
+  explanation: string
+}
+
+// ===== 音乐吧轻音乐（260915 新功能开发区）=====
+
+export type MusicLoopMode = 'list-loop' | 'single-loop' | 'random'
+export interface MusicPlaylistRow {
+  id: number
+  name: string
+  created_at: string
+}
+export interface MusicTrackRow {
+  id: number
+  title: string
+  file_path: string
+  duration_sec: number | null
+  playlist_id: number | null
+  added_at: string
+}
+export interface MusicImportSummary {
+  imported: number
+  skipped: number
+  failed: number
+}
+export interface MusicListResult {
+  playlists: MusicPlaylistRow[]
+  tracks: MusicTrackRow[]
 }
 
 // ===== 学习库（DB v33，学习库 specs）=====
@@ -131,6 +159,8 @@ export interface LearnNode {
   /** 0=未学 1..4=复习四档 5=毕业（next_review_at 为 NULL） */
   review_stage: number
   next_review_at: string | null
+  /** 学会时刻（本地时间 ISO；NULL=未学。每日要求「今日已学」判定依据） */
+  learned_at: string | null
   content_ready: 0 | 1
   source: 'ai' | 'manual'
   deleted_at: string | null
@@ -153,6 +183,19 @@ export interface LearnCardRow extends LearnNode {
 export interface LearnDailyRow extends LearnNode {
   domain_name: string
   topic_title: string | null
+}
+
+/** 今日要求汇总（learn:daily 返回）：已学列表 + 复习列表 + 目标/完成/连胜/小测状态 */
+export interface LearnDailySummary {
+  learned: LearnDailyRow[]
+  review: LearnDailyRow[]
+  goal: number
+  /** 0=未完成 1=已完成（显式落库，防删卡丢历史） */
+  done: number
+  streak: number
+  quizStatus: 'answering' | 'graded' | null
+  quizAnswered: number
+  quizTotal: number
 }
 
 /** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。
@@ -1283,7 +1326,9 @@ export interface Api {
   learn: {
     /** 领域列表（含树进度统计；出厂 8 领域 seed 见 DB v33） */
     domains(): Promise<LearnDomain[]>
-    domainCreate(name: string): Promise<number>
+    domainCreate(name: string, intro?: string): Promise<number>
+    /** 树说明文档路径（每棵树一份 md：我的期望 + 树内容总览；不存在则按现状创建） */
+    treeDoc(domainId: number): Promise<string>
     domainRename(id: number, name: string): Promise<boolean>
     /** 删领域（需无主题行，否则抛 DOMAIN_NOT_EMPTY） */
     domainDelete(id: number): Promise<boolean>
@@ -1303,12 +1348,12 @@ export interface Api {
     nodeDelete(id: number): Promise<boolean>
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard(jobId: string, id: number): Promise<LearnCardRow>
-    /** 今日队列（新学 + 到期复习，定档不重抽） */
-    daily(): Promise<{ new: LearnDailyRow[]; review: LearnDailyRow[] }>
+    /** 今日要求汇总（已学动态列表 + 复习 + goal/done/streak/小测状态） */
+    daily(): Promise<LearnDailySummary>
     /** 随机来一条：优先已生成未学卡秒开 */
     randomOne(jobId: string): Promise<LearnCardRow>
-    /** 状态机：learn=学会了 | remember=记住了 | forget=忘记了 */
-    mark(id: number, action: 'learn' | 'remember' | 'forget'): Promise<boolean>
+    /** 状态机：learn=学会了 | remember=记住了 | forget=忘记了；completed=本次使今日要求达成 */
+    mark(id: number, action: 'learn' | 'remember' | 'forget'): Promise<{ ok: boolean; completed: boolean }>
     /** 预生成泵触发（进模块） */
     stockCheck(): Promise<boolean>
     /** 泵产出渐进通知，返回取消订阅 */
@@ -1322,8 +1367,8 @@ export interface Api {
     quizCreate(jobId: string, force?: boolean): Promise<LearnQuizView>
     /** 单题作答（实时存库；choice/blank 返回本地判定，short 返回 null） */
     quizAnswer(qIndex: number, answer: string): Promise<boolean | null>
-    /** 交卷：简答批量 AI 批改后整卷 graded */
-    quizSubmit(jobId: string): Promise<{ correct: number; total: number }>
+    /** 交卷：简答批量 AI 批改后整卷 graded；completed=本次使今日要求达成 */
+    quizSubmit(jobId: string): Promise<{ correct: number; total: number; completed: boolean }>
     /** 重做：清空作答回 answering（同卷） */
     quizRetry(): Promise<LearnQuizView>
     /** 主题实战任务列表（创建序倒序） */
@@ -1338,6 +1383,17 @@ export interface Api {
     dig(jobId: string, nodeId: number): Promise<{ content: string }>
     /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
     digApply(nodeId: number, content: string): Promise<{ md: string }>
+  }
+  music: {
+    list(): Promise<MusicListResult>
+    importDialog(): Promise<MusicImportSummary>
+    playlistCreate(name: string): Promise<number>
+    playlistRename(id: number, name: string): Promise<void>
+    playlistDelete(id: number): Promise<void>
+    trackMove(id: number, playlistId: number | null): Promise<void>
+    trackDelete(id: number): Promise<void>
+    duration(id: number, sec: number): Promise<void>
+    file(id: number): Promise<Uint8Array>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>

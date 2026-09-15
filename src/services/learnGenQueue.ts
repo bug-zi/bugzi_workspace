@@ -55,9 +55,9 @@ export function useLearnQueue(): LearnQueueSnapshot {
   return useSyncExternalStore(subscribeLearnQueue, getLearnQueueSnapshot)
 }
 
-/** 就绪/失败回调（LearnModule 注册：就绪回写行 content_ready，失败定 toast/去配置口径） */
+/** 就绪/失败回调（LearnModule 注册：就绪回写行 content_ready + 完成轻提示，失败定 toast/去配置口径） */
 let handlers: {
-  onReady: (id: number) => void
+  onReady: (id: number, title: string) => void
   onFail: (id: number, title: string, msg: string) => void
 } = {
   onReady: () => {},
@@ -79,7 +79,7 @@ function pump(): void {
     rebuild()
     window.api.learn
       .getCard(jobId, job.id)
-      .then(() => handlers.onReady(job.id))
+      .then(() => handlers.onReady(job.id, job.title))
       .catch((e: unknown) => handlers.onFail(job.id, job.title, String((e as Error).message)))
       .finally(() => {
         jobIds.delete(job.id)

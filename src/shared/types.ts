@@ -90,9 +90,14 @@ export const SettingsKeys = {
   // 学习库（260911）：「学习·问答」频道激活会话
   AiActiveSessionLearn: 'ai_active_session_learn',
   AiActiveSessionProphet: 'ai_active_session_prophet',
+  // 学习库卡片弹窗问 AI 拓展坞（优化建议区第42轮）：宽度与收起态
+  LearnAskPanelWidth: 'learn_ask_panel_width',
+  LearnAskPanelCollapsed: 'learn_ask_panel_collapsed',
   // 启动行为（260912）：开机自启（'1'/'0'）+ 关闭按钮行为（'tray' 隐藏到托盘 | 'exit' 直接退出）
   LaunchOnBoot: 'launch_on_boot',
-  CloseAction: 'close_action'
+  CloseAction: 'close_action',
+  // 音乐吧（260915 新功能开发区）：轻音乐播放状态 JSON { trackId, loopMode, volume }（重启记参数默认暂停）
+  MusicState: 'music_state'
 } as const
 
 // 内置终端（260912）：shell 三选 + 默认工作目录 + 面板高度（settings JSON 键 terminal）
@@ -106,6 +111,40 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   shell: 'powershell',
   cwd: 'D:\\Code\\myapp\\bugzi_workspace',
   height: 380
+}
+
+// 音乐吧轻音乐（260915 新功能开发区）
+export type MusicLoopMode = 'list-loop' | 'single-loop' | 'random'
+
+export interface MusicPlaylistRow {
+  id: number
+  name: string
+  created_at: string
+}
+
+export interface MusicTrackRow {
+  id: number
+  title: string
+  /** 相对 userData 的路径 music/<id>.mp3 */
+  file_path: string
+  /** 懒获取：首次播放读 audio.duration 回写；NULL 显示 --:-- */
+  duration_sec: number | null
+  /** NULL=未分组 */
+  playlist_id: number | null
+  added_at: string
+}
+
+/** music:import 返回汇总 */
+export interface MusicImportSummary {
+  imported: number
+  skipped: number
+  failed: number
+}
+
+/** music:list 返回 */
+export interface MusicListResult {
+  playlists: MusicPlaylistRow[]
+  tracks: MusicTrackRow[]
 }
 /** 从 settings 原始 JSON 解析终端配置（坏数据/缺字段逐项回落默认） */
 export function parseTerminalSettings(raw: string | null | undefined): TerminalSettings {
@@ -354,6 +393,8 @@ export interface LearnNode {
   /** 0=未学 1..4=复习四档 5=毕业（next_review_at 为 NULL，不再出现） */
   review_stage: number
   next_review_at: string | null
+  /** 学会时刻（本地时间 ISO；NULL=未学。每日要求「今日已学」判定依据） */
+  learned_at: string | null
   content_ready: 0 | 1
   source: 'ai' | 'manual'
   deleted_at: string | null
@@ -379,6 +420,19 @@ export interface LearnCardRow extends LearnNode {
 export interface LearnDailyRow extends LearnNode {
   domain_name: string
   topic_title: string | null
+}
+
+/** 今日要求汇总（learn:daily 返回）：已学列表 + 复习列表 + 目标/完成/连胜/小测状态 */
+export interface LearnDailySummary {
+  learned: LearnDailyRow[]
+  review: LearnDailyRow[]
+  goal: number
+  /** 0=未完成 1=已完成（显式落库，防删卡丢历史） */
+  done: number
+  streak: number
+  quizStatus: 'answering' | 'graded' | null
+  quizAnswered: number
+  quizTotal: number
 }
 
 /** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。

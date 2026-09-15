@@ -8,10 +8,12 @@ import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 
 export interface LearnQuizZoneProps {
-  /** 今日新学中已学会张数（<2 不可出卷） */
+  /** 今日已学张数（<2 不可出卷） */
   learnedCount: number
   /** 卷状态变化时上抛答错节点 id 集合（LearnModule 行内标记用） */
   onWrongChange: (ids: Set<number>) => void
+  /** 出卷/交卷/重做后上抛（LearnModule 刷新今日要求卡的小测状态） */
+  onChanged?: () => void
 }
 
 export default function LearnQuizZone(props: LearnQuizZoneProps) {
@@ -67,6 +69,7 @@ export default function LearnQuizZone(props: LearnQuizZoneProps) {
     try {
       const q = await window.api.learn.quizCreate(crypto.randomUUID(), force)
       setQuiz(q)
+      props.onChanged?.()
     } catch (e) {
       handleAiError(e)
     } finally {
@@ -97,6 +100,7 @@ export default function LearnQuizZone(props: LearnQuizZoneProps) {
       const fresh = await window.api.learn.quizGet()
       setQuiz(fresh)
       pushWrong(fresh)
+      props.onChanged?.()
       toast(`小测完成：答对 ${r.correct}/${r.total}`)
     } catch (e) {
       handleAiError(e)
@@ -111,6 +115,7 @@ export default function LearnQuizZone(props: LearnQuizZoneProps) {
       setQuiz(q)
       setDrafts({})
       pushWrong(q)
+      props.onChanged?.()
     } catch (e) {
       handleAiError(e)
     }
@@ -136,7 +141,7 @@ export default function LearnQuizZone(props: LearnQuizZoneProps) {
             <button
               className="btn btn-primary"
               disabled={creating || props.learnedCount < 2}
-              title={props.learnedCount < 2 ? '今日新学需先学会至少 2 张才能小测' : '基于今日已学的卡出卷'}
+              title={props.learnedCount < 2 ? '今日需先学会至少 2 张才能小测' : '基于今日已学的卡出卷'}
               onClick={() => void create()}
             >
               <span className={`material-symbols-outlined${creating ? ' spin' : ''}`}>
@@ -183,7 +188,7 @@ export default function LearnQuizZone(props: LearnQuizZoneProps) {
           <div className="empty-state">
             <span className="material-symbols-outlined">quiz</span>
             {props.learnedCount < 2
-              ? '今日新学学会至少 2 张后，可在这里小测检验'
+              ? '今日学会至少 2 张后，可在这里小测检验'
               : '今日已学卡就绪，点「小测一下」检验掌握程度'}
           </div>
         )}

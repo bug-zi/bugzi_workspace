@@ -1,13 +1,12 @@
 // 致知己模块（致知己 specs §2 + 优化建议区第13/14轮）：问题 + 多版本答案，保存即版本，
 // 弹窗右侧内嵌追问栏（可收起/拖宽/多会话，与全局边栏同频道同数据），AI 只追问不代笔
-import { useEffect, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
-import type { AiChannel, AiMessageRow, AiSessionRow, ZhijijiQuestion, ZhijijiVersion } from '../../renderer/api'
+import { useEffect, useState } from 'react'
+import type { AiChannel, ZhijijiQuestion, ZhijijiVersion } from '../../renderer/api'
 import MdDialog from '../../components/MdDialog'
 import ActionMenu from '../../components/ActionMenu'
+import { ChannelChatPanel, ChannelChatRail, CHAT_PANEL_W_DEFAULT, CHAT_PANEL_W_MAX, CHAT_PANEL_W_MIN, clampChatPanelW } from '../../components/ChannelChatPanel'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
-import MdView from '../../components/MdView'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
@@ -34,423 +33,10 @@ const parseTagInput = (raw: string): string[] =>
 const PROFILE_SUGGEST_RE = /^<<<PROFILE_SUGGEST:[^>]*>>>\s*$/m
 const PROFILE_LOOKUP_RE = /^<<<PROFILE_LOOKUP:[^>]*>>>\s*$/m
 
-/** 追问栏宽度范围与默认（优化建议区第14轮：拖拽调宽，弹窗总宽不变正文区伸缩） */
-const PANEL_W_MIN = 240
-const PANEL_W_MAX = 560
-const PANEL_W_DEFAULT = 320
-
-const clampPanelW = (w: number): number => Math.min(PANEL_W_MAX, Math.max(PANEL_W_MIN, Math.round(w)))
-
 function fmtTime(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso)
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-const ROLE_LABEL: Record<string, string> = { user: '我', assistant: 'AI', system: '系统' }
-
-/** 相对时间（会话切换器用，同 AiSidebar） */
-function relTime(iso: string): string {
-  const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return ''
-  const diff = Date.now() - t
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return `${m} 分钟前`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  const d = Math.floor(h / 24)
-  if (d < 30) return `${d} 天前`
-  return new Date(t).toLocaleDateString('zh-CN')
-}
-
-/** 追问栏收起后的右侧细条：点击展开 */
-function PanelRail(props: { onExpand: () => void }) {
-  return (
-    <div className="zj-chat-rail">
-      <button className="icon-btn" onClick={props.onExpand} title="展开追问栏">
-        <span className="material-symbols-outlined">chevron_left</span>
-      </button>
-      <span className="zj-chat-rail-text">追问</span>
-    </div>
-  )
-}
-
-/** 弹窗内嵌追问栏（优化建议区第13/14轮）：致知己·追问频道的会话视图 + 输入发送，
- *  与全局 AI 边栏同频道同数据；支持收起、拖宽、会话切换、/clear 与 /compact */
-function ZhijijiChat(props: {
-  width: number
-  onWidthChange: (w: number) => void
-  onCollapse: () => void
-  autoAsk: { text: string; n: number } | null
-  onAutoAskConsumed: () => void
-  onNeedConfig: () => void
-}) {
-  const { width, onWidthChange, onCollapse, autoAsk, onAutoAskConsumed, onNeedConfig } = props
-  const { toast } = useToast()
-  const [messages, setMessages] = useState<AiMessageRow[]>([])
-  const [sessions, setSessions] = useState<AiSessionRow[]>([])
-  const [sessOpen, setSessOpen] = useState(false)
-  const [renamingId, setRenamingId] = useState<number | null>(null)
-  const [renameText, setRenameText] = useState('')
-  const [delSess, setDelSess] = useState<{ id: number; title: string } | null>(null)
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const [sendJob, setSendJob] = useState<string | null>(null)
-  const listRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  const sidRef = useRef<number | null>(null)
-  const sendingRef = useRef(false)
-
-  const loadSessions = async (): Promise<void> => {
-    setSessions(await window.api.aiSession.list('zhijiji'))
-  }
-
-  /** 载入致知己频道的激活会话消息（激活失效则兜底该频道最近一个） */
-  const load = async (): Promise<void> => {
-    const list = await window.api.aiSession.list('zhijiji')
-    const active = await window.api.aiSession.active('zhijiji')
-    const aid = active != null && list.some((s) => s.id === active) ? active : (list[0]?.id ?? null)
-    sidRef.current = aid
-    setSessions(list)
-    if (aid != null) setMessages(await window.api.ai.messages(aid))
-    else setMessages([])
-  }
-
-  useEffect(() => {
-    void load()
-  }, [])
-
-  // 新消息自动滚底
-  useEffect(() => {
-    const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, sending])
-
-  /** 输入框高度自适应（同全局边栏第17轮）：基准两行随内容长高，超过 CSS max-height（30vh）后内部滚动 */
-  const fitInput = (): void => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }
-
-  // 输入或追问栏宽度变化（折行数变化）→ 重算输入框高度
-  useEffect(() => {
-    fitInput()
-  }, [input, width])
-
-  /** 切换会话（同频道内），并设为频道激活（全局边栏与追问栏保持一致） */
-  const switchSession = async (id: number): Promise<void> => {
-    if (id === sidRef.current) {
-      setSessOpen(false)
-      return
-    }
-    sidRef.current = id
-    setSessOpen(false)
-    await window.api.settings.set(SettingsKeys.AiActiveSessionZhijiji, String(id))
-    setMessages(await window.api.ai.messages(id))
-  }
-
-  /** 新会话（手动开启；/clear 清空当前会话走 clearAiSession） */
-  const newSession = async (): Promise<void> => {
-    const s = await window.api.aiSession.create('zhijiji')
-    await window.api.settings.set(SettingsKeys.AiActiveSessionZhijiji, String(s.id))
-    sidRef.current = s.id
-    setSessions((arr) => [s, ...arr])
-    setMessages([])
-    setSessOpen(false)
-  }
-
-  /** 会话改名提交（Enter） */
-  const commitRename = async (id: number): Promise<void> => {
-    const title = renameText.trim()
-    setRenamingId(null)
-    if (!title) return
-    await window.api.aiSession.rename(id, title)
-    await loadSessions()
-  }
-
-  /** 删除会话（二次确认）：主进程删消息+会话行，删的是激活会话时同频道自动切换 */
-  const doDeleteSession = async (): Promise<void> => {
-    if (!delSess) return
-    setDelSess(null)
-    await window.api.aiSession.delete(delSess.id, 'zhijiji')
-    await load()
-  }
-
-  const sendText = async (text: string): Promise<void> => {
-    const t = text.trim()
-    if (!t || sendingRef.current) return
-    // 斜杠命令（优化建议区第14轮及修订）：/clear 清空当前会话；/compact 压缩当前会话上下文
-    const cmd = t.match(/^\/(clear|compact)$/i)
-    if (cmd) {
-      const name = cmd[1].toLowerCase()
-      const sid = sidRef.current
-      if (name === 'clear') {
-        if (sid == null) {
-          toast('当前没有会话可清空')
-          return
-        }
-        await window.api.aiSession.clear(sid)
-        setMessages([])
-        toast('已清空当前会话（上下文与记录一并清除）')
-        return
-      }
-      if (sid == null) {
-        toast('当前没有会话可压缩')
-        return
-      }
-      sendingRef.current = true
-      setSending(true)
-      const jobId = crypto.randomUUID()
-      setSendJob(jobId)
-      try {
-        const ns = await window.api.aiSession.compact(jobId, sid)
-        await window.api.settings.set(SettingsKeys.AiActiveSessionZhijiji, String(ns.id))
-        sidRef.current = ns.id
-        await loadSessions()
-        setMessages(await window.api.ai.messages(ns.id))
-        toast('已压缩为前情摘要（原会话保留在列表）')
-      } catch (e) {
-        const msg = String((e as Error).message)
-        toast(msg.includes('已取消') ? '已取消' : `压缩失败：${msg.slice(0, 80)}`)
-      } finally {
-        sendingRef.current = false
-        setSending(false)
-        setSendJob(null)
-      }
-      return
-    }
-    sendingRef.current = true
-    setSending(true)
-    const jobId = crypto.randomUUID()
-    setSendJob(jobId)
-    let sid = sidRef.current
-    try {
-      if (sid == null) {
-        const s = await window.api.aiSession.create('zhijiji')
-        await window.api.settings.set(SettingsKeys.AiActiveSessionZhijiji, String(s.id))
-        sid = s.id
-        sidRef.current = sid
-      }
-      // 乐观上屏（同全局边栏第11轮）：负 id 临时行，完成后由 DB 记录替换
-      setMessages((arr) => [
-        ...arr,
-        { id: -Date.now(), session_id: sid ?? -1, role: 'user', ai_module: null, content: t, created_at: '' }
-      ])
-      await window.api.ai.chat(jobId, t, 'zhijiji', sid, 'zhijiji')
-      if (sidRef.current === sid) await load()
-      else await loadSessions()
-    } catch (e) {
-      const msg = String((e as Error).message)
-      if (msg.includes('LLM_NOT_CONFIGURED')) onNeedConfig()
-      else if (msg.includes('已取消')) {
-        // 取消：用户消息主进程已落库，重载替换乐观行；不产生 assistant 回复、不加错误占位
-        if (sid != null && sidRef.current === sid) await load()
-      } else
-        setMessages((arr) => [
-          ...arr,
-          { id: -Date.now(), session_id: sid ?? -1, role: 'system', ai_module: null, content: `请求失败：${msg}`, created_at: '' }
-        ])
-    } finally {
-      sendingRef.current = false
-      setSending(false)
-      setSendJob(null)
-    }
-  }
-
-  // 版本条「让 AI 追问」→ 直发进本栏
-  useEffect(() => {
-    if (!autoAsk) return
-    void sendText(autoAsk.text).then(() => onAutoAskConsumed())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoAsk])
-
-  /** 左缘拖拽调宽（同全局边栏模式）：移动中实时生效，松手经父组件持久化 */
-  const startResize = (e: ReactMouseEvent<HTMLDivElement>): void => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startWidth = width
-    const onMove = (ev: MouseEvent): void => onWidthChange(clampPanelW(startWidth + (ev.clientX - startX)))
-    const onUp = (ev: MouseEvent): void => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.userSelect = ''
-      onWidthChange(clampPanelW(startWidth + (ev.clientX - startX)))
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    document.body.style.userSelect = 'none'
-  }
-
-  const curSession = sessions.find((s) => s.id === sidRef.current) ?? null
-
-  return (
-    <div className="zj-chat" style={{ width: `${width}px` }}>
-      <div className="zj-chat-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
-      <div className="zj-chat-head">
-        <span className="material-symbols-outlined" title="较真的朋友 · 只提问不代笔">
-          contact_support
-        </span>
-        <span className="zj-chat-title">追问</span>
-        {/* 会话切换器（优化建议区第14轮）：问题关联与否由你决定怎么分会话 */}
-        <button className="zj-chat-sess" onClick={() => setSessOpen((v) => !v)} title="切换/新建会话">
-          <span className="zj-chat-sess-name">{curSession ? curSession.title : '新会话'}</span>
-          <span className="material-symbols-outlined">{sessOpen ? 'expand_less' : 'expand_more'}</span>
-        </button>
-        <button className="icon-btn" onClick={() => void newSession()} title="开启新会话（/clear）">
-          <span className="material-symbols-outlined">add</span>
-        </button>
-        <button className="icon-btn" onClick={onCollapse} title="收起追问栏">
-          <span className="material-symbols-outlined">chevron_right</span>
-        </button>
-        {sessOpen && (
-          <div className="zj-chat-sess-pop">
-            {sessions.length === 0 && <div className="zj-chat-sess-empty">暂无会话</div>}
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`zj-chat-sess-item${s.id === sidRef.current ? ' active' : ''}`}
-                onClick={() => void switchSession(s.id)}
-                title="单击切换会话"
-              >
-                {renamingId === s.id ? (
-                  <input
-                    className="zj-chat-sess-rename"
-                    value={renameText}
-                    autoFocus
-                    maxLength={50}
-                    onChange={(e) => setRenameText(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        void commitRename(s.id)
-                      }
-                      if (e.key === 'Escape') setRenamingId(null)
-                    }}
-                    onBlur={() => setRenamingId(null)}
-                  />
-                ) : (
-                  <>
-                    <span className="zj-chat-sess-it-title">{s.title}</span>
-                    <span className="zj-chat-sess-it-time">{relTime(s.updated_at)}</span>
-                    <button
-                      className="zj-chat-sess-act"
-                      title="重命名会话"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setRenamingId(s.id)
-                        setRenameText(s.title)
-                      }}
-                    >
-                      <span className="material-symbols-outlined">edit</span>
-                    </button>
-                    <button
-                      className="zj-chat-sess-act del"
-                      title="删除该会话"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setDelSess({ id: s.id, title: s.title })
-                      }}
-                    >
-                      <span className="material-symbols-outlined">delete</span>
-                    </button>
-                  </>
-                )}
-              </div>
-            ))}
-            <button className="btn zj-chat-sess-new" onClick={() => void newSession()}>
-              <span className="material-symbols-outlined">add</span>
-              新会话
-            </button>
-          </div>
-        )}
-      </div>
-      <div className="zj-chat-list" ref={listRef}>
-        {messages.length === 0 && (
-          <div className="zj-chat-empty">
-            点版本条上的「让 AI 追问」，或直接在这里和 AI 讨论当前答案
-          </div>
-        )}
-        {messages.map((m) => {
-          const body = m.content.replace(PROFILE_SUGGEST_RE, '').replace(PROFILE_LOOKUP_RE, '').trim()
-          return (
-            <div key={m.id} className={`ai-msg ${m.role}`}>
-              <div className="ai-msg-role">
-                <span>{ROLE_LABEL[m.role] ?? m.role}</span>
-              </div>
-              {m.role === 'assistant' ? (
-                <MdView md={body} className="ai-msg-content" />
-              ) : (
-                <div className="ai-msg-content">{body}</div>
-              )}
-            </div>
-          )
-        })}
-        {sending && (
-          <div className="ai-msg assistant">
-            <div className="ai-msg-role">AI</div>
-            <div className="ai-msg-content">
-              思考中…
-              {sendJob && (
-                <button
-                  className="btn btn-ghost ai-stop"
-                  onClick={() => void window.api.ai.cancel(sendJob)}
-                  title="停止生成"
-                >
-                  <span className="material-symbols-outlined">stop_circle</span>
-                  停止生成
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="zj-chat-input">
-        <textarea
-          ref={inputRef}
-          placeholder={'回应追问…'}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              const text = input.trim()
-              if (!text || sendingRef.current) return
-              setInput('')
-              void sendText(text)
-            }
-          }}
-          rows={2}
-        />
-        <button
-          className="btn btn-primary"
-          disabled={sending || !input.trim()}
-          onClick={() => {
-            const text = input.trim()
-            if (!text || sendingRef.current) return
-            setInput('')
-            void sendText(text)
-          }}
-        >
-          <span className="material-symbols-outlined">send</span>
-        </button>
-      </div>
-      {/* 删除会话二次确认（全局规则） */}
-      <ConfirmDialog
-        open={delSess != null}
-        title="删除会话"
-        confirmText="删除"
-        danger
-        onConfirm={() => void doDeleteSession()}
-        onCancel={() => setDelSess(null)}
-      >
-        将彻底删除会话「{delSess?.title}」及其全部消息，删除后不可恢复。
-      </ConfirmDialog>
-    </div>
-  )
 }
 
 export default function ZhijijiModule(props: ZhijijiModuleProps) {
@@ -471,7 +57,7 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   // 追问栏自动发送请求（版本条「让 AI 追问」）
   const [askPrompt, setAskPrompt] = useState<{ text: string; n: number } | null>(null)
   // 追问栏布局（优化建议区第14轮）：宽度 + 收起态，持久化 settings
-  const [panelW, setPanelW] = useState(PANEL_W_DEFAULT)
+  const [panelW, setPanelW] = useState(CHAT_PANEL_W_DEFAULT)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   // 删除确认 / LLM 未配置
   const [discardTarget, setDiscardTarget] = useState<ZhijijiQuestion | null>(null)
@@ -514,7 +100,7 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
     // 追问栏布局偏好
     void window.api.settings.get(SettingsKeys.ZjPanelWidth).then((v) => {
       const n = v ? Number(v) : NaN
-      if (Number.isFinite(n) && n >= PANEL_W_MIN && n <= PANEL_W_MAX) setPanelW(n)
+      if (Number.isFinite(n) && n >= CHAT_PANEL_W_MIN && n <= CHAT_PANEL_W_MAX) setPanelW(n)
     })
     void window.api.settings.get(SettingsKeys.ZjPanelCollapsed).then((v) => setPanelCollapsed(v === '1'))
   }, [])
@@ -849,9 +435,17 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         sidePanel={
           viewQ ? (
             panelCollapsed ? (
-              <PanelRail onExpand={togglePanel} />
+              <ChannelChatRail title="追问" onExpand={togglePanel} />
             ) : (
-              <ZhijijiChat
+              <ChannelChatPanel
+                channel="zhijiji"
+                sessionKey={SettingsKeys.AiActiveSessionZhijiji}
+                title="追问"
+                icon="contact_support"
+                iconTitle="较真的朋友 · 只提问不代笔"
+                placeholder="回应追问…"
+                emptyHint="点版本条上的「让 AI 追问」，或直接在这里和 AI 讨论当前答案"
+                stripPatterns={[PROFILE_SUGGEST_RE, PROFILE_LOOKUP_RE]}
                 width={panelW}
                 onWidthChange={changePanelW}
                 onCollapse={togglePanel}
