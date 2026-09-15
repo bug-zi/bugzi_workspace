@@ -1,8 +1,10 @@
 // 阅读视图（信息源 specs §3.2）：AI 总结卡（jobId 全局取消接线）+ 消毒正文 + 去原文
 // 260911：头部加显式已读/再看看与收藏星标（与列表行双入口）
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
+import { SettingsKeys } from '../../shared/types'
 import type { ArticleRecord } from '../../shared/types'
+import { useAppSettings } from '../../theme/ThemeProvider'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 
@@ -30,8 +32,29 @@ export function relTime(iso: string | null): string {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
 }
 
+// ===== Ctrl+滚轮字体缩放（260916 新功能开发区）：仅阅读视图，全局记一档（settings feed_reader_zoom）=====
+const ZOOM_MIN = 80
+const ZOOM_MAX = 200
+const ZOOM_STEP = 10
+const ZOOM_DEFAULT = 100
+
+function clampZoom(v: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v))
+}
+
+/** settings 原始值解析：非数字/非正/越界回落 100，并对齐 10 步进 */
+function parseZoom(raw: string | undefined): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) return ZOOM_DEFAULT
+  return clampZoom(Math.round(n / ZOOM_STEP) * ZOOM_STEP)
+}
+
 export default function ArticleView(props: Props) {
   const { toast } = useToast()
+  const { settings, setSetting } = useAppSettings()
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [zoom, setZoom] = useState<number>(() => parseZoom(settings[SettingsKeys.FeedZoom]))
+  const [zoomBarVisible, setZoomBarVisible] = useState(false)
   const [summary, setSummary] = useState<string | null>(props.article.summary_text)
   const [genJob, setGenJob] = useState<string | null>(null)
   const [genError, setGenError] = useState('')
@@ -87,6 +110,31 @@ export default function ArticleView(props: Props) {
     }
   }
 
+  // Ctrl+滚轮缩放：原生非 passive 监听（React 合成 onWheel 是 passive，preventDefault 无效）
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey) return
+      e.preventDefault() // 阻断 Chromium/Electron 默认整页缩放
+      setZoom((z) => clampZoom(z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // 缩放落库（全局一档记忆；挂载时回写同值无副作用）
+  useEffect(() => {
+    void setSetting(SettingsKeys.FeedZoom, String(zoom))
+  }, [zoom, setSetting])
+
+  // 指示条：变化浮出，1.5s 无变化淡出
+  useEffect(() => {
+    setZoomBarVisible(true)
+    const t = window.setTimeout(() => setZoomBarVisible(false), 1500)
+    return () => window.clearTimeout(t)
+  }, [zoom])
+
   // 打开文章：无缓存总结自动生成（specs §3.2）
   useEffect(() => {
     setSummary(props.article.summary_text)
@@ -127,8 +175,8 @@ export default function ArticleView(props: Props) {
         )}
       </div>
 
-      <div className="feed-reader-scroll">
-        <article className="feed-article">
+      <div className="feed-reader-scroll" ref={scrollRef}>
+        <article className="feed-article" style={{ fontSize: `${zoom}%` }}>
           <h1>{props.article.title}</h1>
           <div className="feed-article-meta">
             <span>{props.feedTitle}</span>
@@ -189,6 +237,13 @@ export default function ArticleView(props: Props) {
           )}
         </article>
       </div>
+
+      {zoomBarVisible && (
+        <button className="feed-zoom-bar" title="点击复位 100%" onClick={() => setZoom(ZOOM_DEFAULT)}>
+          <span className="material-symbols-outlined">text_increase</span>
+          {zoom}%
+        </button>
+      )}
 
       <GoConfigDialog
         open={goConfig}

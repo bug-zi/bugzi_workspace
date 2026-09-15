@@ -610,7 +610,17 @@ const api = {
     /** 笔记总览 md（按需生成，不落盘） */
     notesOverviewMd: (bookId: number): Promise<string> => ipcRenderer.invoke('books:notesOverviewMd', bookId),
     /** 导出读书笔记（保存对话框在主进程；取消返回 null） */
-    exportNotes: (bookId: number): Promise<string | null> => ipcRenderer.invoke('books:exportNotes', bookId)
+    exportNotes: (bookId: number): Promise<string | null> => ipcRenderer.invoke('books:exportNotes', bookId),
+    // ----- 文件夹（DB v42，260916 图书馆升级） -----
+    folderList: (): Promise<import('../src/shared/types').BookFolderCount[]> =>
+      ipcRenderer.invoke('books:folderList'),
+    folderCreate: (name: string): Promise<import('../src/shared/types').BookFolder> =>
+      ipcRenderer.invoke('books:folderCreate', name),
+    folderRename: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('books:folderRename', id, name),
+    folderDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('books:folderDelete', id),
+    moveTo: (bookId: number, folderId: number | null): Promise<boolean> =>
+      ipcRenderer.invoke('books:moveTo', bookId, folderId)
   },
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -929,6 +939,29 @@ const api = {
       ipcRenderer.on('terminal:exit', listener)
       return () => ipcRenderer.removeListener('terminal:exit', listener)
     }
+  },
+  challenge: {
+    /** 定档 + 取当日（无当日行自动随机定档；池空 daily=null）+ 池条数（换一条置灰依据） */
+    daily: (): Promise<import('../src/shared/types').ChallengeDailyResult> =>
+      ipcRenderer.invoke('challenge:daily'),
+    /** 换一条：重抽（done 保留）；池 <2 抛 CHALLENGE_POOL_TOO_SMALL */
+    swap: (): Promise<import('../src/shared/types').ChallengeDailyView> =>
+      ipcRenderer.invoke('challenge:swap'),
+    /** 打卡/撤销（可逆） */
+    setDone: (date: string, done: boolean): Promise<import('../src/shared/types').ChallengeDailyView> =>
+      ipcRenderer.invoke('challenge:setDone', date, done),
+    listPool: (): Promise<import('../src/shared/types').ChallengePoolRow[]> =>
+      ipcRenderer.invoke('challenge:listPool'),
+    add: (content: string): Promise<import('../src/shared/types').ChallengePoolRow> =>
+      ipcRenderer.invoke('challenge:add', content),
+    update: (id: number, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('challenge:update', id, content),
+    remove: (id: number): Promise<boolean> => ipcRenderer.invoke('challenge:remove', id)
+  },
+  overview: {
+    /** 热力图三源聚合（from/to 为本地 YYYY-MM-DD 闭区间） */
+    heatmap: (from: string, to: string): Promise<import('../src/shared/types').HeatmapDay[]> =>
+      ipcRenderer.invoke('overview:heatmap', from, to)
   }
 }
 

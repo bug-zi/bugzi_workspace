@@ -9,6 +9,18 @@ import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
 import {
+  ensureChallengeDaily,
+  swapChallengeDaily,
+  setChallengeDone,
+  listChallengePool,
+  addChallengePool,
+  updateChallengePool,
+  removeChallengePool,
+  challengePoolCount,
+  todayLocal
+} from './services/challenge'
+import { heatmapOverview } from './services/overview'
+import {
   ensureWikiQuizStock,
   drawWikiQuiz,
   insertQuizBankRows,
@@ -84,7 +96,12 @@ import {
   addReadTime,
   readStats,
   notesOverview,
-  exportNotesFile
+  exportNotesFile,
+  listFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  moveBook
 } from './services/books'
 import {
   listFeeds,
@@ -1732,6 +1749,22 @@ export function registerIpc(): void {
     return r.filePath
   })
 
+  // ---------- 图书馆文件夹（DB v42，260916 图书馆升级）：单层文件夹 + 书籍归类，零 AI ----------
+  ipcMain.handle('books:folderList', () => listFolders())
+  ipcMain.handle('books:folderCreate', (_e, name: string) => createFolder(name))
+  ipcMain.handle('books:folderRename', (_e, id: number, name: string) => {
+    renameFolder(id, name)
+    return true
+  })
+  ipcMain.handle('books:folderDelete', (_e, id: number) => {
+    deleteFolder(id)
+    return true
+  })
+  ipcMain.handle('books:moveTo', (_e, bookId: number, folderId: number | null) => {
+    moveBook(bookId, folderId)
+    return true
+  })
+
   // ---------- 信息源（DB v20，信息源 specs §2/§3/§4）：RSS 聚合 + AI 总结按需缓存 ----------
   /** 源列表 + 未读数（首次幂等 seed 三源，probe 真名） */
   ipcMain.handle('feeds:list', async () => listFeeds())
@@ -2634,6 +2667,33 @@ export function registerIpc(): void {
       .prepare('SELECT md_path FROM wall_puzzles WHERE date = ?')
       .get(date) as { md_path: string | null } | undefined
     return row?.md_path ?? null
+  })
+
+  // ---------- 总导览：每日挑战 + 热力图（260916 新功能开发区，本地零 AI） ----------
+  ipcMain.handle('challenge:daily', (_e) => {
+    const today = todayLocal()
+    return { daily: ensureChallengeDaily(today), poolCount: challengePoolCount() }
+  })
+  ipcMain.handle('challenge:swap', (_e) => {
+    return swapChallengeDaily(todayLocal())
+  })
+  ipcMain.handle('challenge:setDone', (_e, date: string, done: boolean) => {
+    return setChallengeDone(date, done)
+  })
+  ipcMain.handle('challenge:listPool', (_e) => {
+    return listChallengePool()
+  })
+  ipcMain.handle('challenge:add', (_e, content: string) => {
+    return addChallengePool(content)
+  })
+  ipcMain.handle('challenge:update', (_e, id: number, content: string) => {
+    return updateChallengePool(id, content)
+  })
+  ipcMain.handle('challenge:remove', (_e, id: number) => {
+    return removeChallengePool(id)
+  })
+  ipcMain.handle('overview:heatmap', (_e, from: string, to: string) => {
+    return heatmapOverview(from, to)
   })
 
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------

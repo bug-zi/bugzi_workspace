@@ -1024,6 +1024,37 @@ function migrate(): void {
     d.exec('ALTER TABLE wiki_entries ADD COLUMN quiz_graduated INTEGER NOT NULL DEFAULT 0')
     d.exec('PRAGMA user_version = 41')
   }
+
+  if (version < 42) {
+    // v42：图书馆文件夹（2026-09-16-页级进度+文件夹+更名-design.md §三）——单层文件夹 +
+    // 书籍归类（folder_id NULL = 未分组；删夹书回未分组，书籍与阅读进度不受影响）。
+    d.exec(`CREATE TABLE book_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('ALTER TABLE books ADD COLUMN folder_id INTEGER REFERENCES book_folders(id)')
+    d.exec('PRAGMA user_version = 42')
+  }
+
+  if (version < 43) {
+    // v43：总导览每日挑战 + 热力图（2026-09-16-每日挑战与热力图-design.md §二）——
+    // 挑战池 + 每日定档/打卡两表。本地随机抽取零 AI；完成记在当天（换一条不重置）；
+    // 删池条目不级联每日行（读取 LEFT JOIN 兜底「已删除的挑战」，done 历史保留）。
+    // 版本号撞车顺延：v42 已被同日并行会话藏阅阁文件夹占用。
+    d.exec(`CREATE TABLE challenge_pool (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE challenge_daily (
+      date TEXT PRIMARY KEY,
+      challenge_id INTEGER NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0
+    )`)
+    d.exec('PRAGMA user_version = 43')
+  }
 }
 
 // ---------- 通用工具 ----------

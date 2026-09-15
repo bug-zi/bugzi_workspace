@@ -4,7 +4,16 @@ import { basename, dirname, extname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import { getDb, nowIso, userDataDir } from '../db/db'
-import type { BooksImportResult, BooksNote, BooksRecord, BookMark, ReadStats, ReadStatsRow } from '../../src/shared/types'
+import type {
+  BooksImportResult,
+  BooksNote,
+  BooksRecord,
+  BookMark,
+  BookFolder,
+  BookFolderCount,
+  ReadStats,
+  ReadStatsRow
+} from '../../src/shared/types'
 
 /** XML 解析器（OPF/container.xml；属性带 @_ 前缀） */
 const xml = new XMLParser({ ignoreAttributes: false })
@@ -411,4 +420,56 @@ export function notesOverview(bookId: number): { title: string; md: string } {
 /** 导出读书笔记到指定路径（ipc 层完成保存对话框后调用） */
 export function exportNotesFile(bookId: number, targetPath: string): void {
   writeFileSync(targetPath, notesOverview(bookId).md, 'utf-8')
+}
+
+// ---------- 文件夹（260916 图书馆升级 §三，DB v42）：单层文件夹 + 书籍归类 ----------
+
+/** 全部文件夹（sort, created_at 排序）附各夹书数 */
+export function listFolders(): BookFolderCount[] {
+  return getDb()
+    .prepare(
+      `SELECT f.*, (SELECT COUNT(*) FROM books b WHERE b.folder_id = f.id) AS count
+       FROM book_folders f ORDER BY f.sort, f.created_at, f.id`
+    )
+    .all() as unknown as BookFolderCount[]
+}
+
+/** 新建文件夹（重名拒绝抛 'DUP_FOLDER'；名称 trim 非空由渲染层保证） */
+export function createFolder(name: string): BookFolder {
+  const dup = getDb().prepare('SELECT id FROM book_folders WHERE name = ?').get(name)
+  if (dup) throw new Error('DUP_FOLDER')
+  const r = getDb()
+    .prepare('INSERT INTO book_folders (name, sort, created_at) VALUES (?, 0, ?)')
+    .run(name, nowIso())
+  return getDb()
+    .prepare('SELECT * FROM book_folders WHERE id = ?')
+    .get(Number(r.lastInsertRowid)) as unknown as BookFolder
+}
+
+/** 重命名（重名拒绝抛 'DUP_FOLDER'） */
+export function renameFolder(id: number, name: string): void {
+  const dup = getDb()
+    .prepare('SELECT id FROM book_folders WHERE name = ? AND id != ?')
+    .get(name, id)
+  if (dup) throw new Error('DUP_FOLDER')
+  getDb().prepare('UPDATE book_folders SET name = ? WHERE id = ?').run(name, id)
+}
+
+/** 删除文件夹：夹内书全部回未分组（书籍与阅读进度不受影响）；渲染层已二次确认 */
+export function deleteFolder(id: number): void {
+  const d = getDb()
+  d.exec('BEGIN')
+  try {
+    d.prepare('UPDATE books SET folder_id = NULL WHERE folder_id = ?').run(id)
+    d.prepare('DELETE FROM book_folders WHERE id = ?').run(id)
+    d.exec('COMMIT')
+  } catch (e) {
+    d.exec('ROLLBACK')
+    throw e
+  }
+}
+
+/** 移动书籍到文件夹（folderId null = 移出到未分组） */
+export function moveBook(bookId: number, folderId: number | null): void {
+  getDb().prepare('UPDATE books SET folder_id = ? WHERE id = ?').run(folderId, bookId)
 }

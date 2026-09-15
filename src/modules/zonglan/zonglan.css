@@ -178,3 +178,154 @@
     display: none;
   }
 }
+
+/* ===== 热力图卡片（260916）：颜色全走主题色派生（color-mix），双主题零彩亮 ===== */
+.zl-heat-card {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.zl-heat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zl-heat-head > .material-symbols-outlined {
+  color: var(--color-primary);
+  font-size: 20px;
+}
+.zl-heat-detail {
+  margin-left: auto;
+  text-align: right;
+}
+.zl-heat {
+  display: flex;
+  gap: 4px;
+}
+.zl-heat-weeks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 16px; /* 对齐月份标签行高 */
+}
+.zl-heat-week {
+  height: 10px;
+  line-height: 10px;
+  font-size: 9px;
+  color: var(--color-text-secondary);
+}
+.zl-heat-grid {
+  flex: 1;
+  min-width: 0;
+}
+.zl-heat-months {
+  display: flex;
+  gap: 3px;
+  height: 13px;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+.zl-heat-month {
+  width: 13px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: visible;
+}
+.zl-heat-cols {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.zl-heat-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.zl-heat-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.zl-heat-future {
+  visibility: hidden;
+}
+.zl-heat-0 {
+  background: var(--color-surface-strong);
+}
+.zl-heat-1 {
+  background: color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+.zl-heat-2 {
+  background: color-mix(in srgb, var(--color-primary) 65%, transparent);
+}
+.zl-heat-3 {
+  background: var(--color-primary);
+}
+.zl-heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* ===== 今日挑战卡（260916）：div 版 zl-row，光标回默认（卡片本身不整卡可点） ===== */
+.zl-challenge-card {
+  cursor: default;
+}
+.zl-challenge-content {
+  font-size: 1.02em;
+  line-height: 1.6;
+}
+.zl-challenge-card .btn,
+.zl-challenge-card .icon-btn {
+  flex-shrink: 0;
+}
+
+/* ===== 挑战池管理弹窗（260916） ===== */
+.zl-challenge-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.zl-challenge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+.zl-challenge-row:hover {
+  background: var(--color-surface-strong);
+}
+.zl-challenge-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zl-challenge-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+.zl-challenge-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.zl-challenge-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -1,14 +1,17 @@
 // 总导览（左栏置顶 · 启动默认页，260912 新功能开发区）：今日驱动——问候 +
-// 每日要求 / 待消化 / 每日一题 / 续读 四今日块 + 轻数字条 + 底部格言轮播。纯渲染层
-// 并行聚合既有 IPC（零 AI、零主进程改动，逐块独立 catch）；深链 = 派发 MODULE_NAVIGATE_EVENT，
+// 每日要求 / 待消化 / 每日一题 / 今日挑战（260916）/ 续读 今日块 + 轻数字条 +
+// 热力图卡（260916）+ 底部格言轮播。纯渲染层并行聚合既有 IPC（零 AI、逐块独立
+// catch；挑战/热力图走专属 challenge/overview 通道）；深链 = 派发 MODULE_NAVIGATE_EVENT，
 // App 集中切模块、目标模块 useModuleNavigate 切内部视图（260915 起单一导航路径）。
 import { useCallback, useEffect, useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
-import type { ModuleId, MottoRecord } from '../../shared/types'
+import type { ModuleId, MottoRecord, ChallengeDailyView, HeatmapDay } from '../../shared/types'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
+import HeatmapCard, { heatmapRange } from './HeatmapCard'
+import ChallengeManageDialog from './ChallengeManageDialog'
 import './zonglan.css'
 
 /** 今日 YYYY-MM-DD（wall.month 的 WallDayCell.date 同格式比对） */
@@ -43,6 +46,12 @@ export default function OverviewModule() {
   const [feedUnread, setFeedUnread] = useState<number | null>(null)
   const [monthExpense, setMonthExpense] = useState<string | null>(null)
   const [twelve, setTwelve] = useState<string | null>(null)
+  const [challengeInfo, setChallengeInfo] = useState<{
+    daily: ChallengeDailyView | null
+    poolCount: number
+  } | null>(null)
+  const [heat, setHeat] = useState<HeatmapDay[] | null>(null)
+  const [manageOpen, setManageOpen] = useState(false)
 
   /** 深链：派发导航事件（App 集中切模块，目标模块 useModuleNavigate 切内部视图） */
   const go = useCallback((module: ModuleId, target?: string, payload?: Record<string, unknown>) => {
@@ -131,6 +140,22 @@ export default function OverviewModule() {
     }
   }, [])
 
+  const loadChallenge = useCallback(async (): Promise<void> => {
+    try {
+      setChallengeInfo(await window.api.challenge.daily())
+    } catch {
+      setChallengeInfo(null)
+    }
+  }, [])
+  const loadHeat = useCallback(async (): Promise<void> => {
+    try {
+      const { from, to } = heatmapRange()
+      setHeat(await window.api.overview.heatmap(from, to))
+    } catch {
+      setHeat(null)
+    }
+  }, [])
+
   const loadAll = useCallback((): void => {
     void loadMottos()
     void loadDaily()
@@ -138,7 +163,9 @@ export default function OverviewModule() {
     void loadWall()
     void loadReading()
     void loadNumbers()
-  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers])
+    void loadChallenge()
+    void loadHeat()
+  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadHeat])
 
   useEffect(() => {
     loadAll()
@@ -154,6 +181,28 @@ export default function OverviewModule() {
     return () => clearInterval(timer)
   }, [settledMottos])
   const motto = settledMottos[mottoIdx] ?? null
+
+  /** 打卡/撤销（可逆）：挑战与热力图联动刷新 */
+  const toggleChallengeDone = async (): Promise<void> => {
+    const d = challengeInfo?.daily
+    if (!d) return
+    try {
+      const next = await window.api.challenge.setDone(d.date, !d.done)
+      setChallengeInfo((info) => (info ? { ...info, daily: next } : info))
+      void loadHeat()
+    } catch {
+      /* 本地操作极少失败，静默 */
+    }
+  }
+  /** 换一条：done 保留 → 热力图不变，只刷挑战卡 */
+  const swapChallenge = async (): Promise<void> => {
+    try {
+      const next = await window.api.challenge.swap()
+      setChallengeInfo((info) => (info ? { ...info, daily: next } : info))
+    } catch {
+      /* 池 <2 已置灰，静默 */
+    }
+  }
 
   // ----- 问候行（用户名取个人档；未设置退「你好」） -----
   const now = new Date()
@@ -222,6 +271,58 @@ export default function OverviewModule() {
         </span>
       </button>
 
+      {/* 今日挑战（260916 新功能开发区）：日定一条 + 可逆打卡 + 池管理；div 卡（内嵌按钮不可用 button） */}
+      <div className="card zl-row zl-challenge-card">
+        <span className="material-symbols-outlined">fitness_center</span>
+        <div className="zl-row-main">
+          <div className="zl-row-line">
+            <span className="zl-row-title">今日挑战</span>
+            <span className="module-sub">
+              {challengeInfo === null
+                ? '加载失败'
+                : challengeInfo.daily
+                  ? challengeInfo.daily.done
+                    ? '已完成 · 计入今日热力图'
+                    : '待打卡'
+                  : '池空'}
+            </span>
+          </div>
+          <div className="zl-challenge-content">
+            {challengeInfo === null
+              ? '--'
+              : challengeInfo.daily
+                ? (challengeInfo.daily.content ?? '（已删除的挑战）')
+                : '还没有挑战项目，去添加第一条吧'}
+          </div>
+        </div>
+        {challengeInfo?.daily ? (
+          <>
+            <button className="btn" onClick={() => void toggleChallengeDone()}>
+              <span className="material-symbols-outlined">{challengeInfo.daily.done ? 'undo' : 'check_circle'}</span>
+              {challengeInfo.daily.done ? '撤销' : '完成'}
+            </button>
+            <button
+              className="icon-btn"
+              disabled={challengeInfo.poolCount < 2}
+              title="换一条"
+              onClick={() => void swapChallenge()}
+            >
+              <span className="material-symbols-outlined">autorenew</span>
+            </button>
+          </>
+        ) : null}
+        <button className="icon-btn" title="管理挑战池" onClick={() => setManageOpen(true)}>
+          <span className="material-symbols-outlined">tune</span>
+        </button>
+      </div>
+      <ChallengeManageDialog
+        open={manageOpen}
+        onClose={() => setManageOpen(false)}
+        onChanged={() => {
+          void loadChallenge()
+        }}
+      />
+
       {/* 续读（无在读书显引导） */}
       {reading ? (
         <button
@@ -236,9 +337,9 @@ export default function OverviewModule() {
           </span>
         </button>
       ) : (
-        <button className="card zl-row" onClick={() => go('zangyue')} title="进入藏阅阁">
+        <button className="card zl-row" onClick={() => go('zangyue')} title="进入图书馆">
           <span className="material-symbols-outlined">auto_stories</span>
-          <span className="zl-row-title">藏阅阁·书架</span>
+          <span className="zl-row-title">图书馆·书架</span>
           <span className="module-sub">没有在读的书 · 去导入一本</span>
         </button>
       )}
@@ -258,6 +359,9 @@ export default function OverviewModule() {
           <span className="module-sub">十二问题</span>
         </button>
       </div>
+
+      {/* 热力图（260916 新功能开发区）：近一年三任务完成度四档 */}
+      <HeatmapCard days={heat} />
 
       {/* 底部格言轮播（沉淀区随机 10s 换 + 手动换一条，点击进格言库） */}
       {motto && (

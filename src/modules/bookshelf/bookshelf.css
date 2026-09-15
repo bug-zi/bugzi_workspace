@@ -563,3 +563,98 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* ===== 文件夹（260916 图书馆升级 §三）：卡片式单层文件夹 ===== */
+.bk-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.bk-crumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.bk-crumb-sep {
+  color: var(--color-text-secondary);
+}
+.bk-crumb-cur {
+  font-weight: 600;
+}
+.bk-folders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.bk-folder-card {
+  position: relative;
+  width: 150px;
+  min-height: 86px;
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text);
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.bk-folder-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+.bk-folder-card.drag-over {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+.bk-folder-icon {
+  color: var(--color-primary-deep);
+  font-size: 28px;
+}
+.bk-folder-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bk-folder-count {
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+}
+.bk-folder-menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.bk-folder-card:hover .bk-folder-menu {
+  opacity: 1;
+}
+.bk-folder-new {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--color-text-secondary);
+  background: transparent;
+}
+.bk-folder-input {
+  width: 100%;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  padding: 4px 6px;
+  font-size: 0.9em;
+  outline: none;
+}
+/* 书卡双 hover 键：移动键在删除键左侧 */
+.bk-menu-move {
+  right: 30px;
+}

@@ -1,4 +1,4 @@
-// 藏阅阁（收藏夹 + 藏书架合并壳，260912 新功能开发区）：头部 + 页签「书架｜收藏」+ 双面板保活。
+// 图书馆（260916 由藏阅阁更名；收藏夹 + 藏书架合并壳，260912 新功能开发区）：头部 + 页签「书架｜收藏」+ 双面板保活。
 // 两面板常驻挂载、module-live/module-hidden 显隐（同 WenbiModule 合并先例）——阅读计时经
 // rect 高度=0 天然暂停；书架进入阅读器（early-return）时经 onReadingChange 上报，壳隐藏
 // 头部与页签条，阅读器满栏（与合并前行为一致）。tab 会话内保留、重启回默认书架。
@@ -22,7 +22,7 @@ export default function ZangyueModule() {
         <>
           <div className="module-header">
             <span className="material-symbols-outlined">collections_bookmark</span>
-            <span className="module-title">藏阅阁</span>
+            <span className="module-title">图书馆</span>
             <span className="module-sub">书架 · 收藏</span>
           </div>
           <div className="recycle-tabs">

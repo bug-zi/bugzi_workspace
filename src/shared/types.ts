@@ -44,6 +44,8 @@ export const SettingsKeys = {
   FontSize: 'font_size',
   FontFamily: 'font_family',
   FontWeight: 'font_weight',
+  /** 信息源阅读视图 Ctrl+滚轮缩放百分比（80-200，全局一档；260916 新功能开发区） */
+  FeedZoom: 'feed_reader_zoom',
   Theme: 'theme',
   LlmConfigs: 'llm_configs',
   LlmDefaultId: 'llm_default_id',
@@ -622,7 +624,20 @@ export interface BooksRecord {
   font_scale: number | null
   /** epub 书级字体族 CSS 串（字体选择轮 §1.2）；NULL=跟随个人档全局字体 */
   font_family: string | null
+  /** 归属文件夹（260916 图书馆升级 §三，DB v42）；NULL = 未分组 */
+  folder_id: number | null
 }
+
+/** 书架文件夹（260916 图书馆升级 §三，DB v42）：单层，不嵌套 */
+export interface BookFolder {
+  id: number
+  name: string
+  sort: number
+  created_at: string
+}
+
+/** BookFolder + 夹内书数（folderList 返回行） */
+export type BookFolderCount = BookFolder & { count: number }
 
 /** 书架导入结果（书架 specs §2.1）：duplicate 由渲染层弹确认后 force 重导 */
 export type BooksImportResult =
@@ -976,4 +991,30 @@ export interface UpdateCheckResult {
   status: 'up-to-date' | 'available' | 'error' | 'disabled'
   version?: string
   releaseDate?: string
+}
+
+// ===== 总导览每日挑战 + 热力图（260916 新功能开发区；preload 与 api.d.ts 共用）=====
+export interface ChallengePoolRow {
+  id: number
+  content: string
+  created_at: string
+}
+export interface ChallengeDailyView {
+  date: string
+  challengeId: number
+  /** 池条目已删为 null（前端显示「（已删除的挑战）」） */
+  content: string | null
+  done: boolean
+}
+export interface ChallengeDailyResult {
+  daily: ChallengeDailyView | null
+  poolCount: number
+}
+export interface HeatmapDay {
+  date: string
+  learn: boolean
+  wall: boolean
+  challenge: boolean
+  /** 完成件数 0-3（四档颜色） */
+  level: number
 }

@@ -31,7 +31,7 @@ import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项；260912 总导览置顶 11→12 项）
+// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项；260912 总导览置顶 11→12 项；260916 藏阅阁更名图书馆）
 const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'zonglan', label: '总导览', icon: 'space_dashboard' },
   { id: 'learn', label: '学习库', icon: 'school' },
@@ -40,7 +40,7 @@ const MODULES: { id: ModuleId; label: string; icon: string }[] = [
   { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
   { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
   { id: 'feed', label: '信息源', icon: 'rss_feed' },
-  { id: 'zangyue', label: '藏阅阁', icon: 'collections_bookmark' },
+  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark' },
   { id: 'reasoning', label: '推理角', icon: 'psychology' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet' },
   { id: 'recycle', label: '回收站', icon: 'delete' },

@@ -704,7 +704,7 @@ function moduleLabel(m: string): string {
     inspirations: '灵感泉',
     zhijiji: '致知己',
     reasoning: '推理角',
-    bookshelf: '藏书架',
+    zangyue: '图书馆',
     feed: '信息源',
     wenbi: '文笔坊',
     ledger: '记账本',

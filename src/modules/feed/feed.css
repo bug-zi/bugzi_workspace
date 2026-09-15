@@ -327,3 +327,26 @@
 :root[data-theme='dark'] .feed-load-more:hover {
   color: #fff;
 }
+
+/* ===== Ctrl+滚轮字体缩放（260916）：阅读页相对定位承载指示条，颜色走主题变量 ===== */
+.feed-reader-page {
+  position: relative;
+}
+.feed-zoom-bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-primary) 18%, transparent);
+  cursor: pointer;
+  z-index: 5;
+  font-size: 0.9em;
+  color: var(--color-text);
+}

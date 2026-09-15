@@ -1,7 +1,14 @@
 // 书架（书架 specs §3 + 优化第1轮 §8.3-8.5 + v2.0）：封面网格 + 导入 + 主栏内阅读切换
 // （阅读编排：双模式每书记忆 + 目录/笔记/书签侧栏 + 划词笔记闭环 + 字号每书独立 + 阅读统计；零 AI 模块）
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BookMark, BooksNote, BooksReadingBg, BooksRecord, ReadStats } from '../../shared/types'
+import type {
+  BookMark,
+  BooksNote,
+  BooksReadingBg,
+  BooksRecord,
+  ReadStats,
+  BookFolderCount
+} from '../../shared/types'
 import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import MdDialog from '../../components/MdDialog'
@@ -73,7 +80,7 @@ function fmtNow(): string {
 }
 
 export interface BookshelfModuleProps {
-  /** 阅读态上报（藏阅阁壳据此隐藏头部与页签条；不传=行为不变） */
+  /** 阅读态上报（图书馆壳据此隐藏头部与页签条；不传=行为不变） */
   onReadingChange?: (reading: boolean) => void
 }
 
@@ -120,6 +127,24 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   const [readerBgImage, setReaderBgImage] = useState<string | null>(null)
   /** 背景菜单锚点（null=关） */
   const [bgAnchor, setBgAnchor] = useState<HTMLButtonElement | null>(null)
+  // ----- 文件夹（260916 图书馆升级 §三） -----
+  /** 全部文件夹（附书数） */
+  const [folders, setFolders] = useState<BookFolderCount[]>([])
+  /** 当前视图：null = 根（文件夹卡 + 未分组书）；数值 = 文件夹 id（夹内视图） */
+  const [folderView, setFolderView] = useState<number | null>(null)
+  /** 非空 = 新建文件夹输入态（值为输入内容） */
+  const [newFolderName, setNewFolderName] = useState<string | null>(null)
+  /** 就地重命名中的文件夹 id + 输入值 */
+  const [renameId, setRenameId] = useState<number | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  /** 文件夹操作菜单锚点 */
+  const [folderAnchor, setFolderAnchor] = useState<{ id: number; el: HTMLButtonElement } | null>(null)
+  /** 「移动到…」菜单锚点 */
+  const [moveAnchor, setMoveAnchor] = useState<{ book: BooksRecord; el: HTMLButtonElement } | null>(null)
+  /** 删夹确认目标 */
+  const [confirmFolder, setConfirmFolder] = useState<BookFolderCount | null>(null)
+  /** 拖拽悬停高亮的文件夹 id */
+  const [dragOverFolder, setDragOverFolder] = useState<number | null>(null)
 
   // 背景偏好启动恢复（坏 JSON 静默保持默认）
   useEffect(() => {
@@ -171,9 +196,72 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   useEffect(() => {
     void load()
   }, [load])
+
+  // ----- 文件夹数据层（260916 图书馆升级 §三） -----
+  const loadFolders = useCallback(async () => {
+    try {
+      setFolders(await window.api.books.folderList())
+    } catch {
+      /* 静默：文件夹功能失败不影响书架主体 */
+    }
+  }, [])
+  useEffect(() => {
+    void loadFolders()
+  }, [loadFolders])
+
+  /** 移动书籍（拖拽与菜单共用）：刷新书列表与夹数 */
+  const moveTo = (bookId: number, folderId: number | null): void => {
+    void window.api.books.moveTo(bookId, folderId).then(() => {
+      void load()
+      void loadFolders()
+    })
+  }
+
+  /** 新建文件夹提交（Enter 与失焦共用；空名取消，重名 toast） */
+  const commitCreateFolder = async (): Promise<void> => {
+    const name = newFolderName?.trim()
+    setNewFolderName(null)
+    if (!name) return
+    try {
+      await window.api.books.folderCreate(name)
+      await loadFolders()
+      toast(`已创建「${name}」`)
+    } catch {
+      toast('已有同名文件夹')
+    }
+  }
+
+  /** 重命名提交（同空名取消/重名 toast 口径） */
+  const commitRenameFolder = async (): Promise<void> => {
+    const id = renameId
+    const name = renameValue.trim()
+    setRenameId(null)
+    setRenameValue('')
+    if (id == null || !name) return
+    try {
+      await window.api.books.folderRename(id, name)
+      await loadFolders()
+      toast('已重命名')
+    } catch {
+      toast('已有同名文件夹')
+    }
+  }
+
+  /** 删夹（确认后）：夹内书回未分组；夹内视图正开着该夹则回根 */
+  const doDeleteFolder = async (): Promise<void> => {
+    const f = confirmFolder
+    if (!f) return
+    setConfirmFolder(null)
+    await window.api.books.folderDelete(f.id)
+    if (folderView === f.id) setFolderView(null)
+    await Promise.all([load(), loadFolders()])
+    toast('已删除文件夹')
+  }
+
   // 260912 收藏夹+藏书架合并藏阅阁：激活 id 随壳（zangyue）
   useModuleActivated('zangyue', () => {
     void load()
+    void loadFolders()
     void refreshStats()
   })
   // 总导览深链（260912）：续读直达——找书 openBook 进阅读器（列表未载完则现拉一次）
@@ -495,7 +583,7 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
               void refreshStats() // 与统计（书架 v2.0 §五）
             }}
           >
-            <span className="material-symbols-outlined">arrow_back</span>藏书架
+            <span className="material-symbols-outlined">arrow_back</span>书架
           </button>
           <div className="bk-reader-title" title={reading.title}>
             {reading.title}
@@ -717,10 +805,13 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   }
 
   // ----- 书架视图 -----
+  /** 当前视图可见书：根 = 未分组；夹内 = 该夹全部 */
+  const visibleBooks =
+    folderView == null ? items.filter((b) => b.folder_id == null) : items.filter((b) => b.folder_id === folderView)
   return (
     <div className="module-page">
       <div className="module-header">
-        <div className="module-title">藏书架</div>
+        <div className="module-title">书架</div>
         <div className="module-sub">{items.length} 本</div>
         <div style={{ marginLeft: 'auto' }}>
           <button className="btn" onClick={() => void doImport()}>
@@ -728,6 +819,100 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
           </button>
         </div>
       </div>
+
+      {/* 夹内视图面包屑 */}
+      {folderView != null && (
+        <div className="bk-crumb">
+          <button className="btn bk-crumb-back" onClick={() => setFolderView(null)}>
+            <span className="material-symbols-outlined">arrow_back</span>全部
+          </button>
+          <span className="bk-crumb-sep">/</span>
+          <span className="bk-crumb-cur">{folders.find((f) => f.id === folderView)?.name ?? ''}</span>
+        </div>
+      )}
+
+      {/* 根视图：文件夹卡行 */}
+      {folderView == null && (
+        <div className="bk-folders">
+          {folders.map((f) => (
+            <div
+              key={f.id}
+              className={`bk-folder-card${dragOverFolder === f.id ? ' drag-over' : ''}`}
+              onClick={() => setFolderView(f.id)}
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDragOverFolder(f.id)
+              }}
+              onDragLeave={() => setDragOverFolder((c) => (c === f.id ? null : c))}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragOverFolder(null)
+                const id = Number(e.dataTransfer.getData('text/bz-book'))
+                if (Number.isFinite(id) && id > 0) moveTo(id, f.id)
+              }}
+              title={`打开文件夹「${f.name}」`}
+            >
+              <span className="material-symbols-outlined bk-folder-icon">folder</span>
+              {renameId === f.id ? (
+                <input
+                  className="bk-folder-input"
+                  autoFocus
+                  value={renameValue}
+                  placeholder="文件夹名称"
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void commitRenameFolder()
+                    else if (e.key === 'Escape') {
+                      setRenameId(null)
+                      setRenameValue('')
+                    }
+                  }}
+                  onBlur={() => void commitRenameFolder()}
+                />
+              ) : (
+                <>
+                  <span className="bk-folder-name" title={f.name}>
+                    {f.name}
+                  </span>
+                  <span className="bk-folder-count">{f.count} 本</span>
+                </>
+              )}
+              <button
+                className="icon-btn bk-folder-menu"
+                title="文件夹操作"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setFolderAnchor({ id: f.id, el: e.currentTarget })
+                }}
+              >
+                <span className="material-symbols-outlined">more_vert</span>
+              </button>
+            </div>
+          ))}
+          {newFolderName == null ? (
+            <button className="bk-folder-card bk-folder-new" onClick={() => setNewFolderName('')}>
+              <span className="material-symbols-outlined">create_new_folder</span>
+              新建文件夹
+            </button>
+          ) : (
+            <div className="bk-folder-card">
+              <input
+                className="bk-folder-input"
+                autoFocus
+                value={newFolderName}
+                placeholder="文件夹名称，回车确认"
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitCreateFolder()
+                  else if (e.key === 'Escape') setNewFolderName(null)
+                }}
+                onBlur={() => void commitCreateFolder()}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 阅读统计条 + 展开面板（三项全零整行隐藏；书架 v2.0 §五） */}
       {stats != null && (stats.todaySeconds > 0 || stats.streakDays > 0 || stats.readingCount > 0) && (
@@ -764,15 +949,30 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
         </div>
       )}
 
-      {items.length === 0 ? (
+      {folderView == null && items.length === 0 ? (
         <div className="empty-state">
           <span className="material-symbols-outlined">auto_stories</span>
-          藏书架还空着，导入一本 epub 或 pdf 开始阅读
+          书架还空着，导入一本 epub 或 pdf 开始阅读
+        </div>
+      ) : folderView != null && visibleBooks.length === 0 ? (
+        <div className="empty-state">
+          <span className="material-symbols-outlined">folder_open</span>
+          文件夹还空着，回到全部视图把书拖进来
         </div>
       ) : (
         <div className="bk-grid">
-          {items.map((b) => (
-            <div key={b.id} className="bk-card" onClick={() => void openBook(b)} title={b.title}>
+          {visibleBooks.map((b) => (
+            <div
+              key={b.id}
+              className="bk-card"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/bz-book', String(b.id))
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onClick={() => void openBook(b)}
+              title={b.title}
+            >
               {b.cover_path ? (
                 <img className="bk-cover" src={`bzres://root/${b.cover_path}`} alt={b.title} loading="lazy" />
               ) : (
@@ -785,6 +985,16 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
                 <div className="bk-meta">{b.author || b.format.toUpperCase()}</div>
                 <div className="bk-progress">{progressLabel(b)}</div>
               </div>
+              <button
+                className="icon-btn bk-menu bk-menu-move"
+                title="移动到…"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setMoveAnchor({ book: b, el: e.currentTarget })
+                }}
+              >
+                <span className="material-symbols-outlined">drive_file_move</span>
+              </button>
               <button
                 className="icon-btn bk-menu"
                 title="删除"
@@ -812,6 +1022,72 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
         将删除《{delTarget?.title}》及其封面文件与划词笔记，不可恢复（不入回收站）。
       </ConfirmDialog>
 
+      {/* 文件夹操作菜单（重命名 / 删除） */}
+      {folderAnchor && (
+        <ActionMenu
+          anchorEl={folderAnchor.el}
+          onClose={() => setFolderAnchor(null)}
+          items={[
+            {
+              key: 'rename',
+              icon: 'edit',
+              label: '重命名',
+              onClick: () => {
+                const f = folders.find((x) => x.id === folderAnchor.id)
+                if (f) {
+                  setRenameId(f.id)
+                  setRenameValue(f.name)
+                }
+              }
+            },
+            {
+              key: 'delete',
+              icon: 'delete',
+              label: '删除文件夹',
+              onClick: () => {
+                const f = folders.find((x) => x.id === folderAnchor.id)
+                if (f) setConfirmFolder(f)
+              }
+            }
+          ]}
+        />
+      )}
+
+      {/* 移动到文件夹菜单（未分组 + 各夹，当前所在打勾） */}
+      {moveAnchor && (
+        <ActionMenu
+          anchorEl={moveAnchor.el}
+          onClose={() => setMoveAnchor(null)}
+          items={[
+            {
+              key: 'none',
+              icon: moveAnchor.book.folder_id == null ? 'check' : undefined,
+              label: '未分组',
+              onClick: () => moveTo(moveAnchor.book.id, null)
+            },
+            ...folders.map((f) => ({
+              key: `f-${f.id}`,
+              icon: moveAnchor.book.folder_id === f.id ? 'check' : undefined,
+              label: f.name,
+              onClick: () => moveTo(moveAnchor.book.id, f.id)
+            }))
+          ]}
+        />
+      )}
+
+      {/* 删除文件夹：二次确认（夹内书回未分组） */}
+      <ConfirmDialog
+        open={!!confirmFolder}
+        title="删除文件夹"
+        danger
+        confirmText="删除文件夹"
+        onCancel={() => setConfirmFolder(null)}
+        onConfirm={() => void doDeleteFolder()}
+      >
+        删除文件夹「{confirmFolder?.name}」？夹内 {confirmFolder?.count ?? 0}
+        本书将回到未分组，书籍与阅读进度不受影响。
+      </ConfirmDialog>
+
       {/* 疑似重复导入确认（仍要导入 → force 重导） */}
       <ConfirmDialog
         open={!!dupPending}
@@ -824,7 +1100,7 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
           if (p) void doImport(p.paths, true)
         }}
       >
-        以下书籍可能与藏书架中已有的书重复：
+        以下书籍可能与书架中已有的书重复：
         <br />
         {dupPending?.titles.map((t) => `《${t}》`).join('、')}
         <br />

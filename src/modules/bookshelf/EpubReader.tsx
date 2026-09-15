@@ -206,8 +206,11 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
   const keyHandlersRef = useRef<{ down: (e: KeyboardEvent) => void; up: (e: KeyboardEvent) => void } | null>(null)
   /** 已挂键盘转发的视图 document（防同文档重复挂载——一次按键翻两页） */
   const wiredDocsRef = useRef(new WeakSet<Document>())
+  /** 开书 CFI 恢复进行中（进行中抑制 saveNow——恢复若落在章首，该中间位置不得覆盖库里存的精确 CFI） */
+  const restoreActiveRef = useRef(false)
 
   const saveNow = (): void => {
+    if (restoreActiveRef.current) return
     const p = pendingRef.current
     if (p) void window.api.books.saveProgress(book.id, {
       cfi: p.cfi,
@@ -349,6 +352,46 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     }
   }
 
+  /** 开书恢复「验证-重试」（260916 图书馆升级 §二）：epub.js 首开 display(cfi) 的章内解析
+   *  常早于章节 iframe 就绪而失败回落章首。display 完成后验证实际落点——locations 就绪比
+   *  百分比（差 >1% 判未命中）、未就绪补发 display(cfi)（幂等）；未命中重发，最多 2 次。
+   *  恢复窗口内用户手动操作（按键/滚轮/按下）即放弃，不与用户抢位置。 */
+  const restoreTo = async (rendition: Rendition, cfi: string): Promise<void> => {
+    const host = hostRef.current
+    if (!host) return
+    let canceled = false
+    const cancel = (): void => {
+      canceled = true
+    }
+    window.addEventListener('keydown', cancel, true)
+    host.addEventListener('wheel', cancel, true)
+    host.addEventListener('mousedown', cancel, true)
+    const pctOf = (c: string | null): number | null => {
+      const bk = bookRef.current
+      if (!bk?.locations?.length() || !c) return null
+      const p = bk.locations.percentageFromCfi(c)
+      return typeof p === 'number' ? p : null
+    }
+    restoreActiveRef.current = true
+    try {
+      for (let attempt = 0; attempt < 2 && !canceled; attempt++) {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+        if (canceled) break
+        const targetPct = pctOf(cfi)
+        if (targetPct != null) {
+          const curPct = pctOf(curCfiRef.current)
+          if (curPct != null && Math.abs(curPct - targetPct) <= 0.01) break // 已命中
+        }
+        await rendition.display(cfi).catch(() => undefined)
+      }
+    } finally {
+      restoreActiveRef.current = false
+      window.removeEventListener('keydown', cancel, true)
+      host.removeEventListener('wheel', cancel, true)
+      host.removeEventListener('mousedown', cancel, true)
+    }
+  }
+
   /** 创建 rendition（初次打开与模式切换共用；事件/主题/标注全量重挂） */
   const createRendition = (): void => {
     const bk = bookRef.current
@@ -364,7 +407,8 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     renditionRef.current = rendition
     renderedRef.current.clear() // 新实例标注为空
     applyTheme(rendition, fontScale, fontFamily, bg)
-    void rendition.display(curCfiRef.current ?? book.progress_cfi ?? undefined).then(() => {
+    const targetCfi = curCfiRef.current ?? book.progress_cfi ?? undefined
+    void rendition.display(targetCfi).then(async () => {
       // 首帧展示后再挂标注（render hook 依赖视图就绪）
       syncAnnotations()
       // 并按内容盒净尺寸重排一次——消除挂载竞态下的旧宽残留（切模式后首视图横向可拖，
@@ -382,6 +426,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
         // 滚动即收气泡（scrolled 模式气泡 absolute 挂 host 不随内容滚，脱锚悬空——设计 §二顺带项）
         scrollerOf(host2).addEventListener('scroll', closeBubble, { passive: true })
       }
+      if (targetCfi) await restoreTo(rendition, targetCfi)
     })
     rendition.on('relocated', (loc: unknown) => {
       const l = loc as { start?: { cfi?: string; index?: number; href?: string } }

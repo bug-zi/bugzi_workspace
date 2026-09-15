@@ -337,7 +337,20 @@ export interface BooksRecord {
   font_scale: number | null
   /** epub 书级字体族 CSS 串（字体选择轮 §1.2）；NULL=跟随个人档全局字体 */
   font_family: string | null
+  /** 归属文件夹（260916 图书馆升级 §三，DB v42）；NULL = 未分组 */
+  folder_id: number | null
 }
+
+/** 书架文件夹（260916 图书馆升级 §三，DB v42）：单层，不嵌套 */
+export interface BookFolder {
+  id: number
+  name: string
+  sort: number
+  created_at: string
+}
+
+/** BookFolder + 夹内书数（folderList 返回行） */
+export type BookFolderCount = BookFolder & { count: number }
 
 /** 书架导入结果：duplicate 由前端弹确认后 force 重导 */
 export type BooksImportResult =
@@ -1224,6 +1237,17 @@ export interface Api {
     notesOverviewMd(bookId: number): Promise<string>
     /** 导出读书笔记（保存对话框在主进程；取消返回 null） */
     exportNotes(bookId: number): Promise<string | null>
+    // ----- 文件夹（DB v42，260916 图书馆升级） -----
+    /** 文件夹列表（附各夹书数；sort, created_at 排序） */
+    folderList(): Promise<BookFolderCount[]>
+    /** 新建文件夹（重名抛 Error('DUP_FOLDER')） */
+    folderCreate(name: string): Promise<BookFolder>
+    /** 重命名（重名抛 Error('DUP_FOLDER')） */
+    folderRename(id: number, name: string): Promise<boolean>
+    /** 删除文件夹（夹内书回未分组；前端二次确认后调用） */
+    folderDelete(id: number): Promise<boolean>
+    /** 移动书籍（folderId null = 移出到未分组） */
+    moveTo(bookId: number, folderId: number | null): Promise<boolean>
   }
   feeds: {
     /** 源列表 + 未读数（首次幂等 seed 预置三源） */
@@ -1435,6 +1459,22 @@ export interface Api {
     trackDelete(id: number): Promise<void>
     duration(id: number, sec: number): Promise<void>
     file(id: number): Promise<Uint8Array>
+  }
+  challenge: {
+    /** 定档 + 取当日（无当日行自动随机定档；池空 daily=null）+ 池条数 */
+    daily(): Promise<import('../shared/types').ChallengeDailyResult>
+    /** 换一条：重抽（done 保留）；池 <2 抛 CHALLENGE_POOL_TOO_SMALL */
+    swap(): Promise<import('../shared/types').ChallengeDailyView>
+    /** 打卡/撤销（可逆） */
+    setDone(date: string, done: boolean): Promise<import('../shared/types').ChallengeDailyView>
+    listPool(): Promise<import('../shared/types').ChallengePoolRow[]>
+    add(content: string): Promise<import('../shared/types').ChallengePoolRow>
+    update(id: number, content: string): Promise<boolean>
+    remove(id: number): Promise<boolean>
+  }
+  overview: {
+    /** 热力图三源聚合（from/to 为本地 YYYY-MM-DD 闭区间） */
+    heatmap(from: string, to: string): Promise<import('../shared/types').HeatmapDay[]>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>
