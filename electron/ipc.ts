@@ -3,10 +3,17 @@ import { ipcMain, dialog, BrowserWindow, shell, app, clipboard } from 'electron'
 import { getDb, nowIso, normalizeText, isDupMotto, stripMottoNoteHeader, recordMottoTombstone } from './db/db'
 import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
+import { readExplorerDir, readExplorerText, readExplorerImage } from './services/explorer'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
 import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
+import {
+  ensureWikiQuizStock,
+  drawWikiQuiz,
+  insertQuizBankRows,
+  recordQuizAnswer
+} from './services/wikiQuizStock'
 import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
 import {
   listAiMessages,
@@ -701,6 +708,7 @@ export function registerIpc(): void {
   // 后库补充泵触发（进万象库模块，照 reasoning:stockCheck 模式）：fire-and-forget 秒回
   ipcMain.handle('wiki:stockCheck', () => {
     void ensureWikiStock()
+    void ensureWikiQuizStock()
     return true
   })
   // 随机词条名（手动弹窗骰子/指定板块随机生成）：只构思词条名不生成卡片
@@ -714,13 +722,26 @@ export function registerIpc(): void {
     }
   })
   // 测一测：随机 5 张卡片批量出四选一（优化建议区）
-  ipcMain.handle('wiki:quiz', async (_e, jobId: string) => {
+  // 测一测抽题（260916 题库制）：秒抽秒回；池空兜底现场生成并入库（记账全链路单一口径）；
+  // 消耗后 fire-and-forget 触发补充泵
+  ipcMain.handle('wiki:quizDraw', async (_e, jobId: string) => {
     const ac = beginJob(jobId)
     try {
-      return await generateWikiQuiz(ac.signal)
+      let rows = drawWikiQuiz(5)
+      if (rows.length === 0) {
+        const qs = await generateWikiQuiz(ac.signal)
+        insertQuizBankRows(qs)
+        rows = drawWikiQuiz(5)
+      }
+      void ensureWikiQuizStock()
+      return rows
     } finally {
       endJob(jobId)
     }
+  })
+  ipcMain.handle('wiki:quizRecord', (_e, bankId: number, isCorrect: boolean) => {
+    recordQuizAnswer(bankId, isCorrect)
+    return true
   })
   // 直接删除词条（生成审核流）：越过回收站删卡片 md + 高光 + 词条行（同 hardDelete wiki 口径）
   ipcMain.handle('wiki:deleteForeverEntry', (_e, id: number) => {
@@ -729,6 +750,7 @@ export function registerIpc(): void {
       | { md_path: string | null }
       | undefined
     d.prepare('DELETE FROM wiki_highlights WHERE entry_id = ?').run(id)
+    d.prepare('DELETE FROM wiki_quiz_bank WHERE entry_id = ?').run(id)
     d.prepare('DELETE FROM wiki_entries WHERE id = ?').run(id)
     if (row?.md_path) mdDelete(row.md_path)
     return true
@@ -762,7 +784,9 @@ export function registerIpc(): void {
       .prepare(
         `SELECT d.*,
           (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NULL) AS total,
-          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NULL AND n.state = 'learned') AS learned
+          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NULL AND n.state = 'learned') AS learned,
+          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 1) AS topics,
+          (SELECT COUNT(*) FROM learn_nodes n WHERE n.domain_id = d.id AND n.level = 2 AND n.deleted_at IS NOT NULL) AS points_deleted
          FROM learn_domains d ORDER BY d.sort`
       )
       .all()
@@ -802,14 +826,57 @@ export function registerIpc(): void {
       throw new Error('CONFLICT:' + name)
     }
   })
+  /** 级联彻底删除若干主题及其下全部知识点（260916 优化区：删领域/主题直接连子树全删，
+   *  不再要求先清空）。清理：实战任务三份 md + 知识点卡 md（派生 md/learn/<id>.md）+
+   *  learn_highlights + 回收站中在站知识点行。仅做 SQL 与路径收集，md 文件删除由调用方
+   *  在事务提交后执行（防半删）；调用方须包 BEGIN/COMMIT。返回删除的知识点数与待删 md 路径 */
+  const cascadeDeleteLearnTopics = (
+    d: ReturnType<typeof getDb>,
+    topicIds: number[]
+  ): { pointCount: number; mdPaths: string[] } => {
+    const ph = topicIds.map(() => '?').join(',')
+    const points = d
+      .prepare(`SELECT id FROM learn_nodes WHERE level = 2 AND parent_id IN (${ph})`)
+      .all(...topicIds) as { id: number }[]
+    const tasks = d
+      .prepare(`SELECT task_md, homework_md, review_md FROM learn_tasks WHERE topic_id IN (${ph})`)
+      .all(...topicIds) as { task_md: string; homework_md: string | null; review_md: string | null }[]
+    const mdPaths: string[] = []
+    for (const t of tasks) {
+      if (t.task_md) mdPaths.push(t.task_md)
+      if (t.homework_md) mdPaths.push(t.homework_md)
+      if (t.review_md) mdPaths.push(t.review_md)
+    }
+    for (const p of points) mdPaths.push(`md/learn/${p.id}.md`)
+    d.prepare(
+      `DELETE FROM learn_highlights WHERE node_id IN (SELECT id FROM learn_nodes WHERE level = 2 AND parent_id IN (${ph}))`
+    ).run(...topicIds)
+    d.prepare(
+      `DELETE FROM recycle_bin WHERE source = 'learn' AND item_id IN (SELECT id FROM learn_nodes WHERE level = 2 AND parent_id IN (${ph}))`
+    ).run(...topicIds)
+    d.prepare(`DELETE FROM learn_tasks WHERE topic_id IN (${ph})`).run(...topicIds)
+    d.prepare(`DELETE FROM learn_nodes WHERE level = 2 AND parent_id IN (${ph})`).run(...topicIds)
+    d.prepare(`DELETE FROM learn_nodes WHERE level = 1 AND id IN (${ph})`).run(...topicIds)
+    return { pointCount: points.length, mdPaths }
+  }
   ipcMain.handle('learn:domainDelete', (_e, id: number) => {
     const d = getDb()
-    // 领域清空才能删（设计 §三：无主题行方可删——主题层被删光的前提是知识点已清空）
-    const count = d
-      .prepare('SELECT COUNT(*) AS c FROM learn_nodes WHERE domain_id = ? AND level = 1')
-      .get(id) as { c: number }
-    if (count.c > 0) throw new Error('DOMAIN_NOT_EMPTY')
-    d.prepare('DELETE FROM learn_domains WHERE id = ?').run(id)
+    const topics = d
+      .prepare('SELECT id FROM learn_nodes WHERE domain_id = ? AND level = 1')
+      .all(id) as { id: number }[]
+    d.exec('BEGIN')
+    let mdPaths: string[] = []
+    try {
+      if (topics.length > 0) mdPaths = cascadeDeleteLearnTopics(d, topics.map((t) => t.id)).mdPaths
+      d.prepare('DELETE FROM learn_domains WHERE id = ?').run(id)
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+    for (const p of mdPaths) mdDelete(p)
+    mdDelete(`md/learn/tree-${id}.md`) // 树说明文档随领域一并删除（260915 优化区产物）
+    win()?.webContents.send('recycle:changed')
     return true
   })
   ipcMain.handle('learn:generateTree', async (_e, jobId: string, domainId: number) => {
@@ -833,11 +900,17 @@ export function registerIpc(): void {
           'SELECT * FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NULL ORDER BY id'
         )
         .all(t.id) as { state: string }[]
+      const pointsDeleted = d
+        .prepare(
+          'SELECT COUNT(*) AS c FROM learn_nodes WHERE parent_id = ? AND level = 2 AND deleted_at IS NOT NULL'
+        )
+        .get(t.id) as { c: number }
       return {
         id: t.id,
         title: t.title,
         total: points.length,
         learned: points.filter((p) => p.state === 'learned').length,
+        points_deleted: pointsDeleted.c,
         points
       }
     })
@@ -854,22 +927,19 @@ export function registerIpc(): void {
   })
   ipcMain.handle('learn:topicDelete', (_e, id: number) => {
     const d = getDb()
-    // 判空含回收站中未彻底删的知识点（设计 §三：保证回收站恢复目标主题永远存在，无孤儿）
-    const count = d
-      .prepare('SELECT COUNT(*) AS c FROM learn_nodes WHERE parent_id = ? AND level = 2')
-      .get(id) as { c: number }
-    if (count.c > 0) throw new Error('TOPIC_NOT_EMPTY')
-    // 级联彻底删该主题实战任务与三份 md（升级设计 §三：任务不入回收站）
-    const tasks = d
-      .prepare('SELECT task_md, homework_md, review_md FROM learn_tasks WHERE topic_id = ?')
-      .all(id) as { task_md: string; homework_md: string | null; review_md: string | null }[]
-    for (const t of tasks) {
-      mdDelete(t.task_md)
-      mdDelete(t.homework_md)
-      mdDelete(t.review_md)
+    const topic = d.prepare('SELECT id FROM learn_nodes WHERE id = ? AND level = 1').get(id)
+    if (!topic) throw new Error('NOT_FOUND')
+    d.exec('BEGIN')
+    let mdPaths: string[] = []
+    try {
+      mdPaths = cascadeDeleteLearnTopics(d, [id]).mdPaths
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
     }
-    d.prepare('DELETE FROM learn_tasks WHERE topic_id = ?').run(id)
-    d.prepare('DELETE FROM learn_nodes WHERE id = ?').run(id)
+    for (const p of mdPaths) mdDelete(p)
+    win()?.webContents.send('recycle:changed')
     return true
   })
   ipcMain.handle('learn:expandTopic', async (_e, jobId: string, topicId: number) => {
@@ -1461,6 +1531,24 @@ export function registerIpc(): void {
     d.prepare('UPDATE canvases SET updated_at = ? WHERE id = ?').run(nowIso(), id)
     return true
   })
+
+  // ---------- 资源管理器（260916 新功能开发区）：右栏第四面板只读浏览，root 逐调用传参 ----------
+  ipcMain.handle('explorer:pickFolder', async (): Promise<string | null> => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择要浏览的文件夹',
+      properties: ['openDirectory']
+    })
+    return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+  })
+  ipcMain.handle('explorer:readDir', (_e, root: string, dirPath: string) =>
+    readExplorerDir(root, dirPath)
+  )
+  ipcMain.handle('explorer:readText', (_e, root: string, filePath: string) =>
+    readExplorerText(root, filePath)
+  )
+  ipcMain.handle('explorer:readImage', (_e, root: string, filePath: string) =>
+    readExplorerImage(root, filePath)
+  )
 
   // ---------- 文笔坊（DB v17，文笔坊 specs §2/§3/§4）：浮生记零 AI + 写作台 + Copilot ----------
   ipcMain.handle('wenbi:journalList', () =>

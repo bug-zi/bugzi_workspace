@@ -3,9 +3,8 @@
 // 260910 待学习区：生成卡片一律先入待学习区（state='learn'），弹窗「学会了」才进板块、可逆切换；
 // 随机抽卡后库池优先秒开（wikiStock 泵每板块维持 3 张），每日批次 5-10 张板块均摊自动入待学习区。
 import { useCallback, useEffect, useState } from 'react'
-import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizQuestion, WikiLearnRow } from '../../renderer/api'
+import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizBankQuestion, WikiLearnRow } from '../../renderer/api'
 import type { AiChannel } from '../../shared/types'
-import { MODULE_NAVIGATE_EVENT } from '../../App'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
@@ -85,10 +84,10 @@ export default function WikiModule(props: WikiModuleProps) {
   const [jumpEntryId, setJumpEntryId] = useState<number | null>(null)
   // 待学习卡「直接删除」（learnBar 触发，二次确认）
   const [reviewDelete, setReviewDelete] = useState<WikiEntry | null>(null)
-  // 测一测（优化建议区）
+  // 测一测（260916 题库制：题库秒抽 5 题逐题反馈，提交即记账）
   const [quizJob, setQuizJob] = useState<string | null>(null)
   const quizLoading = quizJob != null
-  const [quizQuestions, setQuizQuestions] = useState<WikiQuizQuestion[]>([])
+  const [quizQuestions, setQuizQuestions] = useState<WikiQuizBankQuestion[]>([])
   const [quizIdx, setQuizIdx] = useState(0)
   // 预选（未提交可改选；260915 优化区：点「提交答案」才正式作答）
   const [quizPick, setQuizPick] = useState<number | null>(null)
@@ -128,10 +127,6 @@ export default function WikiModule(props: WikiModuleProps) {
     if (target === 'learn-zone') {
       setTab('wiki')
       setView({ kind: 'learn' })
-    }
-    if (target === 'quiz') {
-      setTab('wiki')
-      setView({ kind: 'quiz' })
     }
   })
   useModuleActivated('wiki', () => {
@@ -293,13 +288,7 @@ export default function WikiModule(props: WikiModuleProps) {
     if (view.kind === 'section') void window.api.wiki.entries(view.id).then(setEntries)
   }
 
-  // ---------- 测一测（优化建议区：随机 5 题逐题反馈） ----------
-  /** 出题完成跳转（260915 反馈修订：后台生成轻提示点击即回，跨模块经 App 集中深链切模块） */
-  const jumpToQuiz = useCallback(() => {
-    window.dispatchEvent(
-      new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module: 'wiki' as const, target: 'quiz' } })
-    )
-  }, [])
+  // ---------- 测一测（260916 题库制：题库秒抽 5 题逐题反馈，提交即记账） ----------
 
   const startQuiz = async (): Promise<void> => {
     if (quizJob) return
@@ -313,8 +302,7 @@ export default function WikiModule(props: WikiModuleProps) {
     setQuizSubmitted(false)
     setQuizFinished(false)
     try {
-      setQuizQuestions(await window.api.wiki.quiz(jobId))
-      toast('出题完成，点击开始作答', { onClick: jumpToQuiz })
+      setQuizQuestions(await window.api.wiki.quizDraw(jobId))
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('已取消')) toast('已取消')
@@ -332,9 +320,11 @@ export default function WikiModule(props: WikiModuleProps) {
     setQuizPick(i)
   }
 
-  /** 提交答案：正式作答并计分，亮出对错与解析 */
+  /** 提交答案：正式作答 + 题库记账（答对 +1 达 2 毕业删题、答错 −1），亮出对错与解析 */
   const submitAnswer = (): void => {
     if (quizPick == null || quizSubmitted) return
+    const q = quizQuestions[quizIdx]
+    void window.api.wiki.quizRecord(q.bankId, quizPick === q.answer)
     setQuizPicks((arr) => [...arr, quizPick])
     setQuizSubmitted(true)
   }
@@ -661,7 +651,7 @@ export default function WikiModule(props: WikiModuleProps) {
             {quizLoading && (
               <div className="empty-state">
                 <span className="material-symbols-outlined spin">progress_activity</span>
-                <div>出题中，约需数秒…</div>
+                <div>题库见底，现场出题中…</div>
                 <button className="btn" onClick={() => void window.api.ai.cancel(quizJob!)} title="取消本次出题">
                   <span className="material-symbols-outlined">stop_circle</span>
                   取消
@@ -672,6 +662,9 @@ export default function WikiModule(props: WikiModuleProps) {
               <div className="card quiz-card">
                 <div className="quiz-meta">
                   第 {quizIdx + 1} / {quizQuestions.length} 题 · 来源词条「{quizQuestions[quizIdx].term}」
+                  {quizQuestions[quizIdx].graduated > 0 && (
+                    <span className="quiz-mastery">测毕 {quizQuestions[quizIdx].graduated}</span>
+                  )}
                 </div>
                 <div className="quiz-question">{quizQuestions[quizIdx].question}</div>
                 {quizQuestions[quizIdx].options.map((opt, i) => {
@@ -766,7 +759,14 @@ export default function WikiModule(props: WikiModuleProps) {
         key={cardEntry?.id ?? 'none'}
         open={cardEntry != null}
         title={cardEntry?.term ?? ''}
-        titleTag={cardEntry ? sections.find((s) => s.id === cardEntry.section_id)?.name : undefined}
+        titleTag={
+          cardEntry
+            ? [
+                sections.find((s) => s.id === cardEntry.section_id)?.name,
+                cardEntry.quiz_graduated > 0 ? `测毕 ${cardEntry.quiz_graduated}` : ''
+              ].filter((x): x is string => !!x)
+            : undefined
+        }
         filePath={cardEntry?.md_path ?? ''}
         onClose={() => {
           // 待学习卡关闭 = 留在待学习区（学会了才进板块）；已学会卡直接关

@@ -1,0 +1,284 @@
+/* 资源管理器边栏（新功能开发区 260916）：结构镜像画布/草稿本，宽度走 --filex-width（280–560px） */
+.filex-sidebar {
+  position: relative;
+  width: var(--filex-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+}
+.filex-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.filex-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.filex-header > .material-symbols-outlined:first-child {
+  color: var(--color-primary);
+}
+.filex-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* 工具行（浏览态：根目录名 + 刷新/换文件夹；查看态：返回 + 文件名） */
+.filex-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+.filex-toolbar-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.filex-toolbar .btn {
+  padding: 2px 6px;
+}
+.filex-crumb {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--color-text);
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* 文件树 */
+.filex-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+.filex-node {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.filex-node:hover {
+  background: var(--color-primary-soft);
+}
+.filex-node.active {
+  background: var(--color-primary-soft);
+}
+.filex-node.active .filex-node-name {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.filex-node-twist {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.filex-node-twist .material-symbols-outlined {
+  font-size: 16px;
+}
+.filex-node-ico {
+  flex: none;
+  font-size: 16px;
+  color: var(--color-primary);
+}
+.filex-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.filex-node-loading {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+.filex-tree-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+/* 空态（未选文件夹 / 上次文件夹失效） */
+.filex-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+}
+.filex-empty > .material-symbols-outlined {
+  font-size: 40px;
+  color: var(--color-primary);
+  opacity: 0.6;
+}
+.filex-empty-text {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* 查看区 */
+.filex-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.filex-md {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.filex-image {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+}
+.filex-image img {
+  max-width: 100%;
+  border-radius: var(--radius-sm, 6px);
+}
+.filex-unsupported {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  opacity: 0.7;
+  padding: 20px;
+  text-align: center;
+}
+.filex-unsupported > .material-symbols-outlined {
+  font-size: 36px;
+}
+
+/* 代码查看：行号列（sticky 横滚不丢）+ 高亮；配色 CSS 变量自定义为主题色相近色系
+   （浅色 = 樱粉系低饱和深调 / 深色 = 宝蓝系柔调），不用 highlight.js 自带高饱和主题 */
+.filex-code {
+  display: flex;
+  align-items: flex-start;
+  margin: 0;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  --hl-keyword: #a3405e;
+  --hl-string: #3a7a5e;
+  --hl-number: #946a00;
+  --hl-comment: #93939b;
+  --hl-func: #4a6fa5;
+  --hl-type: #7a5ca3;
+}
+[data-theme='dark'] .filex-code {
+  --hl-keyword: #8fb8f5;
+  --hl-string: #8fd0b4;
+  --hl-number: #d8c489;
+  --hl-comment: #7e8ca3;
+  --hl-func: #a9c4f2;
+  --hl-type: #c0a8ec;
+}
+.filex-code-gutter,
+.filex-code-body {
+  margin: 0;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  white-space: pre;
+}
+.filex-code-gutter {
+  position: sticky;
+  left: 0;
+  flex: none;
+  min-width: 40px;
+  text-align: right;
+  padding-left: 10px;
+  padding-right: 8px;
+  color: var(--color-text);
+  opacity: 0.4;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  user-select: none;
+}
+.filex-code-body {
+  flex: 1;
+  min-width: 0;
+  padding-left: 10px;
+  padding-right: 14px;
+}
+.filex-code-body code {
+  font: inherit;
+}
+.filex-code .hljs-keyword,
+.filex-code .hljs-literal,
+.filex-code .hljs-built_in {
+  color: var(--hl-keyword);
+}
+.filex-code .hljs-string,
+.filex-code .hljs-regexp,
+.filex-code .hljs-addition {
+  color: var(--hl-string);
+}
+.filex-code .hljs-number,
+.filex-code .hljs-symbol {
+  color: var(--hl-number);
+}
+.filex-code .hljs-comment,
+.filex-code .hljs-quote,
+.filex-code .hljs-deletion {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.filex-code .hljs-title,
+.filex-code .hljs-title.function_,
+.filex-code .hljs-section,
+.filex-code .hljs-name {
+  color: var(--hl-func);
+}
+.filex-code .hljs-title.class_,
+.filex-code .hljs-type,
+.filex-code .hljs-class .hljs-title {
+  color: var(--hl-type);
+}
+.filex-code .hljs-attr,
+.filex-code .hljs-attribute,
+.filex-code .hljs-variable,
+.filex-code .hljs-template-variable,
+.filex-code .hljs-params {
+  color: var(--hl-keyword);
+}
+.filex-code .hljs-meta,
+.filex-code .hljs-tag {
+  color: var(--hl-comment);
+}
+.filex-code .hljs-emphasis {
+  font-style: italic;
+}
+.filex-code .hljs-strong {
+  font-weight: 700;
+}

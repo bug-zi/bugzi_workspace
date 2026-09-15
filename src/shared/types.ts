@@ -78,6 +78,10 @@ export const SettingsKeys = {
   // 画布（新功能开发区 260909）：右缘第三面板宽度 + 当前激活画布
   CanvasWidth: 'canvas_width',
   CanvasActiveId: 'canvas_active_id',
+  // 资源管理器（260916 新功能开发区）：上次文件夹 + 上次文件 + 面板宽度
+  FilesRootPath: 'explorer_root_path',
+  FilesLastFile: 'explorer_last_file',
+  FilesWidth: 'explorer_width',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode',
   // 内置终端（260912 新功能开发区）：JSON { shell, cwd, height }
@@ -354,9 +358,29 @@ export interface WikiEntry {
   summary: string
   md_path: string
   origin: 'ai' | 'manual'
+  /** 熟练度：该词条题目被「答对 2 次毕业」移除的累计次数（DB v41） */
+  quiz_graduated: number
   created_at: string
   updated_at: string
   deleted_at: string | null
+}
+
+/** 测一测题库题（wiki:quizDraw 返回）：题面 + 记账句柄 + 来源词条熟练度 */
+export interface WikiQuizBankQuestion {
+  /** 题库行 id（wiki:quizRecord 记账用） */
+  bankId: number
+  /** 来源词条 id */
+  entryId: number
+  /** 来源词条名 */
+  term: string
+  question: string
+  options: string[]
+  /** 正确选项下标 0..3 */
+  answer: number
+  /** 题目解析（提交后无论对错都展示） */
+  explanation: string
+  /** 来源词条熟练度（毕业移除累计次数，>0 时展示「测毕 N」胶囊） */
+  graduated: number
 }
 
 export interface WikiHighlight {
@@ -379,6 +403,10 @@ export interface LearnDomain {
   total: number
   /** 已学知识点数（联查聚合） */
   learned: number
+  /** 主题数（联查聚合；删除确认弹窗展示级联范围用） */
+  topics: number
+  /** 回收站在站知识点数（联查聚合；删除确认弹窗展示级联范围用） */
+  points_deleted: number
 }
 
 /** 树节点（learn_nodes 表；level 1=主题 2=知识点，主题无 summary/state 语义） */
@@ -407,6 +435,8 @@ export interface LearnTopicView {
   title: string
   total: number
   learned: number
+  /** 回收站在站知识点数（删除确认弹窗展示级联范围用） */
+  points_deleted: number
   points: LearnNode[]
 }
 

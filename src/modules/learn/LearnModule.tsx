@@ -1248,12 +1248,12 @@ export default function LearnModule() {
         </div>
       )}
 
-      {/* 删除领域（清空才能删） */}
+      {/* 删除领域（级联彻底删除：连旗下全部主题与知识点，含回收站在站知识点） */}
       {delDomainTarget && (
         <ConfirmDialog
           open
           title="删除领域"
-          confirmText="删除"
+          confirmText="彻底删除"
           danger
           onConfirm={() => {
             void window.api.learn
@@ -1268,13 +1268,18 @@ export default function LearnModule() {
                 else setTree([])
               })
               .catch(() => {
-                toast('领域下还有主题，需先清空才能删除')
+                toast('删除失败，请重试')
                 setDelDomainTarget(null)
               })
           }}
           onCancel={() => setDelDomainTarget(null)}
         >
-          仅空领域可删除；领域「{delDomainTarget.name}」下的主题需先清空。
+          将彻底删除领域「{delDomainTarget.name}」及其下 {delDomainTarget.topics} 个主题、
+          {delDomainTarget.total + delDomainTarget.points_deleted} 个知识点
+          {delDomainTarget.points_deleted > 0
+            ? `（其中 ${delDomainTarget.points_deleted} 个在回收站中）`
+            : ''}
+          ，不可恢复。
         </ConfirmDialog>
       )}
 
@@ -1350,12 +1355,12 @@ export default function LearnModule() {
         </div>
       )}
 
-      {/* 删除主题（清空才能删，判空含回收站节点） */}
+      {/* 删除主题（级联彻底删除：连旗下全部知识点，含回收站在站知识点） */}
       {delTopicTarget && (
         <ConfirmDialog
           open
           title="删除主题"
-          confirmText="删除"
+          confirmText="彻底删除"
           danger
           onConfirm={() => {
             void window.api.learn
@@ -1366,13 +1371,18 @@ export default function LearnModule() {
                 if (domainId != null) await loadTree(domainId)
               })
               .catch(() => {
-                toast('主题下还有知识点（含回收站中未彻底删除的），需先清空')
+                toast('删除失败，请重试')
                 setDelTopicTarget(null)
               })
           }}
           onCancel={() => setDelTopicTarget(null)}
         >
-          仅空主题可删除；主题「{delTopicTarget.title}」下的知识点需先清空（含回收站中未彻底删除的）。
+          将彻底删除主题「{delTopicTarget.title}」及其下{' '}
+          {delTopicTarget.total + delTopicTarget.points_deleted} 个知识点
+          {delTopicTarget.points_deleted > 0
+            ? `（其中 ${delTopicTarget.points_deleted} 个在回收站中）`
+            : ''}
+          ，不可恢复。
         </ConfirmDialog>
       )}
 

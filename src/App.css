@@ -896,6 +896,19 @@
   font-size: 0.85em;
   color: var(--color-text-secondary);
 }
+/* 熟练度胶囊（260916 测一测题库制）：答题页来源词条旁「测毕 N」，变量同 .dialog-title-tag */
+.quiz-mastery {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.88em;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary-deep);
+  white-space: nowrap;
+}
 .quiz-question {
   font-size: 1.05em;
   line-height: 1.7;
@@ -1338,7 +1351,8 @@
 }
 .right-col > .ai-sidebar,
 .right-col > .draft-sidebar,
-.right-col > .canvas-sidebar {
+.right-col > .canvas-sidebar,
+.right-col > .filex-sidebar {
   flex: 1;
   min-height: 0;
 }

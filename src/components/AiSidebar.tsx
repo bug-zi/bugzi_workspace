@@ -19,6 +19,8 @@ export interface AiSidebarProps {
   onCollapse: () => void
   /** 细条上切到草稿本 */
   onOpenDraft: () => void
+  /** 细条上切到资源管理器 */
+  onOpenFiles: () => void
   /** 细条上切到画布 */
   onOpenCanvas: () => void
   currentModule: string
@@ -94,6 +96,7 @@ export default function AiSidebar(props: AiSidebarProps) {
     onExpand,
     onCollapse,
     onOpenDraft,
+    onOpenFiles,
     onOpenCanvas,
     currentModule,
     pending,
@@ -459,11 +462,14 @@ export default function AiSidebar(props: AiSidebarProps) {
   if (collapsed) {
     // 草稿本/画布面板正展开：隐藏但保持挂载（进行中的生成任务 await 仍能回填状态，重展开即恢复）
     if (!showRail) return <aside className="ai-sidebar" style={{ display: 'none' }} aria-hidden />
-    // 都收起：右缘细条三图标入口（debugzi / 草稿本 / 画布，互斥展开）
+    // 都收起：右缘细条四图标入口（debugzi / 资源管理器 / 草稿本 / 画布，互斥展开）
     return (
       <aside className="ai-sidebar collapsed">
         <button className="ai-toggle" onClick={onExpand} title={`展开 ${AI_NAME}`}>
           <span className="material-symbols-outlined">forum</span>
+        </button>
+        <button className="ai-toggle" onClick={onOpenFiles} title="展开资源管理器">
+          <span className="material-symbols-outlined">folder_open</span>
         </button>
         <button className="ai-toggle" onClick={onOpenDraft} title="展开草稿本">
           <span className="material-symbols-outlined">edit_note</span>

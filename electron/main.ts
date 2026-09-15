@@ -8,6 +8,7 @@ import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
 import { ensureReasoningStock } from './services/reasoningStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
+import { ensureWikiQuizStock } from './services/wikiQuizStock'
 import { ensureLearnStock } from './services/learnStock'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
@@ -107,6 +108,8 @@ if (!app.requestSingleInstanceLock()) {
     // 学习库（260911）：每日队列定档（纯 SQL，泵内部先执行）+ 今日新卡预生成泵；
     // 静默失败，LLM 未配置跳过（队列照常定档，配置后下次触发补齐）
     setTimeout(() => void ensureLearnStock(), 10_000).unref()
+    // 万象库测一测题库泵（260916 题库制）：错开启动高峰，静默失败
+    setTimeout(() => void ensureWikiQuizStock(), 10_000).unref()
     createWindow()
     // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
     createTray(appIcon, showMainWindow)

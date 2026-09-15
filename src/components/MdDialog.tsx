@@ -9,8 +9,9 @@ export interface MdDialogProps {
   title: string
   /** 标题下方的小字副标题（格言笔记弹窗：出处行；不传则不渲染） */
   subtitle?: string
-  /** 标题右侧小 pill（万象卡片：所属板块名；不传则不渲染，其余模块行为不变） */
-  titleTag?: string
+  /** 标题右侧小 pill（万象卡片：所属板块名；260916 题库制起支持数组多胶囊——
+   *  板块名 + 熟练度「测毕 N」；不传则不渲染，其余模块行为不变） */
+  titleTag?: string | string[]
   /** md 相对路径（userData 下）；content 直传时不需（书架笔记总览） */
   filePath?: string
   /** 直接给 md 内容（提供则不读文件——书架笔记总览按需生成，不落盘；书架 v2.0 §三） */
@@ -277,7 +278,14 @@ export default function MdDialog(props: MdDialogProps) {
                   {title}
                 </span>
               )}
-              {titleTag && <span className="dialog-title-tag">{titleTag}</span>}
+              {(Array.isArray(titleTag) ? titleTag : titleTag ? [titleTag] : []).map(
+                (t) =>
+                  t && (
+                    <span key={t} className="dialog-title-tag">
+                      {t}
+                    </span>
+                  )
+              )}
             </div>
             {subtitle && (
               <span className="dialog-subtitle" title={subtitle}>

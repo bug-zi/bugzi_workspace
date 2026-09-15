@@ -222,10 +222,12 @@ const api = {
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
     suggestTerm: (jobId: string, sectionId: number | null): Promise<string> =>
       ipcRenderer.invoke('wiki:suggestTerm', jobId, sectionId),
-    /** 测一测：随机 5 张卡片各出 1 道四选一（带题目解析） */
-    quiz: (jobId: string): Promise<
-      { entryId: number; term: string; question: string; options: string[]; answer: number; explanation: string }[]
-    > => ipcRenderer.invoke('wiki:quiz', jobId),
+    /** 测一测抽题（260916 题库制）：题库秒抽 5 题；池空兜底现场生成并入库 */
+    quizDraw: (jobId: string): Promise<import('../src/shared/types').WikiQuizBankQuestion[]> =>
+      ipcRenderer.invoke('wiki:quizDraw', jobId),
+    /** 测一测记账：每题提交即调，答对 +1（达 2 毕业删题 + 词条熟练度 +1）、答错 −1 */
+    quizRecord: (bankId: number, isCorrect: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:quizRecord', bankId, isCorrect),
     /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
     deleteForeverEntry: (id: number): Promise<boolean> =>
       ipcRenderer.invoke('wiki:deleteForeverEntry', id),
@@ -490,6 +492,22 @@ const api = {
       ipcRenderer.invoke('canvas:save', id, json),
     /** 画布入回收站（前端二次确认后调用） */
     discard: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'canvases', id)
+  },
+  explorer: {
+    /** 系统对话框选择文件夹（取消返回 null） */
+    pickFolder: (): Promise<string | null> => ipcRenderer.invoke('explorer:pickFolder'),
+    /** 读单层目录（懒加载不递归；排序在渲染层） */
+    readDir: (
+      root: string,
+      dirPath: string
+    ): Promise<{ name: string; path: string; type: 'file' | 'dir' }[]> =>
+      ipcRenderer.invoke('explorer:readDir', root, dirPath),
+    /** 读文本文件（utf-8；超 1MB / 二进制 reject） */
+    readText: (root: string, filePath: string): Promise<string> =>
+      ipcRenderer.invoke('explorer:readText', root, filePath),
+    /** 读图片为 data URL（超 5MB reject） */
+    readImage: (root: string, filePath: string): Promise<string> =>
+      ipcRenderer.invoke('explorer:readImage', root, filePath)
   },
   wenbi: {
     /** 浮生记条目列表（created_at 倒序；零 AI 板块） */

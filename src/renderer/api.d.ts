@@ -76,6 +76,8 @@ export interface WikiEntry {
   md_path: string
   origin: 'ai' | 'manual'
   state: WikiEntryState
+  /** 熟练度：该词条题目被「答对 2 次毕业」移除的累计次数（DB v41） */
+  quiz_graduated: number
   created_at: string
   updated_at: string
   deleted_at: string | null
@@ -106,6 +108,24 @@ export interface WikiQuizQuestion {
   answer: number
   /** 题目解析（提交后无论对错都展示） */
   explanation: string
+}
+
+/** 测一测题库题（wiki.quizDraw 返回）：题面 + 记账句柄 + 来源词条熟练度 */
+export interface WikiQuizBankQuestion {
+  /** 题库行 id（wiki.quizRecord 记账用） */
+  bankId: number
+  /** 来源词条 id */
+  entryId: number
+  /** 来源词条名 */
+  term: string
+  question: string
+  options: string[]
+  /** 正确选项下标 0..3 */
+  answer: number
+  /** 题目解析（提交后无论对错都展示） */
+  explanation: string
+  /** 来源词条熟练度（毕业移除累计次数，>0 时展示「测毕 N」胶囊） */
+  graduated: number
 }
 
 // ===== 音乐吧轻音乐（260915 新功能开发区）=====
@@ -146,6 +166,10 @@ export interface LearnDomain {
   total: number
   /** 已学知识点数 */
   learned: number
+  /** 主题数（含全部，删除确认弹窗展示级联范围用） */
+  topics: number
+  /** 回收站在站知识点数（删除确认弹窗展示级联范围用） */
+  points_deleted: number
 }
 
 export interface LearnNode {
@@ -172,6 +196,8 @@ export interface LearnTopicView {
   title: string
   total: number
   learned: number
+  /** 回收站在站知识点数（删除确认弹窗展示级联范围用） */
+  points_deleted: number
   points: LearnNode[]
 }
 
@@ -1109,6 +1135,19 @@ export interface Api {
     /** 画布入回收站（前端二次确认后调用） */
     discard(id: number): Promise<boolean>
   }
+  explorer: {
+    /** 系统对话框选择文件夹（取消返回 null） */
+    pickFolder(): Promise<string | null>
+    /** 读单层目录（懒加载不递归；排序在渲染层） */
+    readDir(
+      root: string,
+      dirPath: string
+    ): Promise<{ name: string; path: string; type: 'file' | 'dir' }[]>
+    /** 读文本文件（utf-8；超 1MB / 二进制 reject） */
+    readText(root: string, filePath: string): Promise<string>
+    /** 读图片为 data URL（超 5MB reject） */
+    readImage(root: string, filePath: string): Promise<string>
+  }
   wenbi: {
     /** 浮生记条目列表（created_at 倒序；零 AI 板块） */
     journalList(): Promise<WenbiJournalRecord[]>
@@ -1314,8 +1353,10 @@ export interface Api {
     onStockChanged(cb: () => void): () => void
     /** 随机词条名（指定板块用板块，未指定随机挑；只构思词条名不生成卡片） */
     suggestTerm(jobId: string, sectionId: number | null): Promise<string>
-    /** 测一测：随机 5 张卡片各出 1 道四选一 */
-    quiz(jobId: string): Promise<WikiQuizQuestion[]>
+    /** 测一测抽题（260916 题库制）：题库秒抽 5 题；池空兜底现场生成并入库 */
+    quizDraw(jobId: string): Promise<WikiQuizBankQuestion[]>
+    /** 测一测记账：每题提交即调，答对 +1（达 2 毕业删题 + 词条熟练度 +1）、答错 −1 */
+    quizRecord(bankId: number, isCorrect: boolean): Promise<boolean>
     /** 直接删除词条（生成审核流）：彻底删除卡片 md + 高光 + 词条，需前端二次确认 */
     deleteForeverEntry(id: number): Promise<boolean>
     highlights(): Promise<WikiHighlightRow[]>

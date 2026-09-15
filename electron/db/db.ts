@@ -1005,6 +1005,25 @@ function migrate(): void {
     )`)
     d.exec('PRAGMA user_version = 40')
   }
+
+  if (version < 41) {
+    // v41：万象库测一测题库制（2026-09-16-测一测题库制-design.md §二）——题库表 +
+    // 词条熟练度列（quiz_graduated = 题目毕业移除累计次数，永续不清零）。
+    // 题不入回收站（派生产物：毕业即删、词条彻底删时级联删）。
+    d.exec(`CREATE TABLE wiki_quiz_bank (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id INTEGER NOT NULL,
+      question TEXT NOT NULL,
+      options TEXT NOT NULL,
+      answer INTEGER NOT NULL,
+      explanation TEXT NOT NULL,
+      correct_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_wiki_quiz_bank_entry ON wiki_quiz_bank(entry_id)')
+    d.exec('ALTER TABLE wiki_entries ADD COLUMN quiz_graduated INTEGER NOT NULL DEFAULT 0')
+    d.exec('PRAGMA user_version = 41')
+  }
 }
 
 // ---------- 通用工具 ----------

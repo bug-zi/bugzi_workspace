@@ -223,6 +223,7 @@ export function hardDelete(recycleId: number): void {
   }
   if (rb.source === 'wiki') {
     d.prepare('DELETE FROM wiki_highlights WHERE entry_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM wiki_quiz_bank WHERE entry_id = ?').run(rb.item_id)
   }
   if (rb.source === 'learn') {
     // 知识点卡：md 路径派生为 md/learn/<id>.md，连同高光记录一起清理（同 wiki 口径）

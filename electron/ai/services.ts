@@ -1119,6 +1119,30 @@ export async function generateWikiQuiz(signal?: AbortSignal): Promise<WikiQuizQu
   return parseQuizArray(res.content, idByTerm)
 }
 
+/** 单词条出 2 题（测一测题库泵用，260916 题库制）：卡文注入 + 已有题干避重（新题换考查角度）。
+ *  兜底现场生成的 generateWikiQuiz 保留为 quizDraw 池空路径。 */
+export async function generateEntryQuiz(
+  term: string,
+  entryId: number,
+  cardMd: string,
+  existingStems: string[],
+  signal?: AbortSignal
+): Promise<WikiQuizQuestion[]> {
+  const avoid =
+    existingStems.length > 0
+      ? `\n该词条已有以下题目，新题必须换考查角度，不得与已有题目问法或考点重复：\n${existingStems.map((s) => `- ${s}`).join('\n')}\n`
+      : ''
+  const prompt = `${profileDigest()}${profileDigest() ? '\n\n' : ''}以下是一张知识卡片（词条：${term}）。请基于卡片内容出恰好 2 道四选一选择题，考查对核心知识点的掌握（不要直接抄卡片原句，干扰项要有迷惑性但明显错误）。${avoid}以 JSON 对象返回，最外层是对象，格式：{"questions":[{"term":"${term}","question":"题干","options":["选项一","选项二","选项三","选项四"],"answer":0,"explanation":"题目解析（一两句话：讲清正确答案为什么对、干扰项错在哪，60~120字）"}]}，answer 为正确选项的下标（0-3），questions 数组内恰好 2 项，不要输出其他任何内容。\n\n【词条：${term}】\n${cardMd.slice(0, 1200)}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7,
+    jsonMode: true,
+    scene: 'wiki:quiz',
+    signal
+  })
+  return parseQuizArray(res.content, new Map([[term, entryId]]))
+}
+
 // ---------- 学习库（2026-09-11-学习库 specs：建树 / 知识卡 / 主题展开） ----------
 
 export interface LearnTreeResult {
