@@ -144,7 +144,7 @@ import {
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, CustomFontInfo } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -379,6 +379,72 @@ export function registerIpc(): void {
       return { list: bgListFiles(group), wasUsing }
     }
   )
+
+  // ---------- 导入字体（优化建议区第46轮）：userData/fonts/ 文件系统为真相源 ----------
+  const FONT_DIR = join(userDataDir(), 'fonts')
+  const FONT_EXTS = ['ttf', 'otf', 'woff', 'woff2']
+  const FONT_MAX = 20
+
+  /** 扫描字体目录（新在前）；显示名/family 从唯一名反解——唯一名 = <时间戳>-<随机4位>-<sanitize 名>.<ext> */
+  function fontListFiles(): CustomFontInfo[] {
+    let names: string[]
+    try {
+      names = readdirSync(FONT_DIR)
+    } catch {
+      return []
+    }
+    const seen = new Set<string>()
+    return names
+      .filter((f) => FONT_EXTS.includes(f.split('.').pop()?.toLowerCase() ?? ''))
+      .sort((a, b) => b.localeCompare(a))
+      .map((file) => {
+        const dot = file.lastIndexOf('.')
+        const base = dot > 0 ? file.slice(0, dot) : file
+        const m = base.match(/^(\d+)-([a-z0-9]{4})-(.+)$/)
+        const label = m?.[3] ?? base
+        let family = label
+        if (seen.has(family)) family = `${label}-${m?.[2] ?? 'x'}`
+        seen.add(family)
+        return { file, label, family, url: `bzres://fonts/${file}` }
+      })
+  }
+
+  /** 原始文件名 → 安全显示名（字母数字下划线连字空格与 CJK，其余折叠为 _；防 CSS family 注入） */
+  function sanitizeFontLabel(raw: string): string {
+    return raw.replace(/[^\w一-龥 -]+/g, '_').trim() || '字体'
+  }
+
+  // 对话框多选导入；取消返回 null，成功返回刷新后清单
+  ipcMain.handle('font:import', async (): Promise<CustomFontInfo[] | null> => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择字体文件（可多选）',
+      filters: [{ name: '字体', extensions: FONT_EXTS }],
+      properties: ['openFile', 'multiSelections']
+    })
+    if (r.canceled || r.filePaths.length === 0) return null
+    if (fontListFiles().length + r.filePaths.length > FONT_MAX) {
+      throw new Error(`字体库已达上限（${FONT_MAX} 款），请先删除部分字体`)
+    }
+    mkdirSync(FONT_DIR, { recursive: true })
+    for (const src of r.filePaths) {
+      const ext = src.split('.').pop()?.toLowerCase() ?? 'ttf'
+      const dot = Math.max(src.lastIndexOf('\\'), src.lastIndexOf('/'))
+      const base = src.slice(dot + 1).replace(/\.[^.]+$/, '')
+      const label = sanitizeFontLabel(base)
+      const name = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${label}.${ext}`
+      copyFileSync(src, join(FONT_DIR, name))
+    }
+    return fontListFiles()
+  })
+
+  ipcMain.handle('font:list', (): CustomFontInfo[] => fontListFiles())
+
+  // 删字体文件，返回刷新后清单；删的是当前全局字体时由渲染层负责回退默认
+  ipcMain.handle('font:delete', (_e, file: string): CustomFontInfo[] => {
+    if (!/^[\w.-]+$/.test(file)) throw new Error('非法文件名')
+    unlinkSync(join(FONT_DIR, file))
+    return fontListFiles()
+  })
 
   // ---------- 通用条目操作（各模块列表共用模式） ----------
   type ItemKind =

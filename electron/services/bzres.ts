@@ -22,16 +22,20 @@ export function registerBzresSchemes(): void {
 export function registerBzresProtocol(): void {
   protocol.handle(BZRES_SCHEME, (request) => {
     const url = new URL(request.url)
-    // bzres:// 无真实主机，host 仅作命名空间（root=userData 根，bg=背景图目录），不映射为磁盘目录。
-    // bzres://root/avatar.png → userData/avatar.png；bzres://bg/bg-light.png → userData/bg/bg-light.png
+    // bzres:// 无真实主机，host 仅作命名空间（root=userData 根，bg=背景图目录，fonts=导入字体目录），
+    // 不映射为磁盘目录。
+    // bzres://root/avatar.png → userData/avatar.png；bzres://bg/bg-light.png → userData/bg/bg-light.png；
+    // bzres://fonts/xxx.ttf → userData/fonts/xxx.ttf
     const host = url.hostname
     const pathPart = url.pathname.replace(/^\/+/, '')
     const raw =
       host === 'bg'
         ? 'bg/' + pathPart
-        : host === 'root' || host === 'localhost' || host === ''
-          ? pathPart
-          : ''
+        : host === 'fonts'
+          ? 'fonts/' + pathPart
+          : host === 'root' || host === 'localhost' || host === ''
+            ? pathPart
+            : ''
     const parts = decodeURIComponent(raw)
       .replace(/\\/g, '/')
       .split('/')
@@ -55,7 +59,15 @@ export function registerBzresProtocol(): void {
               ? 'image/gif'
               : ext === 'bmp'
                 ? 'image/bmp'
-                : 'application/octet-stream'
+                : ext === 'ttf'
+                  ? 'font/ttf'
+                  : ext === 'otf'
+                    ? 'font/otf'
+                    : ext === 'woff'
+                      ? 'font/woff'
+                      : ext === 'woff2'
+                        ? 'font/woff2'
+                        : 'application/octet-stream'
     try {
       const data = readFileSync(abs)
       return new Response(data, { headers: { 'Content-Type': mime } })

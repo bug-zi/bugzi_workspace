@@ -1,6 +1,7 @@
 // 三栏布局 + 模块路由（样式 specs §3）
 import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ThemeProvider, useAppSettings } from './theme/ThemeProvider'
+import { registerCustomFontFaces } from './theme/customFonts'
 import { ToastProvider } from './components/Toast'
 import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
@@ -166,6 +167,11 @@ function Shell() {
         /* 坏数据静默容错，loadQueue 内部逐条防线 */
       }
     })
+  }, [])
+
+  // 导入字体注册（优化建议区第46轮）：全局字体设置为导入字体时重启即生效
+  useEffect(() => {
+    void registerCustomFontFaces()
   }, [])
 
   const switchRightPanel = useCallback((p: 'ai' | 'draft' | 'files' | 'canvas' | null): void => {

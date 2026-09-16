@@ -1,6 +1,7 @@
 // 信息源（信息源 specs §3）：源列表 + 文章列表三段式 + 阅读视图（主栏内切换）
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArticleSummary, FeedRecord, FeedView } from '../../shared/types'
+import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ArticleView, { relTime } from './ArticleView'
 import { useToast } from '../../components/Toast'
@@ -23,6 +24,8 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   const [readingArticle, setReadingArticle] = useState<Awaited<ReturnType<typeof window.api.articles.open>> | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [addUrl, setAddUrl] = useState('')
+  // RSSHub 实例（第46轮反馈修订）：rsshub:// 路由展开地址，弹窗内可改即存
+  const [rsshubBase, setRsshubBase] = useState('')
   const [probing, setProbing] = useState(false)
   const [probed, setProbed] = useState<{ title: string; siteUrl: string; feedUrl: string } | null>(null)
   const [removeTarget, setRemoveTarget] = useState<FeedWithUnread | null>(null)
@@ -120,6 +123,12 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
     setReadingArticle(null)
     void load()
   }
+
+  // 添加订阅弹窗打开时载入 RSSHub 实例设置（空=默认镜像，主进程同口径兜底）
+  useEffect(() => {
+    if (!addOpen) return
+    void window.api.settings.get(SettingsKeys.FeedRsshubBase).then((v) => setRsshubBase(v ?? ''))
+  }, [addOpen])
 
   const doAdd = async (): Promise<void> => {
     if (!addUrl.trim()) return
@@ -354,7 +363,7 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
             <div className="dialog-body">
               <input
                 className="field"
-                placeholder="RSS/Atom 链接或网站首页，如 https://example.com/feed.xml"
+                placeholder="RSS/Atom 链接或网站首页，支持 rsshub:// 路由"
                 value={addUrl}
                 onChange={(e) => {
                   setAddUrl(e.target.value)
@@ -362,6 +371,21 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
                 }}
                 autoFocus
               />
+              <div className="feed-rsshub-row">
+                <span className="feed-rsshub-label">RSSHub 实例</span>
+                <input
+                  className="field"
+                  placeholder="rsshub:// 路由展开地址，默认 https://hub.slarker.me"
+                  value={rsshubBase}
+                  onChange={(e) => {
+                    setRsshubBase(e.target.value)
+                    void window.api.settings.set(SettingsKeys.FeedRsshubBase, e.target.value)
+                  }}
+                />
+                <div className="feed-rsshub-hint">
+                  rsshub.app 官方已限制阅读器访问（403），公共镜像可用性随时变化；自建部署见 docs.rsshub.app/deploy
+                </div>
+              </div>
               {probed && (
                 <div className="feed-probe-line ok">
                   验证通过：{probed.title}

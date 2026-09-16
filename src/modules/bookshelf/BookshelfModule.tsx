@@ -22,7 +22,9 @@ import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, epubChapterAt, type Re
 import { useReadingTimer } from './useReadingTimer'
 import type { ReadingMode } from './readerKeys'
 import ActionMenu from '../../components/ActionMenu'
-import { FONT_FAMILIES, READER_FONTS } from '../../theme/fonts'
+import { READER_FONTS, withCustomGlobalFonts, withCustomReaderFonts } from '../../theme/fonts'
+import { getCustomFonts } from '../../theme/customFonts'
+import type { CustomFontInfo } from '../../shared/types'
 import './bookshelf.css'
 
 /** 卡片进度角标：读过显百分比，没读过显「未读」 */
@@ -92,6 +94,8 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   const itemsRef = useRef(items)
   itemsRef.current = items
   const [reading, setReading] = useState<BooksRecord | null>(null)
+  // 导入字体清单（优化建议区第46轮）：缓存优先，模块激活时刷新
+  const [customFonts, setCustomFonts] = useState<CustomFontInfo[]>([])
   const [readerLabel, setReaderLabel] = useState('')
   const [delTarget, setDelTarget] = useState<BooksRecord | null>(null)
   const [dupPending, setDupPending] = useState<{ paths: string[]; titles: string[] } | null>(null)
@@ -263,7 +267,11 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
     void load()
     void loadFolders()
     void refreshStats()
+    void getCustomFonts().then(setCustomFonts)
   })
+  useEffect(() => {
+    void getCustomFonts().then(setCustomFonts)
+  }, [])
   // 总导览深链（260912）：续读直达——找书 openBook 进阅读器（列表未载完则现拉一次）
   useModuleNavigate('zangyue', (target, payload) => {
     if (target !== 'read') return
@@ -512,9 +520,9 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
     })
   }
 
-  /** 「跟随全局（X）」动态名：反查个人档全局字体；未设置=系统 */
+  /** 「跟随全局（X）」动态名：反查个人档全局字体（含导入字体）；未设置=系统 */
   const globalFontName = (): string => {
-    const hit = FONT_FAMILIES.find((f) => f.value === settings[SettingsKeys.FontFamily])
+    const hit = withCustomGlobalFonts(customFonts).find((f) => f.value === settings[SettingsKeys.FontFamily])
     return hit ? hit.label.split('（')[0] : '系统'
   }
 
@@ -657,12 +665,12 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
                 label: `跟随全局（${globalFontName()}）`,
                 onClick: () => setBookFont(null)
               },
-              ...READER_FONTS.map((f) => ({
+              ...withCustomReaderFonts(customFonts).map((f, i) => ({
                 key: f.family,
                 icon: reading.font_family === f.value ? 'check' : undefined,
                 label: f.label,
                 style: { fontFamily: f.value },
-                separatorAbove: f.family === 'Liyu Shoushu',
+                separatorAbove: f.family === 'Liyu Shoushu' || i === READER_FONTS.length,
                 onClick: () => setBookFont(f.value)
               }))
             ]}

@@ -5,9 +5,10 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
-import { FONT_FAMILIES } from '../../theme/fonts'
+import { FONT_FAMILIES, withCustomGlobalFonts } from '../../theme/fonts'
+import { customFontCssValue, invalidateCustomFonts, registerCustomFontFaces } from '../../theme/customFonts'
 import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
-import type { LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
+import type { CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
@@ -273,6 +274,46 @@ export default function ProfileModule() {
     await setSetting(key, value)
   }
 
+  // ---------- 导入字体（优化建议区第46轮） ----------
+  const [customFonts, setCustomFonts] = useState<CustomFontInfo[]>([])
+  const [delFont, setDelFont] = useState<CustomFontInfo | null>(null)
+
+  useEffect(() => {
+    void registerCustomFontFaces().then(setCustomFonts)
+  }, [])
+
+  const importFonts = async (): Promise<void> => {
+    try {
+      const list = await window.api.fonts.import()
+      if (!list) return
+      invalidateCustomFonts()
+      setCustomFonts(await registerCustomFontFaces())
+      toast('字体已导入')
+    } catch (e) {
+      toast(`导入失败：${(e as Error).message}`)
+    }
+  }
+
+  const doDeleteFont = async (): Promise<void> => {
+    const f = delFont
+    if (!f) return
+    try {
+      invalidateCustomFonts()
+      const list = await window.api.fonts.delete(f.file)
+      setCustomFonts(list)
+      if (settings[SettingsKeys.FontFamily] === customFontCssValue(f.family)) {
+        await applyFont(SettingsKeys.FontFamily, FONT_FAMILIES[0].value)
+        toast('已删除字体，全局字体回退默认')
+      } else {
+        toast('已删除')
+      }
+    } catch (e) {
+      toast(`删除失败：${(e as Error).message}`)
+    } finally {
+      setDelFont(null)
+    }
+  }
+
   // ---------- LLM ----------
   const saveLlm = async (): Promise<void> => {
     if (!llmForm) return
@@ -528,11 +569,13 @@ export default function ProfileModule() {
   }
 
   const fontSettings = settings
-  // 旧值兜底：已删除的字体（宋体/黑体/等线等不在列表的存量值）回退显示默认
+  // 旧值兜底：已删除的字体（不在列表的存量值）回退显示默认
+  const allFontOptions = withCustomGlobalFonts(customFonts)
   const fontFamilyValue = fontSettings[SettingsKeys.FontFamily] ?? ''
-  const fontFamilySelected = FONT_FAMILIES.some((f) => f.value === fontFamilyValue)
+  const fontFamilySelected = allFontOptions.some((f) => f.value === fontFamilyValue)
     ? fontFamilyValue
-    : FONT_FAMILIES[0].value
+    : allFontOptions[0].value
+  const selectedCustom = customFonts.find((c) => customFontCssValue(c.family) === fontFamilySelected) ?? null
 
   return (
     <div className="profile-page">
@@ -659,10 +702,18 @@ export default function ProfileModule() {
               value={fontFamilySelected}
               onChange={(e) => void applyFont(SettingsKeys.FontFamily, e.target.value)}
             >
-              {FONT_FAMILIES.map((f) => (
+              {allFontOptions.map((f) => (
                 <option key={f.label} value={f.value}>{f.label}</option>
               ))}
             </select>
+            <button className="icon-btn" title="导入字体文件（ttf/otf/woff/woff2，可多选）" onClick={() => void importFonts()}>
+              <span className="material-symbols-outlined">upload</span>
+            </button>
+            {selectedCustom && (
+              <button className="icon-btn danger" title="删除此导入字体" onClick={() => setDelFont(selectedCustom)}>
+                <span className="material-symbols-outlined">delete</span>
+              </button>
+            )}
           </div>
           <div className="setting-row">
             <span className="setting-label">字体粗细</span>
@@ -1446,6 +1497,20 @@ export default function ProfileModule() {
         onCancel={() => setDelFact(null)}
       >
         确认删除「{delFact?.category}」这条画像？
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={delFont != null}
+        title="删除导入字体"
+        danger
+        confirmText="删除"
+        onConfirm={() => void doDeleteFont()}
+        onCancel={() => setDelFont(null)}
+      >
+        确认删除字体「{delFont?.label}」？
+        {delFont && settings[SettingsKeys.FontFamily] === customFontCssValue(delFont.family)
+          ? '该字体正作为全局字体使用，删除后将回退默认（系统）。'
+          : ''}
+        使用该字体的书籍将回落楷体/衬线显示。
       </ConfirmDialog>
       <ConfirmDialog
         open={delLlm != null}

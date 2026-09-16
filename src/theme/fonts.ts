@@ -5,6 +5,8 @@ import hongleiUrl from '../renderer/assets/fonts/honglei-banshu.ttf?url'
 import lxgwUrl from '../renderer/assets/fonts/lxgw-wenkai.ttf?url'
 import xuanzongUrl from '../renderer/assets/fonts/xuanzongti.otf?url'
 import youranUrl from '../renderer/assets/fonts/youran-xiaokai.ttf?url'
+import type { CustomFontInfo } from '../shared/types'
+import { customFontCssValue } from './customFonts'
 
 export interface FontOption {
   label: string
@@ -47,3 +49,23 @@ export const READER_FONTS: ReaderFont[] = [
 
 /** 打包字体（@font-face 注入 iframe 用；设计 §1.4，EpubReader 消费） */
 export const BUNDLED_FONTS = READER_FONTS.filter((f): f is ReaderFont & { url: string } => f.url != null)
+
+/** 合并导入字体后的个人档全局字体清单（导入字体追加在打包字体之后，优化建议区第46轮） */
+export function withCustomGlobalFonts(customs: CustomFontInfo[]): FontOption[] {
+  return [...FONT_FAMILIES, ...customs.map((c) => ({ label: c.label, value: customFontCssValue(c.family) }))]
+}
+
+/** 导入字体 → 阅读器字体条目（family/url 供 epub iframe @font-face 注入） */
+export function customsToReaderFonts(customs: CustomFontInfo[]): ReaderFont[] {
+  return customs.map((c) => ({
+    label: c.label,
+    value: customFontCssValue(c.family),
+    family: c.family,
+    url: c.url
+  }))
+}
+
+/** 合并导入字体后的阅读器字体清单（系统 6 + 打包 5 + 导入 N） */
+export function withCustomReaderFonts(customs: CustomFontInfo[]): ReaderFont[] {
+  return [...READER_FONTS, ...customsToReaderFonts(customs)]
+}

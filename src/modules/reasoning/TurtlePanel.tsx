@@ -793,7 +793,10 @@ export default function TurtlePanel() {
                     {DIFF_ZH[s.difficulty] ?? s.difficulty} · {s.theme_tag} · {fmtDate(s.created_at)}
                   </div>
                 </div>
-                <span className={`badge${s.status === 'solved' ? ' primary' : ''}`}>
+                <span
+                  className={`badge${s.status === 'solved' ? ' primary' : s.status === 'abandoned' ? ' muted' : ''}`}
+                  title={SOUP_STATUS_ZH[s.status]}
+                >
                   {SOUP_STATUS_ZH[s.status] ?? s.status}
                 </span>
                 {s.status !== 'playing' && (

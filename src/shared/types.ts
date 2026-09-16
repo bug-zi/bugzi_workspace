@@ -46,6 +46,8 @@ export const SettingsKeys = {
   FontWeight: 'font_weight',
   /** 信息源阅读视图 Ctrl+滚轮缩放百分比（80-200，全局一档；260916 新功能开发区） */
   FeedZoom: 'feed_reader_zoom',
+  /** 信息源 rsshub:// 路由默认展开实例（优化建议区第46轮反馈修订：rsshub.app 官方限制 feed 阅读器访问，实例须可换） */
+  FeedRsshubBase: 'feed_rsshub_base',
   Theme: 'theme',
   LlmConfigs: 'llm_configs',
   LlmDefaultId: 'llm_default_id',
@@ -740,6 +742,15 @@ export interface FeedRecord {
   last_fetched_at: string | null
   fetch_error: string | null
   created_at: string
+}
+
+/** 导入字体条目（优化建议区第46轮，userData/fonts/ 文件系统为真相源）：
+ *  file=落盘唯一名；label=导入时原始文件名去扩展名（sanitize 后），兼作 CSS family 名 */
+export interface CustomFontInfo {
+  file: string
+  label: string
+  family: string
+  url: string
 }
 
 /** 信息源文章全量（articles 表；打开阅读视图用，含正文与总结缓存） */

@@ -7,7 +7,9 @@ import type { Book, Contents, NavItem, Rendition } from 'epubjs'
 import type { BooksNote, BooksRecord, BooksReadingBg, Theme } from '../../shared/types'
 import { parseReaderKey, dirOfKey, createHoldScroller, type ReadingMode } from './readerKeys'
 import { flattenToc, type ReaderLocate, type ReaderTocItem } from './ReaderSidebar'
-import { BUNDLED_FONTS } from '../../theme/fonts'
+import { BUNDLED_FONTS, customsToReaderFonts } from '../../theme/fonts'
+import type { ReaderFont } from '../../theme/fonts'
+import { getCustomFonts } from '../../theme/customFonts'
 
 export interface EpubReaderHandle {
   /** 跳到 CFI（笔记页签回跳） */
@@ -121,17 +123,23 @@ function applyTheme(
   })
 }
 
-/** 打包字体注入 iframe（设计 §1.4）：父文档 @font-face 进不了 iframe（独立 document），
- *  正文按 family 名解析不到打包字体会静默回落楷体——rendered 时注入修复。
- *  ?url 产物 dev 为根相对 / build 为相对路径，blob iframe 无基准可解析 → new URL 绝对化。 */
+/** 字体注入 iframe（设计 §1.4 + 优化建议区第46轮导入字体）：父文档 @font-face 进不了 iframe
+ *  （独立 document），正文按 family 名解析不到字体会静默回落楷体——rendered 时注入修复。
+ *  清单 = 打包字体 + 导入字体（getCustomFonts 缓存优先）；?url 产物 dev 为根相对 / build 为
+ *  相对路径，blob iframe 无基准可解析 → new URL 绝对化（bzres:// 本就是绝对 URL 直用）。 */
 const FONT_FACE_STYLE_ID = 'bz-reader-fonts'
-function injectFontFaces(doc: Document): void {
+const FONT_FORMATS: Record<string, string> = { otf: 'opentype', woff: 'woff', woff2: 'woff2' }
+function injectFontFaces(doc: Document, customs: ReaderFont[]): void {
   if (doc.getElementById(FONT_FACE_STYLE_ID)) return
-  const css = BUNDLED_FONTS.map(({ family, url }) => {
-    const abs = new URL(url, window.location.href).href
-    const fmt = url.endsWith('.otf') ? 'opentype' : 'truetype'
-    return `@font-face{font-family:'${family}';src:url('${abs}') format('${fmt}');font-weight:100 900;font-display:swap;}`
-  }).join('\n')
+  const css = [...BUNDLED_FONTS, ...customs]
+    .map(({ family, url }) => {
+      if (!url) return ''
+      const abs = url.startsWith('bzres:') ? url : new URL(url, window.location.href).href
+      const fmt = FONT_FORMATS[url.split('.').pop()?.toLowerCase() ?? ''] ?? 'truetype'
+      return `@font-face{font-family:'${family}';src:url('${abs}') format('${fmt}');font-weight:100 900;font-display:swap;}`
+    })
+    .filter(Boolean)
+    .join('\n')
   const s = doc.createElement('style')
   s.id = FONT_FACE_STYLE_ID
   s.textContent = css
@@ -461,7 +469,8 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(props
     // keyup 一并转发——滚动模式按住 W/S 后在 iframe 内松开也能停滚动
     rendition.on('rendered', (_section: unknown, contents: Contents) => {
       try {
-        injectFontFaces(contents.document)
+        // 导入字体清单异步补齐（缓存命中即近同步；清单变化后下一章注入自然更新）
+        void getCustomFonts().then((list) => injectFontFaces(contents.document, customsToReaderFonts(list)))
       } catch {
         /* document 未就绪等，忽略 */
       }

@@ -312,6 +312,16 @@
   border-color: var(--color-primary);
   color: #fff;
 }
+/* 弃汤标灰（优化建议区第46轮）：终局弃汤与「未玩/进行中」默认徽章、已破汤主题色徽章区分 */
+.badge.muted {
+  background: var(--color-text-secondary);
+  border-color: var(--color-text-secondary);
+  color: #fff;
+}
+/* 深色下 text-secondary 是浅蓝灰，白字对比不足，反用深底字 */
+:root[data-theme='dark'] .badge.muted {
+  color: #101d38;
+}
 
 /* 格言行单行布局（优化建议区第15轮）：正文占左自动换行（3 行保险上限防极端长文），
    出处/标签/菜单按钮尾部收纳；行可拖拽排序，单击开功能气泡菜单、双击开笔记 */

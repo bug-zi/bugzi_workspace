@@ -39,6 +39,15 @@ export interface CanvasRow {
   updated_at: string
 }
 
+/** 导入字体条目（优化建议区第46轮，userData/fonts/ 文件系统为真相源）：
+ *  file=落盘唯一名；label=导入时原始文件名去扩展名（sanitize 后），兼作 CSS family 名 */
+export interface CustomFontInfo {
+  file: string
+  label: string
+  family: string
+  url: string
+}
+
 export interface MottoRecord {
   id: number
   content: string
@@ -917,6 +926,12 @@ export interface Api {
     bgUpload(group: 'light' | 'dark'): Promise<{ list: string[]; applied: string | null } | null>
     bgUse(group: 'light' | 'dark', file: string): Promise<boolean>
     bgDelete(group: 'light' | 'dark', file: string): Promise<{ list: string[]; wasUsing: boolean }>
+  }
+  /** 导入字体（优化建议区第46轮，userData/fonts/ 文件系统为真相源） */
+  fonts: {
+    list(): Promise<CustomFontInfo[]>
+    import(): Promise<CustomFontInfo[] | null>
+    delete(file: string): Promise<CustomFontInfo[]>
   }
   item: {
     discard(

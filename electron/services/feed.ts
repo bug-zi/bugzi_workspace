@@ -5,6 +5,8 @@ import { XMLParser } from 'fast-xml-parser'
 import { Readability } from '@mozilla/readability'
 import { parseHTML } from 'linkedom'
 import { getDb, nowIso } from '../db/db'
+import { getSetting } from '../db/settings'
+import { SettingsKeys } from '../../src/shared/types'
 import { chatCompletion } from '../ai/llm'
 import { ensureNotCancelled } from '../ai/jobs'
 import type {
@@ -22,6 +24,10 @@ const UA =
 
 /** 单源网络超时（specs §0） */
 const TIMEOUT_MS = 15_000
+
+/** rsshub:// 默认展开实例（优化建议区第46轮反馈修订）：rsshub.app 官方已限制 feed 阅读器访问
+ *  （403「仅作测试用途」），默认用实测可用的公共镜像；实例可在添加订阅弹窗更换（settings 键） */
+const RSSHUB_BASE_DEFAULT = 'https://hub.slarker.me'
 
 /** RSS 自带全文判够阈值：剥标签后 ≥ 此字符数不抓网页（specs §0） */
 const FULL_TEXT_MIN = 500
@@ -279,8 +285,22 @@ async function probeViaLinks(html: string, pageUrl: string, siteUrl: string): Pr
 }
 
 /** 拉一次验证并取源名（添加订阅弹窗「验证」用；260911 升级——net.fetch 走系统代理 + 网站首页自动发现订阅链接） */
+/** rsshub:// 协议展开（优化建议区第46轮）：rsshub://路由 → 实例 base（settings 可配，默认镜像见常量）；
+ *  首段形如域名（含点，可带端口）时视为自建实例逐条覆盖。RSSHub 路由命名空间不含点，判定无歧义 */
+function expandRsshub(raw: string, base: string): string {
+  if (!/^rsshub:\/\//i.test(raw)) return raw
+  const rest = raw.slice(raw.indexOf('://') + 3)
+  const m = rest.match(/^([\w-]+(?:\.[\w-]+)+)(:\d+)?(?:\/(.*))?$/)
+  if (m) return `https://${m[1]}${m[2] ?? ''}/${(m[3] ?? '').replace(/^\/+/, '')}`
+  const b = base.trim().replace(/\/+$/, '') || RSSHUB_BASE_DEFAULT
+  const withProto = /^https?:\/\//i.test(b) ? b : `https://${b}`
+  return `${withProto}/${rest.replace(/^\/+/, '')}`
+}
+
 export async function probeFeed(url: string): Promise<FeedProbe> {
-  const u = url.trim()
+  const raw = url.trim()
+  const u = expandRsshub(raw, getSetting(SettingsKeys.FeedRsshubBase) ?? '')
+  const viaRsshub = u !== raw
   if (!/^https?:\/\//.test(u)) throw new Error('请输入 http/https 链接')
   let siteUrl = ''
   try {
@@ -292,7 +312,16 @@ export async function probeFeed(url: string): Promise<FeedProbe> {
   let isHtml = false
   try {
     const res = await httpGet(u)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      // rsshub:// 展开源被实例拒绝时给可行动提示：rsshub.app 官方限制 feed 阅读器访问、
+      // 公共镜像常有反爬/限流，「HTTP 403」裸文案对用户无从下手（第46轮反馈修订）
+      if (viaRsshub && (res.status === 403 || res.status === 429 || res.status >= 500)) {
+        throw new Error(
+          `RSSHub 实例拒绝了请求（HTTP ${res.status}）。公共实例常有访问限制，请在添加订阅弹窗更换 RSSHub 实例，或自建部署（docs.rsshub.app/deploy）`
+        )
+      }
+      throw new Error(`HTTP ${res.status}`)
+    }
     body = await res.text()
     isHtml = (res.headers.get('content-type') ?? '').toLowerCase().includes('html')
   } catch (e) {

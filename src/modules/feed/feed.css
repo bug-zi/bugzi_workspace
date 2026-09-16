@@ -309,6 +309,23 @@
   color: #fff;
 }
 
+/* RSSHub 实例设置（优化建议区第46轮反馈修订）：弹窗内可改即存 */
+.feed-rsshub-row {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.feed-rsshub-label {
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+.feed-rsshub-hint {
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
 /* 加载更早（收件箱/已归档 30 天窗口外触达——优化建议区第28轮） */
 .feed-load-more {
   margin: 6px auto 14px;

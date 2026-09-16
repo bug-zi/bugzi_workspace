@@ -49,6 +49,16 @@ const api = {
     bgDelete: (group: 'light' | 'dark', file: string): Promise<{ list: string[]; wasUsing: boolean }> =>
       ipcRenderer.invoke('image:bgDelete', group, file)
   },
+  fonts: {
+    /** 导入字体（优化建议区第46轮）：清单（新在前） */
+    list: (): Promise<import('../src/shared/types').CustomFontInfo[]> => ipcRenderer.invoke('font:list'),
+    /** 对话框多选导入；取消返回 null，成功返回刷新后清单 */
+    import: (): Promise<import('../src/shared/types').CustomFontInfo[] | null> =>
+      ipcRenderer.invoke('font:import'),
+    /** 删字体文件，返回刷新后清单 */
+    delete: (file: string): Promise<import('../src/shared/types').CustomFontInfo[]> =>
+      ipcRenderer.invoke('font:delete', file)
+  },
   item: {
     discard: (
       table:
