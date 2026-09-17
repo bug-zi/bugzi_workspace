@@ -564,6 +564,11 @@ export function registerIpc(): void {
     clearAiSession(sessionId)
     return true
   })
+  // 归档会话（优化建议区第47轮）：软删 + 入回收站 ai_session 块；恢复/彻底删走 recycle 通用链路
+  ipcMain.handle('aiSession:archive', (_e, id: number) => {
+    discardToRecycle('ai_session', id)
+    return true
+  })
 
   // ---------- 格言库 ----------
   /** mottos.tags 列（JSON 字符串）→ string[]，容错解析 */
@@ -745,6 +750,30 @@ export function registerIpc(): void {
   ipcMain.handle('wiki:updateEntry', (_e, id: number, term: string, summary: string) => {
     getDb().prepare('UPDATE wiki_entries SET term = ?, summary = ?, updated_at = ? WHERE id = ?').run(term, summary, nowIso(), id)
     return true
+  })
+  // 对话保存落卡（优化建议区第47轮）：免 AI 词条卡，已学态直接入板块（不混待学习区批次）
+  ipcMain.handle('wiki:saveChatCard', (_e, sectionId: number, title: string, md: string) => {
+    const d = getDb()
+    const t = title.trim()
+    if (!t) throw new Error('TITLE_REQUIRED')
+    if (!d.prepare('SELECT id FROM wiki_sections WHERE id = ?').get(sectionId)) throw new Error('NOT_FOUND')
+    const dup = d.prepare('SELECT id FROM wiki_entries WHERE term = ? AND deleted_at IS NULL').get(t)
+    if (dup) throw new Error('CONFLICT:' + t)
+    const bodyLine = md
+      .split('\n')
+      .find((l) => l.trim() && !l.trimStart().startsWith('#') && !l.trimStart().startsWith('>'))
+    const summary = (bodyLine ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || `${t}（AI 对话）`
+    const now = nowIso()
+    const r = d
+      .prepare(
+        "INSERT INTO wiki_entries (section_id, term, summary, md_path, origin, state, created_at, updated_at) VALUES (?, ?, ?, 'PENDING', 'ai', 'learned', ?, ?)"
+      )
+      .run(sectionId, t, summary, now, now)
+    const id = Number(r.lastInsertRowid)
+    const mdPath = `md/wiki/${id}.md`
+    d.prepare('UPDATE wiki_entries SET md_path = ? WHERE id = ?').run(mdPath, id)
+    mdWrite(mdPath, md)
+    return id
   })
   ipcMain.handle('wiki:generate', async (_e, jobId: string, term: string | null, sectionId: number | null) => {
     // 随机抽卡池优先（260910 待学习区）：抽中池卡原地转 learn 态秒回（无 LLM 调用，
@@ -1057,6 +1086,28 @@ export function registerIpc(): void {
       endJob(jobId)
     }
     return d.prepare(`${learnCardSql} AND n.id = ?`).get(id)
+  })
+  // 对话保存落卡（优化建议区第47轮）：免 AI 知识点卡，md=对话封装；todo 态进学习队列由用户学会计数
+  ipcMain.handle('learn:saveChatCard', (_e, topicId: number, title: string, md: string) => {
+    const d = getDb()
+    const t = title.trim()
+    if (!t) throw new Error('TITLE_REQUIRED')
+    const topic = d
+      .prepare('SELECT domain_id FROM learn_nodes WHERE id = ? AND level = 1')
+      .get(topicId) as { domain_id: number } | undefined
+    if (!topic) throw new Error('NOT_FOUND')
+    const dup = d
+      .prepare('SELECT id FROM learn_nodes WHERE parent_id = ? AND title = ? AND deleted_at IS NULL')
+      .get(topicId, t)
+    if (dup) throw new Error('CONFLICT:' + t)
+    const r = d
+      .prepare(
+        "INSERT INTO learn_nodes (domain_id, parent_id, level, title, source, created_at) VALUES (?, ?, 2, ?, 'manual', ?)"
+      )
+      .run(topic.domain_id, topicId, t, nowIso())
+    const id = Number(r.lastInsertRowid)
+    mdCreate(`md/learn/${id}.md`, md)
+    return id
   })
   ipcMain.handle('learn:nodeDelete', (_e, id: number) => {
     discardToRecycle('learn', id)
@@ -1659,6 +1710,93 @@ export function registerIpc(): void {
   })
   ipcMain.handle('wenbi:journalDiscard', (_e, id: number) => {
     discardToRecycle('wenbi_journal', id)
+    return true
+  })
+
+  // ---------- 经验书（DB v44，2026-09-17 新功能开发区）：一句话经验道理，零 AI ----------
+  ipcMain.handle('wenbi:expList', () =>
+    getDb()
+      .prepare('SELECT * FROM wenbi_experiences WHERE deleted_at IS NULL ORDER BY sort ASC, id ASC')
+      .all()
+  )
+  /** 新建经验条目：服务端兜底 trim 校验；落指定夹顶（sort=MIN-1），null=未分类；返回整行供插列表顶部 */
+  ipcMain.handle('wenbi:expCreate', (_e, content: string, categoryId: number | null) => {
+    const c = String(content ?? '').trim()
+    if (!c) throw new Error('EMPTY_CONTENT')
+    const d = getDb()
+    const min = d
+      .prepare('SELECT MIN(sort) AS m FROM wenbi_experiences WHERE deleted_at IS NULL AND category_id IS ?')
+      .get(categoryId) as { m: number | null }
+    const now = nowIso()
+    const r = d
+      .prepare(
+        'INSERT INTO wenbi_experiences (content, category_id, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(c, categoryId, (min.m ?? 0) - 1, now, now)
+    return d.prepare('SELECT * FROM wenbi_experiences WHERE id = ?').get(Number(r.lastInsertRowid))
+  })
+  /** 改经验条目：回写 updated_at，返回更新后整行 */
+  ipcMain.handle('wenbi:expUpdate', (_e, id: number, content: string) => {
+    const c = String(content ?? '').trim()
+    if (!c) throw new Error('EMPTY_CONTENT')
+    const d = getDb()
+    d.prepare('UPDATE wenbi_experiences SET content = ?, updated_at = ? WHERE id = ?').run(c, nowIso(), id)
+    return d.prepare('SELECT * FROM wenbi_experiences WHERE id = ?').get(id)
+  })
+  ipcMain.handle('wenbi:expDiscard', (_e, id: number) => {
+    discardToRecycle('wenbi_exp', id)
+    return true
+  })
+
+  // ---------- 经验书分类（DB v46，2026-09-17 优化）：夹 + 拖拽排序 ----------
+  ipcMain.handle('wenbi:expCategoryList', () =>
+    getDb()
+      .prepare('SELECT * FROM exp_categories ORDER BY sort ASC, id ASC')
+      .all()
+  )
+  ipcMain.handle('wenbi:expCategoryCreate', (_e, name: string) => {
+    const n = String(name ?? '').trim()
+    if (!n) throw new Error('EMPTY_NAME')
+    const d = getDb()
+    if (d.prepare('SELECT id FROM exp_categories WHERE name = ?').get(n)) throw new Error('DUP_NAME')
+    const max = d.prepare('SELECT MAX(sort) AS m FROM exp_categories').get() as { m: number | null }
+    const r = d
+      .prepare('INSERT INTO exp_categories (name, sort, created_at) VALUES (?, ?, ?)')
+      .run(n, (max.m ?? -1) + 1, nowIso())
+    return d.prepare('SELECT * FROM exp_categories WHERE id = ?').get(Number(r.lastInsertRowid))
+  })
+  ipcMain.handle('wenbi:expCategoryRename', (_e, id: number, name: string) => {
+    const n = String(name ?? '').trim()
+    if (!n) throw new Error('EMPTY_NAME')
+    const d = getDb()
+    if (d.prepare('SELECT id FROM exp_categories WHERE name = ? AND id != ?').get(n, id))
+      throw new Error('DUP_NAME')
+    d.prepare('UPDATE exp_categories SET name = ? WHERE id = ?').run(n, id)
+    return true
+  })
+  ipcMain.handle('wenbi:expCategoryDelete', (_e, id: number) => {
+    const d = getDb()
+    // 全部行（含在站条目）回未分类；在站条目恢复时有孤儿守卫二次兜底
+    d.prepare('UPDATE wenbi_experiences SET category_id = NULL WHERE category_id = ?').run(id)
+    d.prepare('DELETE FROM exp_categories WHERE id = ?').run(id)
+    return true
+  })
+  ipcMain.handle('wenbi:expMove', (_e, id: number, categoryId: number | null) => {
+    const d = getDb()
+    const min = d
+      .prepare('SELECT MIN(sort) AS m FROM wenbi_experiences WHERE deleted_at IS NULL AND category_id IS ?')
+      .get(categoryId) as { m: number | null }
+    d.prepare('UPDATE wenbi_experiences SET category_id = ?, sort = ? WHERE id = ?').run(
+      categoryId,
+      (min.m ?? 0) - 1,
+      id
+    )
+    return true
+  })
+  ipcMain.handle('wenbi:expReorder', (_e, moves: { id: number; sort: number }[]) => {
+    const d = getDb()
+    const stmt = d.prepare('UPDATE wenbi_experiences SET sort = ? WHERE id = ?')
+    for (const m of moves) stmt.run(m.sort, m.id)
     return true
   })
   ipcMain.handle('wenbi:articleList', () =>

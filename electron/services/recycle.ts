@@ -15,6 +15,7 @@ export type RecycleSource =
   | 'drafts'
   | 'wenbi_journal'
   | 'wenbi_article'
+  | 'wenbi_exp'
   | 'ledger_tx'
   | 'ledger_account'
   | 'ledger_category'
@@ -23,6 +24,7 @@ export type RecycleSource =
   | 'prophet'
   | 'twelve_question'
   | 'qa'
+  | 'ai_session'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -35,6 +37,7 @@ const TABLES: Record<RecycleSource, string> = {
   drafts: 'drafts',
   wenbi_journal: 'wenbi_journals',
   wenbi_article: 'wenbi_articles',
+  wenbi_exp: 'wenbi_experiences',
   ledger_tx: 'ledger_tx',
   ledger_account: 'ledger_accounts',
   ledger_category: 'ledger_categories',
@@ -42,7 +45,8 @@ const TABLES: Record<RecycleSource, string> = {
   learn: 'learn_nodes',
   prophet: 'prophet_records',
   twelve_question: 'twelve_questions',
-  qa: 'qa_records'
+  qa: 'qa_records',
+  ai_session: 'ai_sessions'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -53,12 +57,14 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   inspirations: 'md_path',
   verify: 'md_path',
   qa: 'md_path',
+  ai_session: null, // 会话消息为 DB 行，hardDelete 特判清理
   zhijiji: null,
   reasoning_soup: null,
   reasoning_game: 'md_path',
   drafts: 'md_path',
   wenbi_journal: 'md_path',
   wenbi_article: 'md_path',
+  wenbi_exp: null,
   ledger_tx: null,
   ledger_account: null,
   ledger_category: null,
@@ -127,6 +133,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回问答历史列表：仅清标记
       d.prepare('UPDATE qa_records SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
+    case 'ai_session':
+      // 回 AI 边栏原频道会话列表：仅清标记（激活指向失效由渲染层 load 兜底）
+      d.prepare('UPDATE ai_sessions SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
     case 'zhijiji':
       // 回主列表：清标记 + 触碰 updated_at（浮回列表顶部，版本 md 原样保留）
       d.prepare('UPDATE zhijiji_questions SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(
@@ -168,6 +178,14 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'wenbi_journal':
       // 回浮生记时间线：仅清标记（分节钉在 created_at，无需复位）
       d.prepare('UPDATE wenbi_journals SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'wenbi_exp':
+      // 回经验书列表：仅清标记；原分类已删（先删条目后删夹）则落未分类（防孤儿 category_id）
+      d.prepare(
+        `UPDATE wenbi_experiences SET deleted_at = NULL,
+           category_id = CASE WHEN category_id IN (SELECT id FROM exp_categories) THEN category_id ELSE NULL END
+         WHERE id = ?`
+      ).run(rb.item_id)
       break
     case 'wenbi_article':
       // 回写作台构思区区末（文笔坊 specs §5：恢复回最初级区）
@@ -229,6 +247,13 @@ export function hardDelete(recycleId: number): void {
     // 知识点卡：md 路径派生为 md/learn/<id>.md，连同高光记录一起清理（同 wiki 口径）
     d.prepare('DELETE FROM learn_highlights WHERE node_id = ?').run(rb.item_id)
     mdDelete(`md/learn/${rb.item_id}.md`)
+  }
+  if (rb.source === 'ai_session') {
+    // 归档会话彻底删除：连全部消息一并删（无 md 附属）
+    d.prepare('DELETE FROM ai_messages WHERE session_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM ai_sessions WHERE id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
+    return
   }
   if (rb.source === 'zhijiji') {
     // 一问题多版本 md：先收齐路径再删行（问题行 + 全部版本行），最后逐个删文件

@@ -175,3 +175,15 @@ copilot?: {
 - [ ]  复制 Markdown / 导出 .md（保存对话框、取消无害）
 - [ ]  回收站：第八块两来源混放+来源标注；恢复分线（浮生记回时间线、文章回构思区区末）；彻底删除连 md；3 天自动清理覆盖两来源
 - [ ]  `npm run typecheck` / `npm run build` 通过
+
+## 9. 经验书（exp 板块，260917 新功能开发区追加，DB v44）
+
+一句话经验道理手册，零 AI 硬边界（无任何 AI 入口）。完整设计见 `2026-09-17-经验书-design.md`。
+
+- **数据**：`wenbi_experiences(id, content, created_at, updated_at, deleted_at)`（DB v44 + deleted_at 索引）；无标题无 md 正文，内容纯文本可含换行。
+- **视图**：顶部快记框（Enter 新建并插顶、Shift+Enter 换行、Esc 清空、空内容静默不建）+ 平铺单列表按 created_at 倒序（行=日期+内容全文）+ 空态引导。
+- **编辑**：双击行或铅笔钮原地 textarea——Enter 保存、Esc 取消、失焦保存；空内容视为取消 + toast；内容未变跳过写库。
+- **删除**：丢弃钮 → ConfirmDialog 二次确认 → 入回收站 `wenbi_exp`（归「文笔坊」块，恢复=仅清标记，3 天过期通用清理）。
+- **IPC**：`wenbi:expList / expCreate / expUpdate / expDiscard`（create/update 服务端 trim 兜底，返回整行）。
+- **接线**：`ExperiencePanel.tsx` 挂 WenbiModule 第二位 tab；刷新三路径（挂载 / `useModuleActivated('wenbi')` / active 切回）。
+- **优化轮（260917 同日，详见 `2026-09-17-经验书优化-design.md`）**：顶部分类 tab 夹（全部｜分类｜未分类锁定末位；预置系统整理/处事准则，可建改删，重名 DUP_NAME）+ 夹内拖拽排序（格言库同款半差插入/归一化/边缘自动滚动）+ 拖到 tab 归类 + ActionMenu「移动到…」；行去时间列（created_at 仍存库）。DB v46：`exp_categories` + 条目 `category_id`/`sort`；新通道 `expCategoryList/Create/Rename/Delete`、`expMove`、`expReorder`，`expCreate` 扩 categoryId、`expList` 改 sort 序；回收站 `wenbi_exp` 恢复加孤儿分类守卫。快记落当前激活分类（全部→未分类）插夹顶；tab 激活夹被删自愈回「全部」。

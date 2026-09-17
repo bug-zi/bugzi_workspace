@@ -1,8 +1,9 @@
-// 文笔坊模块（格言库并入——优化建议区第36轮：三 tab「格言库｜写作台｜浮生记」，默认格言库）
+// 文笔坊模块（优化建议区第36轮：格言库并入三 tab；260917 新功能开发区：新增经验书四 tab，默认格言库）
 import { useState } from 'react'
 import type { AiChannel } from '../../shared/types'
 import MottosModule from '../mottos/MottosModule'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
+import ExperiencePanel from './ExperiencePanel'
 import JournalPanel from './JournalPanel'
 import WritingPanel from './WritingPanel'
 
@@ -14,7 +15,7 @@ export interface WenbiModuleProps {
 
 export default function WenbiModule(props: WenbiModuleProps) {
   // 默认格言库（承袭其曾是启动首页的地位）；module-hidden 保活，tab 状态会话内保留、重启回默认
-  const [board, setBoard] = useState<'mottos' | 'writing' | 'journal'>('mottos')
+  const [board, setBoard] = useState<'mottos' | 'exp' | 'writing' | 'journal'>('mottos')
   // 总导览深链（260912）：切到格言库
   useModuleNavigate('wenbi', (target) => {
     if (target === 'mottos') setBoard('mottos')
@@ -24,7 +25,7 @@ export default function WenbiModule(props: WenbiModuleProps) {
       <div className="module-header">
         <span className="material-symbols-outlined">history_edu</span>
         <span className="module-title">文笔坊</span>
-        <span className="module-sub">格言库 · 写作台 · 浮生记</span>
+        <span className="module-sub">格言库 · 经验书 · 写作台 · 浮生记</span>
       </div>
       <div className="recycle-tabs">
         <button
@@ -32,6 +33,12 @@ export default function WenbiModule(props: WenbiModuleProps) {
           onClick={() => setBoard('mottos')}
         >
           格言库
+        </button>
+        <button
+          className={`recycle-tab${board === 'exp' ? ' active' : ''}`}
+          onClick={() => setBoard('exp')}
+        >
+          经验书
         </button>
         <button
           className={`recycle-tab${board === 'writing' ? ' active' : ''}`}
@@ -51,6 +58,12 @@ export default function WenbiModule(props: WenbiModuleProps) {
         aria-hidden={board !== 'mottos'}
       >
         <MottosModule active={board === 'mottos'} onOpenAi={props.onOpenAi} bumpAi={props.bumpAi} />
+      </div>
+      <div
+        className={board === 'exp' ? 'module-live' : 'module-live module-hidden'}
+        aria-hidden={board !== 'exp'}
+      >
+        <ExperiencePanel active={board === 'exp'} />
       </div>
       <div
         className={board === 'writing' ? 'module-live' : 'module-live module-hidden'}

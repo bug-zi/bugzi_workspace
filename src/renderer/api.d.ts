@@ -320,6 +320,27 @@ export interface WenbiJournalRecord {
   deleted_at: string | null
 }
 
+/** 经验书条目（wenbi_experiences 表，DB v44；v46 起带分类与夹内排序）：一句话经验道理，无标题无 md 正文；删除走回收站 wenbi_exp */
+export interface WenbiExperienceRecord {
+  id: number
+  content: string
+  /** 分类（NULL=未分类；DB v46） */
+  category_id: number | null
+  /** 夹内排序（越小越靠前；DB v46） */
+  sort: number
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 经验书分类（exp_categories 表，DB v46） */
+export interface ExpCategoryRecord {
+  id: number
+  name: string
+  sort: number
+  created_at: string
+}
+
 /** 书架书籍（books 表，DB v19）：文件在 books/<id>.<ext>、封面在 covers/（bzres://root/ 加载）；删除为物理删除不入回收站 */
 export interface BooksRecord {
   id: number
@@ -615,6 +636,7 @@ export interface RecycleRow {
     | 'canvases'
     | 'wenbi_journal'
     | 'wenbi_article'
+    | 'wenbi_exp'
     | 'ledger_tx'
     | 'ledger_account'
     | 'ledger_category'
@@ -622,6 +644,7 @@ export interface RecycleRow {
     | 'prophet'
     | 'twelve_question'
     | 'qa'
+    | 'ai_session'
   item_id: number
   payload: string
   created_at: string
@@ -982,6 +1005,8 @@ export interface Api {
     compact(jobId: string, sessionId: number): Promise<AiSessionRow>
     /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
     clear(sessionId: number): Promise<boolean>
+    /** 归档会话到回收站「AI 会话」块（软删；恢复=回频道列表，彻底删=连消息） */
+    archive(id: number): Promise<boolean>
   }
   zhijiji: {
     list(): Promise<ZhijijiQuestion[]>
@@ -1185,6 +1210,26 @@ export interface Api {
     journalSetEvent(id: number, isEvent: boolean): Promise<boolean>
     /** 记录入回收站（前端二次确认后调用） */
     journalDiscard(id: number): Promise<boolean>
+    /** 经验书条目列表（夹内 sort 升序；零 AI 板块） */
+    expList(): Promise<WenbiExperienceRecord[]>
+    /** 新建经验条目（trim 后非空才建；落指定夹顶 sort=MIN-1，null=未分类；返回整行） */
+    expCreate(content: string, categoryId: number | null): Promise<WenbiExperienceRecord>
+    /** 改经验条目（回写 updated_at；返回更新后整行） */
+    expUpdate(id: number, content: string): Promise<WenbiExperienceRecord>
+    /** 经验条目入回收站（前端二次确认后调用） */
+    expDiscard(id: number): Promise<boolean>
+    /** 经验书分类列表（sort 升序） */
+    expCategoryList(): Promise<ExpCategoryRecord[]>
+    /** 新建分类（重名抛 DUP_NAME；sort=MAX+1） */
+    expCategoryCreate(name: string): Promise<ExpCategoryRecord>
+    /** 改分类名（重名抛 DUP_NAME） */
+    expCategoryRename(id: number, name: string): Promise<boolean>
+    /** 删分类（该分类条目回未分类） */
+    expCategoryDelete(id: number): Promise<boolean>
+    /** 条目移入分类（null=未分类；插夹顶） */
+    expMove(id: number, categoryId: number | null): Promise<boolean>
+    /** 夹内拖拽归一化批量回写（格言 reorder 同构，不动 updated_at） */
+    expReorder(moves: { id: number; sort: number }[]): Promise<boolean>
     /** 文章列表（区内按 sort） */
     articleList(): Promise<WenbiArticleRecord[]>
     /** 新建文章（返回 id；md 模板 `# 标题`） */
@@ -1372,6 +1417,8 @@ export interface Api {
     entries(sectionId: number): Promise<WikiEntry[]>
     entry(id: number): Promise<WikiEntry>
     updateEntry(id: number, term: string, summary: string): Promise<boolean>
+    /** 对话保存落卡（优化建议区第47轮）：免 AI 词条卡，已学态直接入板块，返回词条 id */
+    saveChatCard(sectionId: number, title: string, md: string): Promise<number>
     /** 生成（260910 待学习区）：随机（term=null）先抽后库池卡秒回、池空兜底现场生成；
      *  结果一律 state='learn' 入待学习区；手动输入撞词返回 conflict + 原词条 id（conflictId） */
     generate(
@@ -1426,6 +1473,8 @@ export interface Api {
     nodeAdd(jobId: string, topicId: number, title: string): Promise<LearnCardRow>
     /** 知识点软删入回收站 */
     nodeDelete(id: number): Promise<boolean>
+    /** 对话保存落卡（优化建议区第47轮）：免 AI 知识点卡挂主题下（todo 态），返回节点 id */
+    saveChatCard(topicId: number, title: string, md: string): Promise<number>
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard(jobId: string, id: number): Promise<LearnCardRow>
     /** 今日要求汇总（已学动态列表 + 复习 + goal/done/streak/小测状态） */

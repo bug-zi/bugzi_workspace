@@ -6,6 +6,13 @@ import { AI_NAME, SettingsKeys } from '../shared/types'
 import ConfirmDialog from './ConfirmDialog'
 import MdView from './MdView'
 import { useToast } from './Toast'
+import {
+  ChatDispositionBar,
+  SaveChatDialog,
+  buildChatTranscriptMd,
+  isDispositionChannel,
+  type DispositionChannel
+} from './ChatDisposition'
 import './AiSidebar.css'
 
 export interface AiSidebarProps {
@@ -118,6 +125,10 @@ export default function AiSidebar(props: AiSidebarProps) {
   const [sendJob, setSendJob] = useState<string | null>(null)
   const [needConfig, setNeedConfig] = useState(false)
   const [aiWidth, setAiWidth] = useState(AI_WIDTH_DEFAULT)
+  // 三选条（优化建议区第47轮）：本轮 AI 回复后待处置的会话 id；null=已消费/无
+  const [dispositionSid, setDispositionSid] = useState<number | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [archiveAsk, setArchiveAsk] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const activeIdRef = useRef<number | null>(null)
@@ -138,6 +149,7 @@ export default function AiSidebar(props: AiSidebarProps) {
 
   /** 载入某频道：会话列表 + 恢复该频道激活会话（失效则兜底最近活跃），并同步 ref */
   const loadForChannel = async (channel: AiChannel): Promise<void> => {
+    setDispositionSid(null)
     const [list, active] = await Promise.all([
       window.api.aiSession.list(channel),
       window.api.aiSession.active(channel)
@@ -261,6 +273,7 @@ export default function AiSidebar(props: AiSidebarProps) {
 
   /** 切换会话（当前频道内） */
   const switchSession = async (id: number): Promise<void> => {
+    setDispositionSid(null)
     if (id === activeId) {
       setPanelOpen(false)
       return
@@ -354,6 +367,7 @@ export default function AiSidebar(props: AiSidebarProps) {
         setSessions((arr) => [s, ...arr])
         setActiveId(sid)
       }
+      setDispositionSid(null) // 新一轮开始，上一轮的三选条收起
       // 乐观上屏（优化建议区第11轮）：用户消息先以负 id 临时显示（负 id 不渲染删除键），
       // 完成后 loadMessages 用 DB 真实记录替换；请求失败保留乐观消息（主进程先落库用户消息，显示与 DB 一致）
       setMessages((arr) => [
@@ -363,6 +377,7 @@ export default function AiSidebar(props: AiSidebarProps) {
       await window.api.ai.chat(jobId, t, currentModule, sid, channel)
       await loadSessions(channel) // 首条消息自动命名 + updated_at 排序变化
       await loadMessages(sid)
+      if (isDispositionChannel(channel)) setDispositionSid(sid)
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('LLM_NOT_CONFIGURED')) {
@@ -436,6 +451,7 @@ export default function AiSidebar(props: AiSidebarProps) {
     if (!confirm) return
     const target = confirm
     setConfirm(null)
+    setDispositionSid(null)
     if (target.kind === 'session') {
       const channel = activeChannelRef.current
       await window.api.aiSession.delete(target.id, channel)
@@ -457,6 +473,25 @@ export default function AiSidebar(props: AiSidebarProps) {
       const aid = activeIdRef.current
       if (aid != null) await loadMessages(aid)
     }
+  }
+
+  /** 归档：会话入回收站「AI 会话」块，终结式切新会话（优化建议区第47轮） */
+  const doArchive = async (): Promise<void> => {
+    const sid = activeIdRef.current
+    if (sid == null) return
+    setArchiveAsk(false)
+    await window.api.aiSession.archive(sid)
+    setDispositionSid(null)
+    toast('会话已移入回收站「AI 会话」')
+    await newSession()
+  }
+
+  /** 保存成功：卡片已落模块，终结式切新会话 */
+  const onChatSaved = (target: string): void => {
+    setSaveOpen(false)
+    setDispositionSid(null)
+    toast(`已保存到${target}`)
+    void newSession()
   }
 
   if (collapsed) {
@@ -482,6 +517,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   }
 
   const channelLabel = CHANNELS.find((c) => c.id === activeChannel)?.label ?? '助手'
+  const activeSessionRow = sessions.find((s) => s.id === activeId) ?? null
 
   return (
     <aside className="ai-sidebar">
@@ -650,6 +686,16 @@ export default function AiSidebar(props: AiSidebarProps) {
               </div>
             </div>
           )}
+          {!sending &&
+            dispositionSid != null &&
+            dispositionSid === activeId &&
+            isDispositionChannel(activeChannel) && (
+              <ChatDispositionBar
+                onContinue={() => setDispositionSid(null)}
+                onSave={() => setSaveOpen(true)}
+                onArchive={() => setArchiveAsk(true)}
+              />
+            )}
         </div>
       </div>
       {needConfig && (
@@ -680,6 +726,28 @@ export default function AiSidebar(props: AiSidebarProps) {
           <span className="material-symbols-outlined">send</span>
         </button>
       </div>
+      <SaveChatDialog
+        open={saveOpen && activeId != null && isDispositionChannel(activeChannel)}
+        channel={activeChannel as DispositionChannel}
+        defaultTitle={activeSessionRow?.title ?? '新对话'}
+        md={buildChatTranscriptMd(
+          activeSessionRow?.title ?? '新对话',
+          activeChannel as DispositionChannel,
+          messages
+        )}
+        onCancel={() => setSaveOpen(false)}
+        onSaved={onChatSaved}
+      />
+      <ConfirmDialog
+        open={archiveAsk}
+        title="归档对话"
+        confirmText="归档"
+        danger
+        onConfirm={() => void doArchive()}
+        onCancel={() => setArchiveAsk(false)}
+      >
+        将把当前会话移入回收站「AI 会话」（3 天后自动彻底删除，期间可恢复），并切换到新会话。确定归档吗？
+      </ConfirmDialog>
       <ConfirmDialog
         open={confirm != null}
         title={confirm?.kind === 'session' ? '删除会话' : '删除消息'}

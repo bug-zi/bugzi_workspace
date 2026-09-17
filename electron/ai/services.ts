@@ -29,7 +29,7 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
 /** 会话列表（最近活跃在前，按频道隔离） */
 export function listAiSessions(channel: AiChannel = 'assistant'): AiSession[] {
   return getDb()
-    .prepare('SELECT * FROM ai_sessions WHERE channel = ? ORDER BY updated_at DESC, id DESC')
+    .prepare('SELECT * FROM ai_sessions WHERE channel = ? AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC')
     .all(channel) as unknown as AiSession[]
 }
 

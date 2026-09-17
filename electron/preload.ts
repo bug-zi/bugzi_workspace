@@ -175,7 +175,9 @@ const api = {
       updated_at: string
     }> => ipcRenderer.invoke('aiSession:compact', jobId, sessionId),
     /** /clear：清空该会话全部消息（会话保留，上下文与存储一并清零） */
-    clear: (sessionId: number): Promise<boolean> => ipcRenderer.invoke('aiSession:clear', sessionId)
+    clear: (sessionId: number): Promise<boolean> => ipcRenderer.invoke('aiSession:clear', sessionId),
+    /** 归档会话到回收站「AI 会话」块（软删；恢复=回频道列表，彻底删=连消息） */
+    archive: (id: number): Promise<boolean> => ipcRenderer.invoke('aiSession:archive', id)
   },
   mottos: {
     list: (status?: string): Promise<unknown[]> => ipcRenderer.invoke('mottos:list', status),
@@ -221,6 +223,9 @@ const api = {
     entry: (id: number): Promise<unknown> => ipcRenderer.invoke('wiki:entry', id),
     updateEntry: (id: number, term: string, summary: string): Promise<boolean> =>
       ipcRenderer.invoke('wiki:updateEntry', id, term, summary),
+    /** 对话保存落卡（优化建议区第47轮）：免 AI 词条卡，已学态直接入板块，返回词条 id */
+    saveChatCard: (sectionId: number, title: string, md: string): Promise<number> =>
+      ipcRenderer.invoke('wiki:saveChatCard', sectionId, title, md),
     generate: (
       jobId: string,
       term: string | null,
@@ -531,6 +536,34 @@ const api = {
       ipcRenderer.invoke('wenbi:journalSetEvent', id, isEvent),
     /** 记录入回收站（前端二次确认后调用） */
     journalDiscard: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:journalDiscard', id),
+    /** 经验书条目列表（夹内 sort 升序；零 AI 板块） */
+    expList: (): Promise<import('../src/shared/types').WenbiExperienceRecord[]> =>
+      ipcRenderer.invoke('wenbi:expList'),
+    /** 新建经验条目（trim 后非空才建；落指定夹顶，null=未分类；返回整行） */
+    expCreate: (content: string, categoryId: number | null): Promise<import('../src/shared/types').WenbiExperienceRecord> =>
+      ipcRenderer.invoke('wenbi:expCreate', content, categoryId),
+    /** 改经验条目（回写 updated_at；返回更新后整行） */
+    expUpdate: (id: number, content: string): Promise<import('../src/shared/types').WenbiExperienceRecord> =>
+      ipcRenderer.invoke('wenbi:expUpdate', id, content),
+    /** 经验条目入回收站（前端二次确认后调用） */
+    expDiscard: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:expDiscard', id),
+    /** 经验书分类列表（sort 升序） */
+    expCategoryList: (): Promise<import('../src/shared/types').ExpCategoryRecord[]> =>
+      ipcRenderer.invoke('wenbi:expCategoryList'),
+    /** 新建分类（重名抛 DUP_NAME） */
+    expCategoryCreate: (name: string): Promise<import('../src/shared/types').ExpCategoryRecord> =>
+      ipcRenderer.invoke('wenbi:expCategoryCreate', name),
+    /** 改分类名（重名抛 DUP_NAME） */
+    expCategoryRename: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:expCategoryRename', id, name),
+    /** 删分类（条目回未分类） */
+    expCategoryDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('wenbi:expCategoryDelete', id),
+    /** 条目移入分类（null=未分类；插夹顶） */
+    expMove: (id: number, categoryId: number | null): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:expMove', id, categoryId),
+    /** 夹内拖拽归一化批量回写 */
+    expReorder: (moves: { id: number; sort: number }[]): Promise<boolean> =>
+      ipcRenderer.invoke('wenbi:expReorder', moves),
     /** 文章列表（区内按 sort） */
     articleList: (): Promise<import('../src/shared/types').WenbiArticleRecord[]> =>
       ipcRenderer.invoke('wenbi:articleList'),
@@ -741,6 +774,9 @@ const api = {
       ipcRenderer.invoke('learn:nodeAdd', jobId, topicId, title),
     /** 知识点软删入回收站（二次确认在渲染层） */
     nodeDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('learn:nodeDelete', id),
+    /** 对话保存落卡（优化建议区第47轮）：免 AI 知识点卡挂主题下（todo 态），返回节点 id */
+    saveChatCard: (topicId: number, title: string, md: string): Promise<number> =>
+      ipcRenderer.invoke('learn:saveChatCard', topicId, title, md),
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard: (jobId: string, id: number): Promise<import('../src/shared/types').LearnCardRow> =>
       ipcRenderer.invoke('learn:getCard', jobId, id),

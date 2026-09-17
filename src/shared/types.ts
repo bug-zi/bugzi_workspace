@@ -557,6 +557,27 @@ export interface WenbiJournalRecord {
   deleted_at: string | null
 }
 
+/** 经验书条目（wenbi_experiences 表，DB v44；v46 起带分类与夹内排序）：一句话经验道理，无标题无 md 正文；删除走回收站 wenbi_exp */
+export interface WenbiExperienceRecord {
+  id: number
+  content: string
+  /** 分类（NULL=未分类；DB v46） */
+  category_id: number | null
+  /** 夹内排序（越小越靠前；DB v46） */
+  sort: number
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 经验书分类（exp_categories 表，DB v46） */
+export interface ExpCategoryRecord {
+  id: number
+  name: string
+  sort: number
+  created_at: string
+}
+
 /** 写作台文章（wenbi_articles 表，文笔坊 specs §1）：zone 四区流转 */
 export interface WenbiArticleRecord {
   id: number
@@ -876,6 +897,7 @@ export interface RecycleItem {
     | 'canvases'
     | 'wenbi_journal'
     | 'wenbi_article'
+    | 'wenbi_exp'
     | 'ledger_tx'
     | 'ledger_account'
     | 'ledger_category'

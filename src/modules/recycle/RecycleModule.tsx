@@ -7,7 +7,8 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 
 // 页签 key：单一来源用 source 值；「推理角」为组页签（reasoning_soup 汤 + reasoning_game
 // 对局记录混排一页，specs §5）。260908 辩真阁并入万象库：verify 来源聚合进「万象库」块，页签九块变八块；
-// 其后画布（canvases）加入回九块；260911 学习库接入：learn 块居首（位次随左栏），页签九块变十块。
+// 其后画布（canvases）加入回九块；260911 学习库接入：learn 块居首（位次随左栏），页签九块变十块；
+// 260917 AI 会话归档（优化建议区第47轮）：跨模块块置末位。
 const TABS: { key: string; label: string }[] = [
   { key: 'learn', label: '学习库' },
   { key: 'mottos', label: '格言库' },
@@ -18,17 +19,19 @@ const TABS: { key: string; label: string }[] = [
   { key: 'drafts', label: '草稿本' },
   { key: 'canvases', label: '画布' },
   { key: 'wenbi', label: '文笔坊' },
-  { key: 'ledger', label: '记账本' }
+  { key: 'ledger', label: '记账本' },
+  { key: 'ai', label: 'AI 会话' }
 ]
 
 /** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；记账本三来源同组；辩真并入万象库块；预言家/十二问题并入致知己块） */
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
-  if (source === 'wenbi_journal' || source === 'wenbi_article') return 'wenbi'
+  if (source === 'wenbi_journal' || source === 'wenbi_article' || source === 'wenbi_exp') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   if (source === 'verify') return 'wiki'
   if (source === 'qa') return 'wiki'
   if (source === 'prophet' || source === 'twelve_question') return 'zhijiji'
+  if (source === 'ai_session') return 'ai'
   return source
 }
 
@@ -47,6 +50,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '万象库·辩真历史记录'
     case 'qa':
       return '万象库·问答历史'
+    case 'ai_session':
+      return 'AI 边栏原频道会话列表'
     case 'zhijiji':
       return '致知己主列表'
     case 'prophet':
@@ -63,6 +68,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '浮生记时间线'
     case 'wenbi_article':
       return '写作台构思区'
+    case 'wenbi_exp':
+      return '经验书列表'
     case 'ledger_tx':
       return '记账本月度列表'
     case 'ledger_account':
@@ -79,6 +86,7 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'learn') return '知识点 · '
   if (source === 'wenbi_journal') return '浮生记 · '
   if (source === 'wenbi_article') return '文章 · '
+  if (source === 'wenbi_exp') return '经验书 · '
   if (source === 'ledger_tx') return '流水 · '
   if (source === 'ledger_account') return '账户 · '
   if (source === 'ledger_category') return '分类 · '
@@ -86,6 +94,7 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'qa') return '问答 · '
   if (source === 'prophet') return '预言 · '
   if (source === 'twelve_question') return '十二问题 · '
+  if (source === 'ai_session') return 'AI 会话 · '
   return ''
 }
 
@@ -108,6 +117,20 @@ function summaryOf(row: RecycleRow): string {
     if (row.source === 'prophet') return String(p.claim ?? '')
     if (row.source === 'qa') return String(p.question ?? '')
     if (row.source === 'twelve_question') return String(p.title ?? '')
+    if (row.source === 'ai_session') {
+      const ch = String(p.channel ?? '')
+      const chLabel =
+        ch === 'learn'
+          ? '学习'
+          : ch === 'wiki'
+            ? '万象'
+            : ch === 'zhijiji'
+              ? '致知己'
+              : ch === 'assistant'
+                ? '助手'
+                : ch || 'AI'
+      return `${p.title ?? ''}（${chLabel}频道）`
+    }
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
     if (row.source === 'drafts') return String(p.title ?? '')
@@ -117,6 +140,7 @@ function summaryOf(row: RecycleRow): string {
       return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} 的记录`
     }
     if (row.source === 'wenbi_article') return String(p.title ?? '')
+    if (row.source === 'wenbi_exp') return String(p.content ?? '')
     if (row.source === 'ledger_tx') {
       // 快照冗余显示名（账本 specs §5：入站前联表写入 payload）
       const cents = Number(p.amount_cents ?? 0) / 100

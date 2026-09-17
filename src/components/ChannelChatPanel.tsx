@@ -7,6 +7,13 @@ import type { AiChannel, AiMessageRow, AiSessionRow } from '../renderer/api'
 import ConfirmDialog from './ConfirmDialog'
 import MdView from './MdView'
 import { useToast } from './Toast'
+import {
+  ChatDispositionBar,
+  SaveChatDialog,
+  buildChatTranscriptMd,
+  isDispositionChannel,
+  type DispositionChannel
+} from './ChatDisposition'
 
 /** 栏宽度范围与默认（可收起 + 拖拽调宽，弹窗总宽不变正文区伸缩） */
 export const CHAT_PANEL_W_MIN = 240
@@ -98,6 +105,10 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [sendJob, setSendJob] = useState<string | null>(null)
+  // 三选条（优化建议区第47轮）：本轮 AI 回复后待处置的会话 id；null=已消费/无
+  const [dispositionSid, setDispositionSid] = useState<number | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [archiveAsk, setArchiveAsk] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const sidRef = useRef<number | null>(null)
@@ -144,6 +155,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
 
   /** 切换会话（同频道内），并设为频道激活（全局边栏与本栏保持一致） */
   const switchSession = async (id: number): Promise<void> => {
+    setDispositionSid(null)
     if (id === sidRef.current) {
       setSessOpen(false)
       return
@@ -156,6 +168,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
 
   /** 新会话（手动开启；/clear 清空当前会话走 clearAiSession） */
   const newSession = async (): Promise<void> => {
+    setDispositionSid(null)
     const s = await window.api.aiSession.create(channel)
     await window.api.settings.set(sessionKey, String(s.id))
     sidRef.current = s.id
@@ -177,8 +190,37 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
   const doDeleteSession = async (): Promise<void> => {
     if (!delSess) return
     setDelSess(null)
+    setDispositionSid(null)
     await window.api.aiSession.delete(delSess.id, channel)
     await load()
+  }
+
+  /** 终结式切新会话（保存/归档后共用，优化建议区第47轮） */
+  const concludeToNewSession = async (): Promise<void> => {
+    const s = await window.api.aiSession.create(channel)
+    await window.api.settings.set(sessionKey, String(s.id))
+    sidRef.current = s.id
+    setSessions((arr) => [s, ...arr])
+    setMessages([])
+  }
+
+  /** 归档：会话入回收站「AI 会话」块，终结式切新会话 */
+  const doArchive = async (): Promise<void> => {
+    const sid = sidRef.current
+    if (sid == null) return
+    setArchiveAsk(false)
+    await window.api.aiSession.archive(sid)
+    setDispositionSid(null)
+    toast('会话已移入回收站「AI 会话」')
+    await concludeToNewSession()
+  }
+
+  /** 保存成功：卡片已落模块，终结式切新会话 */
+  const onChatSaved = (target: string): void => {
+    setSaveOpen(false)
+    setDispositionSid(null)
+    toast(`已保存到${target}`)
+    void concludeToNewSession()
   }
 
   const sendText = async (text: string): Promise<void> => {
@@ -237,6 +279,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
         sidRef.current = sid
       }
       // 乐观上屏（同全局边栏）：负 id 临时行，完成后由 DB 记录替换
+      setDispositionSid(null) // 新一轮开始，上一轮的三选条收起
       setMessages((arr) => [
         ...arr,
         { id: -Date.now(), session_id: sid ?? -1, role: 'user', ai_module: null, content: t, created_at: '' }
@@ -244,6 +287,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
       await window.api.ai.chat(jobId, t, channel, sid, channel)
       if (sidRef.current === sid) await load()
       else await loadSessions()
+      if (isDispositionChannel(channel) && sidRef.current === sid) setDispositionSid(sid)
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('LLM_NOT_CONFIGURED')) onNeedConfig()
@@ -407,6 +451,16 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
             </div>
           </div>
         )}
+        {!sending &&
+          dispositionSid != null &&
+          dispositionSid === sidRef.current &&
+          isDispositionChannel(channel) && (
+            <ChatDispositionBar
+              onContinue={() => setDispositionSid(null)}
+              onSave={() => setSaveOpen(true)}
+              onArchive={() => setArchiveAsk(true)}
+            />
+          )}
       </div>
       <div className="dlg-chat-input">
         <textarea
@@ -438,6 +492,24 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
           <span className="material-symbols-outlined">send</span>
         </button>
       </div>
+      <SaveChatDialog
+        open={saveOpen && sidRef.current != null && isDispositionChannel(channel)}
+        channel={channel as DispositionChannel}
+        defaultTitle={curSession?.title ?? '新对话'}
+        md={buildChatTranscriptMd(curSession?.title ?? '新对话', channel as DispositionChannel, messages)}
+        onCancel={() => setSaveOpen(false)}
+        onSaved={onChatSaved}
+      />
+      <ConfirmDialog
+        open={archiveAsk}
+        title="归档对话"
+        confirmText="归档"
+        danger
+        onConfirm={() => void doArchive()}
+        onCancel={() => setArchiveAsk(false)}
+      >
+        将把当前会话移入回收站「AI 会话」（3 天后自动彻底删除，期间可恢复），并切换到新会话。确定归档吗？
+      </ConfirmDialog>
       {/* 删除会话二次确认（全局规则） */}
       <ConfirmDialog
         open={delSess != null}

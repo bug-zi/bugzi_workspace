@@ -1341,6 +1341,121 @@
   min-width: 86px;
 }
 
+/* ===== 文笔坊：经验书（2026-09-17 新功能开发区）：行内快记 + 行内编辑 ===== */
+.exp-quick {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  max-height: 160px;
+  field-sizing: content;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.5;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+}
+.exp-quick:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.exp-content {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.exp-edit {
+  flex: 1;
+  min-height: 1.6em;
+  max-height: 160px;
+  field-sizing: content;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.5;
+  padding: 1px 6px;
+}
+.exp-edit:focus {
+  outline: none;
+}
+
+/* 经验书分类（260917 优化轮）：tab 行工具 + 拖拽高亮 + 管理弹窗 */
+.exp-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.exp-tab-row .recycle-tabs {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+}
+.exp-tab-tools {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.recycle-tab.drop-target {
+  outline: 2px dashed var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.exp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.exp-cat-input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  padding: 6px 10px;
+}
+.exp-cat-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.exp-cat-create {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.exp-cat-create .exp-cat-input {
+  flex: 1;
+}
+.exp-cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.exp-cat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.exp-cat-item:hover {
+  background: var(--color-primary-soft);
+}
+.exp-cat-empty {
+  opacity: 0.7;
+  padding: 12px 0;
+  text-align: center;
+}
+
 /* 裁判思考行内的停止按钮（260908 全局取消） */
 .rs-stop {
   margin-left: 10px;
@@ -1601,11 +1716,19 @@
   display: flex;
 }
 
+/* 悬浮整窗宽（优化建议区第47轮）：左右下各留 8px 居中铺满，覆盖底部内容不挤压布局 */
 .terminal-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 50; /* 盖主栏内容（右栏 5-20），低于全局弹窗（100+），ConfirmDialog 仍在其上 */
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
   background: var(--color-surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   min-height: 0;
   overflow: hidden;
 }

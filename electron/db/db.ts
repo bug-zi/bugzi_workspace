@@ -1055,6 +1055,55 @@ function migrate(): void {
     )`)
     d.exec('PRAGMA user_version = 43')
   }
+
+  if (version < 44) {
+    // v44：文笔坊经验书（2026-09-17-经验书-design.md §一）——一句话经验道理条目，
+    // 零 AI 零 md 正文；删除走回收站 wenbi_exp（软删 + 快照，通用链路零特判）。
+    d.exec(`CREATE TABLE wenbi_experiences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+    d.exec(
+      'CREATE INDEX IF NOT EXISTS idx_wenbi_experiences_deleted ON wenbi_experiences(deleted_at)'
+    )
+    d.exec('PRAGMA user_version = 44')
+  }
+
+  if (version < 45) {
+    // v45：AI 会话归档（优化建议区第47轮）——ai_sessions 软删标记；归档 = 置 deleted_at +
+    // 写 recycle_bin('ai_session')，恢复清标记，彻底删连全部消息。v44 已被同日经验书占用顺延。
+    d.exec('ALTER TABLE ai_sessions ADD COLUMN deleted_at TEXT')
+    d.exec('PRAGMA user_version = 45')
+  }
+
+  if (version < 46) {
+    // v46：经验书分类夹 + 拖拽排序（2026-09-17-经验书优化-design.md）——分类表 + 条目
+    // category_id/sort 两列；预置「系统整理」「处事准则」，存量按 created_at 倒序回填
+    // sort 归未分类（迁移后观感与原列表一致）。v45 已被同日 AI 会话归档占用顺延。
+    d.exec(`CREATE TABLE exp_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(
+      'ALTER TABLE wenbi_experiences ADD COLUMN category_id INTEGER REFERENCES exp_categories(id)'
+    )
+    d.exec('ALTER TABLE wenbi_experiences ADD COLUMN sort REAL NOT NULL DEFAULT 0')
+    const insCat = d.prepare('INSERT INTO exp_categories (name, sort, created_at) VALUES (?, ?, ?)')
+    const t = nowIso()
+    insCat.run('系统整理', 0, t)
+    insCat.run('处事准则', 1, t)
+    const existing = d
+      .prepare('SELECT id FROM wenbi_experiences ORDER BY created_at DESC, id DESC')
+      .all() as { id: number }[]
+    const upd = d.prepare('UPDATE wenbi_experiences SET sort = ? WHERE id = ?')
+    existing.forEach((r, i) => upd.run(i, r.id))
+    d.exec('PRAGMA user_version = 46')
+  }
 }
 
 // ---------- 通用工具 ----------

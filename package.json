@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "smoke": "electron-vite build && electron . --smoke",
     "icon": "node scripts/gen-icon.cjs",
+    "predist": "node -e \"require('fs').rmSync('release',{recursive:true,force:true})\"",
     "dist": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
