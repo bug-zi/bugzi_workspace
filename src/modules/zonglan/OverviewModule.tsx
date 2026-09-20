@@ -8,7 +8,7 @@ import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
-import type { ModuleId, MottoRecord, ChallengeDailyView, HeatmapDay } from '../../shared/types'
+import type { ModuleId, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import HeatmapCard, { heatmapRange } from './HeatmapCard'
 import ChallengeManageDialog from './ChallengeManageDialog'
@@ -49,6 +49,13 @@ export default function OverviewModule() {
   const [challengeInfo, setChallengeInfo] = useState<{
     daily: ChallengeDailyView | null
     poolCount: number
+  } | null>(null)
+  // 我是谁（260921）：今日题数/已答/未答 + 往日候选待确认数（当日无题整行不显示）
+  const [whoami, setWhoami] = useState<{
+    total: number
+    answered: number
+    unanswered: number
+    pendingCount: number
   } | null>(null)
   const [heat, setHeat] = useState<HeatmapDay[] | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
@@ -147,6 +154,19 @@ export default function OverviewModule() {
       setChallengeInfo(null)
     }
   }, [])
+  const loadWhoami = useCallback(async (): Promise<void> => {
+    try {
+      const r: WhoamiGetResult = await window.api.whoami.get()
+      setWhoami({
+        total: r.today.length,
+        answered: r.today.filter((q) => q.answer != null).length,
+        unanswered: r.today.filter((q) => q.answer == null && !q.skipped).length,
+        pendingCount: r.pending.length
+      })
+    } catch {
+      setWhoami(null)
+    }
+  }, [])
   const loadHeat = useCallback(async (): Promise<void> => {
     try {
       const { from, to } = heatmapRange()
@@ -164,8 +184,9 @@ export default function OverviewModule() {
     void loadReading()
     void loadNumbers()
     void loadChallenge()
+    void loadWhoami()
     void loadHeat()
-  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadHeat])
+  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat])
 
   useEffect(() => {
     loadAll()
@@ -322,6 +343,25 @@ export default function OverviewModule() {
           void loadChallenge()
         }}
       />
+
+      {/* 我是谁（260921）：当日有题才显示；点击深链个人档并展开我是谁区 */}
+      {whoami && whoami.total > 0 && (
+        <button className="card zl-row" onClick={() => go('profile', 'whoami')} title="进入个人档·我是谁">
+          <span className="material-symbols-outlined">psychology</span>
+          <div className="zl-row-main">
+            <div className="zl-row-line">
+              <span className="zl-row-title">我是谁</span>
+              <span className="module-sub">
+                {`今日 ${whoami.total} 问 · 已答 ${whoami.answered}`}
+                {whoami.unanswered > 0 && (
+                  <span style={{ color: 'var(--color-primary)' }}>{` · ${whoami.unanswered} 问待答`}</span>
+                )}
+                {whoami.pendingCount > 0 && ` · ${whoami.pendingCount} 条候选待确认`}
+              </span>
+            </div>
+          </div>
+        </button>
+      )}
 
       {/* 续读（无在读书显引导） */}
       {reading ? (

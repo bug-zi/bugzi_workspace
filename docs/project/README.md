@@ -6,9 +6,10 @@ superpowers 工作流（brainstorming / writing-plans）会话产出的**设计�
 
 | 文档所属 | 存放目录 | 示例 |
 |---|---|---|
-| idea 阶段模块（尚无正式 design.md） | `docs/project/idea/<模块>/` | `idea/文笔坊/2026-09-07-文笔坊-design.md` |
+| idea 阶段（未立项、未落地的想法；**落地后必须移出 idea/**） | `docs/project/idea/<模块>/` | `idea/文笔坊/2026-09-07-文笔坊-design.md` |
 | 已立项模块 | `docs/project/左侧边栏/<模块>/` | `左侧边栏/推理角/2026-09-07-reasoning-question-bank-design.md` |
 | 右侧边栏相关改动（AI 助手、草稿本等右侧栏功能，多跨模块） | `docs/project/右侧边栏/` | `右侧边栏/2026-09-06-ai-name-debugzi-design.md` |
+| 全局功能（非左栏模块的应用级/跨模块功能，如内置终端、AI 生成全局取消） | `docs/project/全局/` | `全局/archive/2026-09-12-内置终端-design.md` |
 
 - 文件命名不变：`YYYY-MM-DD-<主题>-design.md`（spec）、`YYYY-MM-DD-<主题>.md`（plan）；日期前缀保证唯一，**归档不改名**。
 - spec 与 plan 同目录混放（plan 头部 `**Spec:**` 字段互指），不设 specs/plans 子分目录。
@@ -16,7 +17,7 @@ superpowers 工作流（brainstorming / writing-plans）会话产出的**设计�
 
 ## 归档
 
-落地或废弃后移入所属目录的 `archive/` 子目录（spec 与 plan 共用同一个 archive/）：
+落地或废弃后移入**所属正式目录**的 `archive/` 子目录（spec 与 plan 共用同一个 archive/）。**`idea/` 内的文档落地后必须移出 `idea/` 再归档**——`idea/` 只放未立项、未落地的想法阶段文档，落地文档不得留在 `idea/<模块>/archive/`（260921 开发者明确，内置终端误归案例）：
 
 | 判定 | 依据 | 动作 |
 |---|---|---|

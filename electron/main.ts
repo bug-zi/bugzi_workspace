@@ -10,6 +10,7 @@ import { ensureReasoningStock } from './services/reasoningStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { ensureWikiQuizStock } from './services/wikiQuizStock'
 import { ensureLearnStock } from './services/learnStock'
+import { ensureWhoamiDaily } from './services/whoami'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
 import { createTray } from './services/tray'
@@ -110,6 +111,8 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(() => void ensureLearnStock(), 10_000).unref()
     // 万象库测一测题库泵（260916 题库制）：错开启动高峰，静默失败
     setTimeout(() => void ensureWikiQuizStock(), 10_000).unref()
+    // 我是谁（260921）：每日 3-4 问（settings 幂等）；错开启动高峰，静默失败，LLM 未配置跳过
+    setTimeout(() => void ensureWhoamiDaily(), 10_000).unref()
     createWindow()
     // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
     createTray(appIcon, showMainWindow)

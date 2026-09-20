@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AiChannel, AiMessageRow, AiSessionRow } from '../renderer/api'
+import { SettingsKeys } from '../shared/types'
 import ConfirmDialog from './ConfirmDialog'
 import MdView from './MdView'
 import { useToast } from './Toast'
@@ -22,6 +23,12 @@ export const CHAT_PANEL_W_DEFAULT = 320
 
 export const clampChatPanelW = (w: number): number =>
   Math.min(CHAT_PANEL_W_MAX, Math.max(CHAT_PANEL_W_MIN, Math.round(w)))
+
+/** 激活会话双键落库：场景键（本栏定位）+ 全局键（边栏启动恢复口径，统一会话流 260921） */
+async function persistActiveBoth(sessionKey: string, id: number | null): Promise<void> {
+  await window.api.settings.set(sessionKey, id == null ? '' : String(id))
+  await window.api.settings.set(SettingsKeys.AiActiveSessionGlobal, id == null ? '' : String(id))
+}
 
 const ROLE_LABEL: Record<string, string> = { user: '我', assistant: 'AI', system: '系统' }
 
@@ -162,7 +169,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
     }
     sidRef.current = id
     setSessOpen(false)
-    await window.api.settings.set(sessionKey, String(id))
+    await persistActiveBoth(sessionKey, id)
     setMessages(await window.api.ai.messages(id))
   }
 
@@ -170,7 +177,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
   const newSession = async (): Promise<void> => {
     setDispositionSid(null)
     const s = await window.api.aiSession.create(channel)
-    await window.api.settings.set(sessionKey, String(s.id))
+    await persistActiveBoth(sessionKey, s.id)
     sidRef.current = s.id
     setSessions((arr) => [s, ...arr])
     setMessages([])
@@ -198,7 +205,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
   /** 终结式切新会话（保存/归档后共用，优化建议区第47轮） */
   const concludeToNewSession = async (): Promise<void> => {
     const s = await window.api.aiSession.create(channel)
-    await window.api.settings.set(sessionKey, String(s.id))
+    await persistActiveBoth(sessionKey, s.id)
     sidRef.current = s.id
     setSessions((arr) => [s, ...arr])
     setMessages([])
@@ -251,7 +258,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
       setSendJob(jobId)
       try {
         const ns = await window.api.aiSession.compact(jobId, sid)
-        await window.api.settings.set(sessionKey, String(ns.id))
+        await persistActiveBoth(sessionKey, ns.id)
         sidRef.current = ns.id
         await loadSessions()
         setMessages(await window.api.ai.messages(ns.id))
@@ -274,7 +281,7 @@ export function ChannelChatPanel(props: ChannelChatPanelProps) {
     try {
       if (sid == null) {
         const s = await window.api.aiSession.create(channel)
-        await window.api.settings.set(sessionKey, String(s.id))
+        await persistActiveBoth(sessionKey, s.id)
         sid = s.id
         sidRef.current = sid
       }

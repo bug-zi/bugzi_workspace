@@ -994,7 +994,7 @@ export interface Api {
     onMessage(cb: (msg: AiMessageRow) => void): () => void
   }
   aiSession: {
-    /** 会话列表（最近活跃在前，按频道隔离） */
+    /** 会话列表（最近活跃在前）；统一会话流：不传 channel = 全部场景，传 channel = 该场景（拓展坞/模块定位） */
     list(channel?: AiChannel): Promise<AiSessionRow[]>
     create(channel?: AiChannel): Promise<AiSessionRow>
     rename(id: number, title: string): Promise<boolean>
@@ -1539,6 +1539,13 @@ export interface Api {
   overview: {
     /** 热力图三源聚合（from/to 为本地 YYYY-MM-DD 闭区间） */
     heatmap(from: string, to: string): Promise<import('../shared/types').HeatmapDay[]>
+  }
+  whoami: {
+    get(): Promise<import('../shared/types').WhoamiGetResult>
+    generate(): Promise<import('../shared/types').WhoamiGetResult>
+    answer(id: number, answer: string | null): Promise<import('../shared/types').WhoamiQuestionView>
+    extract(id: number): Promise<import('../shared/types').WhoamiQuestionView>
+    resolve(id: number, index: number, accept: boolean): Promise<import('../shared/types').WhoamiQuestionView>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>

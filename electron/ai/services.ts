@@ -33,6 +33,13 @@ export function listAiSessions(channel: AiChannel = 'assistant'): AiSession[] {
     .all(channel) as unknown as AiSession[]
 }
 
+/** 全量会话列表（跨场景；统一会话流：边栏一个列表看全部会话，最近活跃在前） */
+export function listAllAiSessions(): AiSession[] {
+  return getDb()
+    .prepare('SELECT * FROM ai_sessions WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC')
+    .all() as unknown as AiSession[]
+}
+
 /** 指定频道的激活会话 id（对应 settings key；无或非法 → null） */
 export function getActiveSessionId(channel: AiChannel = 'assistant'): number | null {
   const v = getSetting(ACTIVE_SESSION_KEYS[channel] ?? SettingsKeys.AiActiveSessionId)
@@ -305,6 +312,11 @@ export async function aiChat(
   channel: AiChannel = 'assistant',
   signal?: AbortSignal
 ): Promise<AiMessage> {
+  // 人设以会话归属为准（统一会话流）：按会话 id 查 channel，渲染层传参仅作会话不存在时的兜底
+  const sess = getDb()
+    .prepare('SELECT channel FROM ai_sessions WHERE id = ?')
+    .get(sessionId) as { channel: string } | undefined
+  const ch = ((sess?.channel as AiChannel | undefined) ?? channel) ?? 'assistant'
   // 首条用户消息自动命名会话，再落用户消息（持久化该会话全历史）
   autoTitleSession(sessionId, userMessage)
   const userMsg = appendAiMessage('user', userMessage, currentModule, sessionId)
@@ -315,7 +327,7 @@ export async function aiChat(
   const moduleLabel = MODULE_LABELS[currentModule] ?? currentModule
   const system = [
     `你是 bugzi 的个人工作台「bug子的workspace」的 AI 助手，名叫 ${AI_NAME}。对话中提到自己时自称 ${AI_NAME}。用户当前所在模块：${moduleLabel}。`,
-    CHANNEL_PERSONAS[channel] ?? CHANNEL_PERSONAS.assistant,
+    CHANNEL_PERSONAS[ch] ?? CHANNEL_PERSONAS.assistant,
     '回答使用简体中文，简洁友好。',
     PROFILE_SUGGEST_INSTRUCTION,
     PROFILE_LOOKUP_INSTRUCTION,

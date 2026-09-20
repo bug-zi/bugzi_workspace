@@ -1,6 +1,8 @@
 # Web 模式 + 数据入仓双向同步（设计）
 
 > 创建于 2026-09-20，brainstorming 会话产出；立项后本文件移入对应归档目录。
+>
+> **260921 修订（开发者指令）**：应用数据暂不入仓——本地仓库内容过多，上传与拉取负担重。§4「数据入仓与同步纪律」及相关步骤暂缓执行，真实数据仅存 PC 本地，手机调试环境用全新空数据即可；代码仓库照常 git 同步，不受影响。数据目录经 `BZ_DATA_DIR` 指到仓库外，或至少将 `data/` 加入 `.gitignore` 防误提交。本文件保留原目的（手机端 Claude Code 开发调试、网页端查看项目效果）；「日常在手机端使用工作台」的方案另见同目录《260921-手机端VPS单源方案-design.md》。
 
 ## 背景与目标
 
@@ -14,7 +16,7 @@
 | --- | --- |
 | 手机端形态 | Termux 跑 Node 服务 + 手机本机浏览器访问（非 Electron） |
 | 电子书大文件 | books/、covers/ 不入仓（.gitignore），仅 PC 端可看书 |
-| 同步操作 | 手动 git（pull / commit / push 均由开发者执行） |
+| 同步操作 | 手动 git（pull / commit / push 均由开发者执行）——260921 暂缓：应用数据不入仓 |
 | 界面适配 | 首版最小适配（viewport），手机横屏使用，后续经优化建议区迭代 |
 | 仓库隐私 | 已确认私有 |
 | 桌面版 | 行为完全不变，dev:web 为附加模式 |
@@ -55,7 +57,7 @@
 - `shell.openExternal` 类（收藏 Ctrl+点开网页等）：web 分支 `window.open`。
 - `index.html` 加 viewport meta；首版不做响应式改造，横屏使用。
 
-## §4 数据入仓与同步纪律
+## §4 数据入仓与同步纪律（260921 暂缓：数据不入仓，以下保留备查）
 
 1. 先修 `storage.ts` `dataItemNames`：补 `books`、`covers`、`music`、`canvas`、`fonts`。
 2. 开发者在**个人中心 → 数据存储**将数据目录迁到仓库子目录 `D:\Code\myapp\bugzi_workspace\data\`（现成功能，PC 端零代码）。
@@ -88,7 +90,7 @@
 1. 桌面回归：`npm run dev` 全模块走查不受影响；`npm run typecheck`、`npm run build` 通过。
 2. PC 浏览器验证 `npm run dev:web` 全模块走查（含 dialog 类流程、bzres 资源、推送事件）。
 3. Termux：安装 → 启动 → 核心模块（格言/经验书/记账/md 笔记/总导览）增删改查。
-4. 同步演练：PC 改 → 手机 pull 可见 → 手机改 → PC pull 可见；验证 WAL 不入仓且数据完整（重开后无丢失）。
+4. （260921 暂缓）同步演练：PC 改 → 手机 pull 可见 → 手机改 → PC pull 可见；验证 WAL 不入仓且数据完整（重开后无丢失）。
 
 ## 实施阶段划分（供写计划参考）
 

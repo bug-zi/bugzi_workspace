@@ -1104,6 +1104,25 @@ function migrate(): void {
     existing.forEach((r, i) => upd.run(i, r.id))
     d.exec('PRAGMA user_version = 46')
   }
+
+  if (version < 47) {
+    // v47：我是谁（2026-09-21-我是谁-design.md §二）——每日 3-4 问 + 回答提炼候选画像条目
+    // 逐条确认入档 profile_facts(source='ai')。历史行永不删：显示只取当日，历史供防重复提问。
+    d.exec(`CREATE TABLE whoami_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      question TEXT NOT NULL,
+      answer TEXT,
+      skipped INTEGER NOT NULL DEFAULT 0,
+      answered_at TEXT,
+      suggestions TEXT,
+      resolved INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_whoami_date ON whoami_questions(date)')
+    d.exec('PRAGMA user_version = 47')
+  }
 }
 
 // ---------- 通用工具 ----------

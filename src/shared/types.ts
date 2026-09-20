@@ -56,8 +56,10 @@ export const SettingsKeys = {
   MottoSchedule: 'motto_schedule',
   LastMottoRun: 'last_motto_run',
   AiActiveSessionId: 'ai_active_session_id',
-  // 频道制（DB v9）：当前所在频道 + 各频道独立激活会话（assistant 沿用 AiActiveSessionId）
-  AiActiveChannel: 'ai_active_channel',
+  // 频道制（DB v9）：各场景独立激活会话（assistant 沿用 AiActiveSessionId）。
+  // 统一会话流（优化建议区第48轮）：新增全局键=边栏当前会话（启动恢复「最后聊过的会话」）；
+  // per-channel 键保留，服务模块动作场景定位与弹窗拓展坞。原 AiActiveChannel 键废弃删除（DB 旧行无害留存）。
+  AiActiveSessionGlobal: 'ai_active_session_global',
   AiActiveSessionMotto: 'ai_active_session_motto',
   AiActiveSessionWiki: 'ai_active_session_wiki',
   AiActiveSessionZhijiji: 'ai_active_session_zhijiji',
@@ -95,6 +97,8 @@ export const SettingsKeys = {
   ReaderBgImage: 'reader_bg_image',
   // 万象库待学习区（260910）：每日批次最近执行日（本地日期 YYYY-MM-DD，幂等标记）
   WikiDailyLearnDate: 'wiki_daily_learn_date',
+  // 我是谁（260921 新功能开发区）：每日问题批次最近生成日（本地日期 YYYY-MM-DD，幂等标记）
+  WhoamiDailyDate: 'whoami_daily_date',
   // 学习库（260911）：「学习·问答」频道激活会话
   AiActiveSessionLearn: 'ai_active_session_learn',
   AiActiveSessionProphet: 'ai_active_session_prophet',
@@ -1050,4 +1054,26 @@ export interface HeatmapDay {
   challenge: boolean
   /** 完成件数 0-3（四档颜色） */
   level: number
+}
+
+// 我是谁（whoami_questions，DB v47；个人档·我的画像之下）
+export interface WhoamiQuestionView {
+  id: number
+  /** 批次日期 YYYY-MM-DD */
+  date: string
+  question: string
+  /** NULL = 未答 */
+  answer: string | null
+  skipped: boolean
+  answeredAt: string | null
+  /** 提炼的候选画像条目（未提炼/提炼失败为空数组） */
+  suggestions: { category: string; content: string }[]
+  /** 候选已处理完（含提炼出零条的） */
+  resolved: boolean
+}
+export interface WhoamiGetResult {
+  /** 当日批次（只查当日，跨天自然作废） */
+  today: WhoamiQuestionView[]
+  /** 往日已答但候选未处理完的（保留到处理完才消失） */
+  pending: WhoamiQuestionView[]
 }

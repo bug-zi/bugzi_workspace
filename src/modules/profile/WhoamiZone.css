@@ -1,0 +1,77 @@
+/* 我是谁 zone（260921）：主题变量双主题自适应，零彩亮 */
+.whoami-item {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  background: var(--color-surface);
+}
+.whoami-question {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.whoami-answer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.whoami-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+}
+.whoami-answer-text {
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+.whoami-extracting {
+  font-size: 0.9em;
+  color: var(--color-text-secondary);
+}
+.whoami-extract-err {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.9em;
+  color: var(--color-danger);
+  margin-bottom: 6px;
+}
+.whoami-suggestion {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  margin-top: 6px;
+}
+.whoami-cat {
+  flex-shrink: 0;
+  font-size: 0.85em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+}
+.whoami-suggestion-content {
+  flex: 1;
+}
+.whoami-suggestion-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.whoami-done {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  opacity: 0.75;
+}
+.whoami-pending-title {
+  font-weight: 600;
+  margin: 14px 0 8px;
+  color: var(--color-text-secondary);
+}

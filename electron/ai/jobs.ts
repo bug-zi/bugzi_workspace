@@ -1,5 +1,5 @@
 // AI 任务注册表（主进程）：渲染层 jobId → AbortController；统一取消通道 ai:cancel 的后端
-// （260908 全局取消，docs/project/全局/2026-09-08-AI生成全局取消-design.md）
+// （260908 全局取消，docs/project/全局/archive/2026-09-08-AI生成全局取消-design.md）
 const jobs = new Map<string, AbortController>()
 
 export function beginJob(jobId: string): AbortController {

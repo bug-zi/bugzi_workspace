@@ -7,6 +7,7 @@ import { cleanupExpired } from './recycle'
 import { cleanupOldArticles } from './feed'
 import { ensureDailyLearn } from './wikiStock'
 import { ensureLearnStock } from './learnStock'
+import { ensureWhoamiDaily } from './whoami'
 
 let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
@@ -86,6 +87,8 @@ export function scheduleMidnightCleanup(): void {
     void ensureDailyLearn()
     // 学习库每日队列（260911）：App 跨天常驻时零点也定档（内部幂等 + 顺带触发泵）
     void ensureLearnStock()
+    // 我是谁每日问题（260921）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
+    void ensureWhoamiDaily()
     scheduleMidnightCleanup()
   }, msUntilMidnight())
   midnightTimer.unref?.()

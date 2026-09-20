@@ -5,11 +5,13 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { FONT_FAMILIES, withCustomGlobalFonts } from '../../theme/fonts'
 import { customFontCssValue, invalidateCustomFonts, registerCustomFontFaces } from '../../theme/customFonts'
 import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
 import type { CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
+import WhoamiZone from './WhoamiZone'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
 const PROFILE_CATEGORIES = [
@@ -104,6 +106,11 @@ export default function ProfileModule() {
   // 画像 zone 整体折叠（260910 指令改默认收起：新开项目只留「我的画像」大标题，计数徽标常驻）；
   // 展开后小分类仍默认收起（见上 catCollapsed），点开当次会话记住；内存态不持久化
   const [zoneCollapsed, setZoneCollapsed] = useState(true)
+  // 我是谁 zone（260921）：折叠态由本组件持有（默认收起，同画像 zone）；总导览深链 target='whoami' 时展开
+  const [whoamiOpen, setWhoamiOpen] = useState(false)
+  useModuleNavigate('profile', (target) => {
+    if (target === 'whoami') setWhoamiOpen(true)
+  })
 
   // ---------- AI 使用统计（260910 推理角效率优化） ----------
   const [usageRange, setUsageRange] = useState<'today' | 'month' | 'all'>('today')
@@ -677,6 +684,9 @@ export default function ProfileModule() {
         </div>
         )}
       </section>
+
+      {/* 我是谁（260921 新功能开发区）：每日问题 + 回答提炼候选入档 */}
+      <WhoamiZone open={whoamiOpen} onOpenChange={setWhoamiOpen} />
 
       {/* App 设置 */}
       <section className="zone">

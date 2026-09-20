@@ -27,12 +27,14 @@ import {
   recordQuizAnswer
 } from './services/wikiQuizStock'
 import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
+import { whoamiGet, whoamiGenerateIpc, whoamiAnswer, whoamiExtract, whoamiResolve } from './services/whoami'
 import {
   listAiMessages,
   appendSystemToChannelSession,
   editAiMessage,
   aiChat,
   listAiSessions,
+  listAllAiSessions,
   createAiSession,
   renameAiSession,
   deleteAiSession,
@@ -534,7 +536,8 @@ export function registerIpc(): void {
 
   // ---------- AI 会话管理（按频道隔离：list/create/active/delete 均带频道参数） ----------
   ipcMain.handle('aiSession:list', (_e, channel?: string) =>
-    listAiSessions((channel ?? 'assistant') as AiChannel)
+    // 统一会话流：不传 channel = 全部场景（边栏全量列表）；传 channel = 该场景（模块动作定位/拓展坞）
+    channel == null ? listAllAiSessions() : listAiSessions(channel as AiChannel)
   )
   ipcMain.handle('aiSession:create', (_e, channel?: string) =>
     createAiSession('新对话', (channel ?? 'assistant') as AiChannel)
@@ -2899,6 +2902,15 @@ export function registerIpc(): void {
   ipcMain.handle('overview:heatmap', (_e, from: string, to: string) => {
     return heatmapOverview(from, to)
   })
+
+  // ---------- 我是谁（260921 新功能开发区，个人档·我的画像之下） ----------
+  ipcMain.handle('whoami:get', () => whoamiGet())
+  ipcMain.handle('whoami:generate', () => whoamiGenerateIpc())
+  ipcMain.handle('whoami:answer', (_e, id: number, answer: string | null) => whoamiAnswer(id, answer))
+  ipcMain.handle('whoami:extract', (_e, id: number) => whoamiExtract(id))
+  ipcMain.handle('whoami:resolve', (_e, id: number, index: number, accept: boolean) =>
+    whoamiResolve(id, index, accept)
+  )
 
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
   // 会话级作答态暂存主进程内存（practiceBank）；题目本体生成即入题库 wall_bank（todo 态，

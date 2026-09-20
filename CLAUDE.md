@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/project/左侧边栏/左侧边栏.md`                     | 开发者主导        | 左栏跨模块全局硬性规则（原总需求文档对应内容）；AI 可提建议，或在开发者要求下协助完善（需审核通过） |
 | `docs/project/右侧边栏/右侧边栏.md`                     | 开发者主导        | 右侧边栏总说明（260907 应开发者指令由 AI 依现状整理创建）；AI 可提建议，协助完善需审核通过 |
 | `docs/project/临时草稿（待写入).md`                     | **开发者**        | 开发者写需求与对齐用的草稿本；**AI 不需要读取**                                     |
-| `docs/project/` 内各模块目录的 spec/plan 文档与 `docs/project/右侧边栏/` | **AI**            | brainstorming / 写计划会话产出的设计记录与实施计划，按模块就地存放：idea 阶段 → `idea/<模块>/`、已立项 → `左侧边栏/<模块>/`、右侧边栏相关 → `右侧边栏/`；落地或废弃后移入所属目录 `archive/` 子目录，机制正本见 `docs/project/README.md` |
+| `docs/project/` 内各模块目录的 spec/plan 文档与 `docs/project/右侧边栏/` | **AI**            | brainstorming / 写计划会话产出的设计记录与实施计划，按归属就地存放：idea 阶段（未立项未落地的想法）→ `idea/<模块>/`、已立项 → `左侧边栏/<模块>/`、右侧边栏相关 → `右侧边栏/`、全局功能 → `全局/`；落地或废弃后移入**所属正式目录**的 `archive/` 子目录——**idea/ 只放想法阶段文档，落地即移出 idea/，不得留在 `idea/<模块>/archive/`**（260921 开发者明确），机制正本见 `docs/project/README.md` |
 | `docs/project/优化建议区.md`                          | **开发者**        | 开发者记录使用中遇到的优化建议；AI 据此实施优化（实施后移入「归档区」）           |
 | `docs/project/问题疑惑区.md`                          | **开发者**        | 开发者记录问题疑惑处；**AI 不要主动查阅**，开发者指明时才阅读并答疑               |
 

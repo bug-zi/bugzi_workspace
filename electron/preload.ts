@@ -1008,6 +1008,22 @@ const api = {
     /** 热力图三源聚合（from/to 为本地 YYYY-MM-DD 闭区间） */
     heatmap: (from: string, to: string): Promise<import('../src/shared/types').HeatmapDay[]> =>
       ipcRenderer.invoke('overview:heatmap', from, to)
+  },
+  whoami: {
+    /** 当日题 + 往日已答未确认候选 */
+    get: (): Promise<import('../src/shared/types').WhoamiGetResult> => ipcRenderer.invoke('whoami:get'),
+    /** 手动生成今日问题（幂等；LLM 未配置抛 LLM_NOT_CONFIGURED → 渲染层提示去配置） */
+    generate: (): Promise<import('../src/shared/types').WhoamiGetResult> =>
+      ipcRenderer.invoke('whoami:generate'),
+    /** 存回答（null = 跳过） */
+    answer: (id: number, answer: string | null): Promise<import('../src/shared/types').WhoamiQuestionView> =>
+      ipcRenderer.invoke('whoami:answer', id, answer),
+    /** 提炼候选画像条目（LLM 未配置抛 LLM_NOT_CONFIGURED） */
+    extract: (id: number): Promise<import('../src/shared/types').WhoamiQuestionView> =>
+      ipcRenderer.invoke('whoami:extract', id),
+    /** 候选逐条处理：accept=true 加入画像（source=ai）/ false 忽略 */
+    resolve: (id: number, index: number, accept: boolean): Promise<import('../src/shared/types').WhoamiQuestionView> =>
+      ipcRenderer.invoke('whoami:resolve', id, index, accept)
   }
 }
 
