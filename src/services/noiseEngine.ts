@@ -1,6 +1,7 @@
 // 白噪音引擎（specs §2）：渲染层 Web Audio 纯合成的模块级单例，挂在任何模块组件之外——切模块不断声。
 // 主链：各层 Gain → master Gain → destination；暂停 = AudioContext 挂起 + 事件调度器停表（层节点保留，恢复不重建）。
 import { SCENES, sceneById, type EventLayerDef, type NoiseLayerDef, type SteadyLayerDef } from './noiseScenes'
+import { spawnTrigger } from './triggerSynth'
 import { nextValidId, shuffleIds } from './queueOrder'
 import { markAudioActive, registerAudioStopper, stopOthers } from './audioExclusive'
 
@@ -18,13 +19,38 @@ interface SteadyNodes {
 interface LayerInstance {
   def: NoiseLayerDef
   gain: GainNode
+  panner?: StereoPannerNode
   steady?: SteadyNodes
+  timer?: ReturnType<typeof setTimeout>
+}
+
+export interface TriggerState {
+  on: boolean
+  /** 0–100 */
+  vol: number
+  /** -100（左）–100（右） */
+  pan: number
+  /** 每次发声随机左右摆位（开启时声像滑杆置灰） */
+  roam: boolean
+}
+
+/** 触发层实例：gain → panner → master；timer 为随机间隔调度链 */
+interface TriggerInstance {
+  key: string
+  gain: GainNode
+  panner: StereoPannerNode
+  builtinId?: string
+  numericId?: number
   timer?: ReturnType<typeof setTimeout>
 }
 
 export interface NoiseEngineState {
   sceneId: string
   layers: Record<string, number>
+  /** 场景层声像 -100..100（缺省 0 居中） */
+  pans: Record<string, number>
+  /** 触发层状态：键 = `builtin:<id>` 或导入项数字 id 字符串 */
+  triggers: Record<string, TriggerState>
   master: number
 }
 
@@ -53,6 +79,10 @@ export interface EngineMixRef {
   id: string
   sceneId: string
   layers: Record<string, number>
+  /** 自定义混音快照的触发层（缺省 = 不动当前触发层，兼容旧混音） */
+  triggers?: Record<string, TriggerState>
+  /** 该场景的默认混音（每场景至多一条；setScene 时替代出厂 defaults 应用） */
+  isDefault?: boolean
 }
 
 type Listener = () => void
@@ -65,7 +95,17 @@ class NoiseEngine {
   /** 事件层共用噪声缓冲（spawn 频繁，避免每次重新生成） */
   private sharedBuffers = new Map<'white' | 'pink' | 'brown', AudioBuffer>()
   private layers = new Map<string, LayerInstance>()
-  private state: NoiseEngineState = { sceneId: SCENES[0].id, layers: { ...SCENES[0].defaults }, master: 60 }
+  private triggerInstances = new Map<string, TriggerInstance>()
+  private triggerBuffers = new Map<number, AudioBuffer>()
+  /** 丢失/解码失败只提示一次的 id 集 */
+  private missingNotified = new Set<number>()
+  private state: NoiseEngineState = {
+    sceneId: SCENES[0].id,
+    layers: { ...SCENES[0].defaults },
+    pans: {},
+    triggers: {},
+    master: 60
+  }
   private running = false
   /** 快照版本号：任何变化（播放态/场景/滑杆）自增，useSyncExternalStore 依此重渲染 */
   private version = 0
@@ -84,6 +124,10 @@ class NoiseEngine {
   private queueTransiting = false
   /** 异步链代际：停止/打断后旧 fade 链自废 */
   private queueToken = 0
+  /** 暂停淡出挂起链代际（快速 暂停→播放 防误挂起） */
+  private pauseToken = 0
+  /** 切场景换建链代际（连续快切旧链自废） */
+  private sceneToken = 0
   /** 引擎侧通知钩子（退出队列/队列播完等轻提示；NoisePage 挂载时接 toast，卸载置 null） */
   onNotice: ((msg: string) => void) | null = null
 
@@ -105,27 +149,42 @@ class NoiseEngine {
   getState = (): NoiseEngineState & { playing: boolean } => ({
     sceneId: this.state.sceneId,
     layers: { ...this.state.layers },
+    pans: { ...this.state.pans },
+    triggers: Object.fromEntries(Object.entries(this.state.triggers).map(([k, v]) => [k, { ...v }])),
     master: this.state.master,
     playing: this.running
   })
 
   // —— 播放控制 ——
 
-  play = async (): Promise<void> => {
+  /** 建 AudioContext + 主增益（幂等）；增益给到当前主音量——手动播放的 0 起淡入在 play 内覆盖 */
+  private ensureCtx(): void {
+    if (this.ctx) return
+    this.ctx = new AudioContext()
+    this.master = this.ctx.createGain()
+    this.master.gain.value = this.mapGain(this.state.master)
+    this.master.connect(this.ctx.destination)
+    this.buildScene()
+  }
+
+  play = async (opts?: { immediate?: boolean }): Promise<void> => {
     if (this.running) return
-    if (!this.ctx) {
-      this.ctx = new AudioContext()
-      this.master = this.ctx.createGain()
-      this.master.gain.value = this.mapGain(this.state.master)
-      this.master.connect(this.ctx.destination)
-      this.buildScene()
-    }
-    if (this.ctx.state === 'suspended') await this.ctx.resume()
+    this.ensureCtx()
+    if (this.ctx!.state === 'suspended') await this.ctx!.resume()
     this.running = true
     stopOthers('noise') // 互斥：开播白噪音即停轻音乐（音乐吧设计 §二）
     markAudioActive('noise')
     this.startSchedulers()
+    this.startTriggerSchedulers()
     if (this.queueActiveId != null) this.startQueueTimer() // 队列恢复计时（remainMs 续跑）
+    if (!opts?.immediate && this.ctx && this.master) {
+      // 手动播放：主增益 0 → 目标 ~0.8s 缓升；队列路径由 fadeMaster 链自管（immediate 直给目标值）
+      const now = this.ctx.currentTime
+      const g = this.master.gain
+      g.cancelScheduledValues(now)
+      g.setValueAtTime(0.0001, now)
+      g.setTargetAtTime(this.mapGain(this.state.master), now, 0.27)
+    }
     this.emit()
   }
 
@@ -134,7 +193,17 @@ class NoiseEngine {
     this.running = false
     this.stopSchedulers()
     this.stopQueueTimer() // 队列计时冻结（remainMs 保留，play 恢复续跑）
-    if (this.ctx && this.ctx.state === 'running') void this.ctx.suspend()
+    if (this.ctx && this.master && this.ctx.state === 'running') {
+      const token = ++this.pauseToken
+      const now = this.ctx.currentTime
+      const g = this.master.gain
+      g.cancelScheduledValues(now)
+      g.setTargetAtTime(0.0001, now, 0.15) // ~0.45s 缓降后挂起
+      setTimeout(() => {
+        if (this.pauseToken !== token || this.running || !this.ctx) return
+        void this.ctx.suspend()
+      }, 500)
+    }
     this.emit()
   }
 
@@ -157,21 +226,66 @@ class NoiseEngine {
     this.emit()
   }
 
+  /** 场景层声像（-100 左 – 100 右，0 居中） */
+  setLayerPan = (id: string, v: number): void => {
+    const p = Math.max(-100, Math.min(100, Math.round(v)))
+    this.state.pans[id] = p
+    const inst = this.layers.get(id)
+    if (inst && this.ctx) inst.panner?.pan.setTargetAtTime(p / 100, this.ctx.currentTime, 0.05)
+    this.emit()
+  }
+
   setMaster = (v: number): void => {
     this.state.master = clamp100(v)
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(this.mapGain(this.state.master), this.ctx.currentTime, 0.05)
     this.emit()
   }
 
-  /** 切场景：拆当前层建新层（defaults），事件调度器随播放态重启 */
+  /** 切场景：拆当前层建新层；该场景设了默认混音则用它的层配比+触发层，否则出厂 defaults。
+   *  播放中 0.4s 淡出 → 换建 → 新层 ~0.45s 淡入（buildScene 建 0 起拉） */
   setScene = (sceneId: string): void => {
     const scene = sceneById(sceneId)
     if (!scene || sceneId === this.state.sceneId) return
     this.interruptQueue() // 队列运行中手动切场景 = 用户接管（点同场景卡本为无操作，不触发）
-    this.state = { sceneId, layers: { ...scene.defaults }, master: this.state.master }
+    const defMix = this.customMixes.find((m) => m.sceneId === sceneId && m.isDefault)
+    if (defMix) {
+      this.applyScene(sceneId, defMix.layers, true)
+      if (defMix.triggers) this.applyTriggers(defMix.triggers)
+    } else {
+      this.applyScene(sceneId, scene.defaults, true)
+    }
+  }
+
+  /** 场景应用统一入口：fade=true 播放中淡出淡入；fade=false 立即换建（未播放 / 队列过渡期 master 已在 0） */
+  private applyScene(sceneId: string, layers: Record<string, number>, fade: boolean): void {
+    const scene = sceneById(sceneId)
+    if (!scene) return
+    const nextLayers: Record<string, number> = { ...scene.defaults }
+    for (const def of scene.layers) {
+      const v = layers[def.id]
+      if (typeof v === 'number') nextLayers[def.id] = clamp100(v)
+    }
+    this.state = { sceneId: scene.id, layers: nextLayers, pans: this.state.pans, triggers: this.state.triggers, master: this.state.master }
     if (this.ctx) {
-      this.buildScene()
-      if (this.running) this.startSchedulers()
+      const swap = (): void => {
+        this.buildScene()
+        if (this.running) this.startSchedulers()
+      }
+      if (fade && this.running) {
+        const token = ++this.sceneToken
+        const now = this.ctx.currentTime
+        for (const inst of this.layers.values()) {
+          inst.gain.gain.cancelScheduledValues(now)
+          inst.gain.gain.setTargetAtTime(0.0001, now, 0.13) // ~0.4s 淡出
+        }
+        setTimeout(() => {
+          if (this.sceneToken !== token) return // 连续快切：旧链自废，末次切换生效
+          swap()
+        }, 420)
+      } else {
+        this.sceneToken++
+        swap()
+      }
     }
     this.emit()
   }
@@ -187,7 +301,27 @@ class NoiseEngine {
       }
     }
     const master = typeof saved.master === 'number' && Number.isFinite(saved.master) ? clamp100(saved.master) : 60
-    this.state = { sceneId: scene.id, layers, master }
+    const pans: Record<string, number> = {}
+    if (saved.pans && typeof saved.pans === 'object') {
+      for (const [k, v] of Object.entries(saved.pans as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v)) pans[k] = Math.max(-100, Math.min(100, Math.round(v)))
+      }
+    }
+    const triggers: Record<string, TriggerState> = {}
+    if (saved.triggers && typeof saved.triggers === 'object') {
+      for (const [k, v] of Object.entries(saved.triggers as Record<string, unknown>)) {
+        if (v && typeof v === 'object') {
+          const o = v as Record<string, unknown>
+          triggers[k] = {
+            on: o.on === true,
+            vol: typeof o.vol === 'number' && Number.isFinite(o.vol) ? clamp100(o.vol) : 50,
+            pan: typeof o.pan === 'number' && Number.isFinite(o.pan) ? Math.max(-100, Math.min(100, Math.round(o.pan))) : 0,
+            roam: o.roam === true
+          }
+        }
+      }
+    }
+    this.state = { sceneId: scene.id, layers, pans, triggers, master }
     if (this.ctx) {
       this.buildScene()
       if (this.master) this.master.gain.value = this.mapGain(master)
@@ -207,7 +341,15 @@ class NoiseEngine {
 
   /** 自定义混音同步（NoisePage 加载/增删后调用；resolveSound 解析依据） */
   setCustomMixes = (mixes: EngineMixRef[]): void => {
-    this.customMixes = mixes.map((m) => ({ id: m.id, sceneId: m.sceneId, layers: { ...m.layers } }))
+    this.customMixes = mixes.map((m) => ({
+      id: m.id,
+      sceneId: m.sceneId,
+      layers: { ...m.layers },
+      triggers: m.triggers
+        ? Object.fromEntries(Object.entries(m.triggers).map(([k, v]) => [k, { ...v }]))
+        : undefined,
+      isDefault: m.isDefault === true
+    }))
   }
 
   /** 队列配置编辑（QueuePanel 每次增删改/换模式调用；引擎为唯一状态源，emit 驱动重渲染） */
@@ -263,7 +405,7 @@ class NoiseEngine {
       first = nextValidId('sequence', ids, (id) => this.soundValid(id), null)
     }
     if (!first) return false
-    await this.play() // 确保音频上下文在跑（幂等）
+    await this.play({ immediate: true }) // 确保音频上下文在跑；淡入淡出由队列切歌链自管
     await this.playQueueSound(first)
     return true
   }
@@ -300,14 +442,18 @@ class NoiseEngine {
     }
   }
 
-  private resolveSound(item: NoiseQueueItem): { sceneId: string; layers: Record<string, number> } | null {
+  private resolveSound(item: NoiseQueueItem): {
+    sceneId: string
+    layers: Record<string, number>
+    triggers?: Record<string, TriggerState>
+  } | null {
     if (item.kind === 'preset') {
       const scene = sceneById(item.sceneId)
       const preset = scene?.presets.find((p) => p.id === item.presetId)
       return scene && preset ? { sceneId: scene.id, layers: preset.layers } : null
     }
     const mix = this.customMixes.find((m) => m.id === item.mixId)
-    return mix ? { sceneId: mix.sceneId, layers: mix.layers } : null
+    return mix ? { sceneId: mix.sceneId, layers: mix.layers, triggers: mix.triggers } : null
   }
 
   private soundValid = (id: string): boolean => {
@@ -330,7 +476,7 @@ class NoiseEngine {
     this.emit()
     await this.fadeMaster(0, 1.2, token)
     if (this.queueToken !== token) return
-    this.applySoundProgrammatic(sound.sceneId, sound.layers)
+    this.applySoundProgrammatic(sound.sceneId, sound.layers, sound.triggers)
     await this.fadeMaster(this.mapGain(this.state.master), 1.2, token)
     if (this.queueToken !== token) return
     this.queueTransiting = false
@@ -355,20 +501,16 @@ class NoiseEngine {
     })
   }
 
-  /** 队列专用：切场景+配比（不经公开 setLayer/setScene，不触发打断退出） */
-  private applySoundProgrammatic(sceneId: string, layers: Record<string, number>): void {
+  /** 队列专用：切场景+配比（不经公开 setLayer/setScene，不触发打断退出）；triggers 为自定义混音快照 */
+  private applySoundProgrammatic(
+    sceneId: string,
+    layers: Record<string, number>,
+    triggers?: Record<string, TriggerState>
+  ): void {
     const scene = sceneById(sceneId)
     if (!scene) return
     if (sceneId !== this.state.sceneId) {
-      this.state = { sceneId, layers: { ...scene.defaults }, master: this.state.master }
-      for (const def of scene.layers) {
-        const v = layers[def.id]
-        if (typeof v === 'number') this.state.layers[def.id] = clamp100(v)
-      }
-      if (this.ctx) {
-        this.buildScene()
-        if (this.running) this.startSchedulers()
-      }
+      this.applyScene(sceneId, layers, false)
     } else {
       // 同场景换配比：各层增益平滑过渡即可，无需拆建层
       for (const def of scene.layers) {
@@ -378,7 +520,18 @@ class NoiseEngine {
         if (inst && this.ctx) inst.gain.gain.setTargetAtTime(this.mapGain(v), this.ctx.currentTime, 0.05)
       }
     }
+    if (triggers) this.applyTriggers(triggers)
     this.emit()
+  }
+
+  /** 触发层整组应用（默认混音/自定义混音召回/队列切歌）：快照没有的一律关；批量应用不顺带自动开播 */
+  private applyTriggers(triggers: Record<string, TriggerState>): void {
+    for (const key of Object.keys(this.state.triggers)) {
+      if (!(key in triggers)) this.setTrigger(key, { on: false }, { autoPlay: false })
+    }
+    for (const [key, st] of Object.entries(triggers)) {
+      if (st && typeof st === 'object') this.setTrigger(key, st, { autoPlay: false })
+    }
   }
 
   private startQueueTimer(): void {
@@ -463,9 +616,13 @@ class NoiseEngine {
     this.teardownScene()
     for (const def of scene.layers) {
       const gain = ctx.createGain()
-      gain.gain.value = this.mapGain(this.state.layers[def.id] ?? 0)
-      gain.connect(this.master!)
-      const inst: LayerInstance = { def, gain }
+      gain.gain.value = 0
+      gain.gain.setTargetAtTime(this.mapGain(this.state.layers[def.id] ?? 0), ctx.currentTime, 0.15)
+      const panner = ctx.createStereoPanner()
+      panner.pan.value = (this.state.pans[def.id] ?? 0) / 100
+      gain.connect(panner)
+      panner.connect(this.master!)
+      const inst: LayerInstance = { def, gain, panner }
       if (def.type === 'steady') {
         inst.steady = this.buildSteady(ctx, def, gain)
       }
@@ -537,6 +694,7 @@ class NoiseEngine {
         s.lfoDepth?.disconnect()
       }
       inst.gain.disconnect()
+      inst.panner?.disconnect()
     }
     this.layers.clear()
   }
@@ -551,6 +709,12 @@ class NoiseEngine {
 
   private stopSchedulers(): void {
     for (const inst of this.layers.values()) {
+      if (inst.timer != null) {
+        clearTimeout(inst.timer)
+        inst.timer = undefined
+      }
+    }
+    for (const inst of this.triggerInstances.values()) {
       if (inst.timer != null) {
         clearTimeout(inst.timer)
         inst.timer = undefined
@@ -750,6 +914,133 @@ class NoiseEngine {
       src.start(t, Math.random() * 3)
       src.stop(t + dur + 0.02)
     }
+  }
+
+  // —— 触发层（260921 触发音轮）：跨场景叠加，随机间隔 2–8s 单发 ——
+
+  setTrigger = (key: string, patch: Partial<TriggerState>, opts?: { autoPlay?: boolean }): void => {
+    const cur: TriggerState = this.state.triggers[key] ?? { on: false, vol: 50, pan: 0, roam: false }
+    const next: TriggerState = {
+      on: typeof patch.on === 'boolean' ? patch.on : cur.on,
+      vol: patch.vol != null ? clamp100(patch.vol) : cur.vol,
+      pan: patch.pan != null ? Math.max(-100, Math.min(100, Math.round(patch.pan))) : cur.pan,
+      roam: typeof patch.roam === 'boolean' ? patch.roam : cur.roam
+    }
+    this.state.triggers[key] = next
+    this.syncTriggerInstance(key, next)
+    // 单独播放（260921 冒烟反馈轮）：用户直接开启触发音行且引擎未播 → 自动开播（淡入；纯触发音可把场景层拉 0）。
+    // 批量应用（默认混音/混音召回/队列）传 autoPlay=false，不顺带开播。
+    if (next.on && !this.running && opts?.autoPlay !== false) void this.play()
+    this.emit()
+  }
+
+  /** 状态 ↔ 实例对齐：开=建链（播放中即排程），关=拆链（正在响的一声自然结束） */
+  private syncTriggerInstance(key: string, st: TriggerState): void {
+    if (!st.on) {
+      const old = this.triggerInstances.get(key)
+      if (old) {
+        if (old.timer != null) clearTimeout(old.timer)
+        old.gain.disconnect()
+        old.panner.disconnect()
+        this.triggerInstances.delete(key)
+      }
+      return
+    }
+    if (!this.ctx || !this.master) return // ctx 未建：状态已记，play→startTriggerSchedulers 补建
+    let inst = this.triggerInstances.get(key)
+    if (!inst) {
+      const gain = this.ctx.createGain()
+      gain.gain.value = this.mapGain(st.vol)
+      const panner = this.ctx.createStereoPanner()
+      panner.pan.value = st.pan / 100
+      gain.connect(panner)
+      panner.connect(this.master)
+      const numeric = Number(key)
+      inst = {
+        key,
+        gain,
+        panner,
+        builtinId: key.startsWith('builtin:') ? key.slice(8) : undefined,
+        numericId: key.startsWith('builtin:') ? undefined : Number.isFinite(numeric) ? numeric : undefined
+      }
+      this.triggerInstances.set(key, inst)
+      if (this.running && inst.timer == null) this.scheduleTrigger(inst)
+    } else {
+      inst.gain.gain.setTargetAtTime(this.mapGain(st.vol), this.ctx.currentTime, 0.05)
+      if (!st.roam) inst.panner.pan.setTargetAtTime(st.pan / 100, this.ctx.currentTime, 0.05)
+    }
+  }
+
+  private startTriggerSchedulers(): void {
+    for (const key of Object.keys(this.state.triggers)) {
+      this.syncTriggerInstance(key, this.state.triggers[key])
+    }
+    for (const inst of this.triggerInstances.values()) {
+      if (inst.timer == null) this.scheduleTrigger(inst)
+    }
+  }
+
+  private scheduleTrigger(inst: TriggerInstance): void {
+    const gapMs = (2 + Math.random() * 6) * 1000
+    inst.timer = setTimeout(() => {
+      inst.timer = undefined
+      if (!this.running || !this.ctx) return
+      this.fireTrigger(inst)
+      if (this.running) this.scheduleTrigger(inst)
+    }, gapMs)
+  }
+
+  private fireTrigger(inst: TriggerInstance): void {
+    const st = this.state.triggers[inst.key]
+    if (!st?.on || !this.ctx) return
+    if (st.roam) inst.panner.pan.setTargetAtTime(Math.random() * 1.6 - 0.8, this.ctx.currentTime, 0.01)
+    if (inst.builtinId != null) {
+      spawnTrigger(this.ctx, inst.gain, inst.builtinId, this.ctx.currentTime)
+    } else if (inst.numericId != null) {
+      const buf = this.triggerBuffers.get(inst.numericId)
+      if (!buf) {
+        void this.decodeTrigger(inst.numericId) // 预解码未命中（首帧/失败重试），本次跳过
+        return
+      }
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.connect(inst.gain)
+      src.start()
+    }
+  }
+
+  /** 预解码导入触发音（MixerPanel 列表刷新/导入后调用；已缓存跳过） */
+  decodeTriggers = async (ids: number[]): Promise<void> => {
+    this.ensureCtx()
+    await Promise.all(ids.filter((id) => !this.triggerBuffers.has(id)).map((id) => this.decodeTrigger(id)))
+  }
+
+  private async decodeTrigger(id: number): Promise<void> {
+    if (!this.ctx) return
+    try {
+      const bytes = await window.api.trigger.file(id)
+      if (!this.ctx) return
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+      this.triggerBuffers.set(id, await this.ctx.decodeAudioData(ab))
+    } catch {
+      if (!this.missingNotified.has(id)) {
+        this.missingNotified.add(id)
+        this.onNotice?.('一个触发音文件丢失或无法解码，已跳过')
+      }
+    }
+  }
+
+  /** 删除触发音后调用（内置/导入通用）：清缓存/状态/实例 */
+  forgetTriggerKey = (key: string): void => {
+    this.triggerBuffers.delete(Number(key))
+    this.missingNotified.delete(Number(key))
+    this.setTrigger(key, { on: false })
+    delete this.state.triggers[key]
+    this.emit()
+  }
+
+  forgetTrigger = (id: number): void => {
+    this.forgetTriggerKey(String(id))
   }
 
   // —— 噪声缓冲 ——

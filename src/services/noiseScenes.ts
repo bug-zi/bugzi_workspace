@@ -160,7 +160,104 @@ const CAFE: NoiseScene = {
   ]
 }
 
-export const SCENES: NoiseScene[] = [RAIN, FOREST, OCEAN, FIRE, CAFE]
+/** 雷雨场景（260921 触发音轮）：雨体三层 + 风暴风声 + 更密远雷 */
+const STORM: NoiseScene = {
+  id: 'storm',
+  label: '雷雨',
+  icon: 'thunderstorm',
+  layers: [
+    { id: 'thunder', label: '远雷', type: 'event', minGapSec: 12, maxGapSec: 40, spawn: 'thunder' },
+    { id: 'body_low', label: '雨体·沉', type: 'steady', noise: 'brown', filter: { kind: 'lowpass', freq: 140 } },
+    { id: 'body_hiss', label: '雨体·沙沙', type: 'steady', noise: 'pink', filter: { kind: 'bandpass', freq: 650, q: 0.7 } },
+    { id: 'patter', label: '密雨', type: 'steady', noise: 'white', filter: { kind: 'bandpass', freq: 2000, q: 0.6 }, am: { rateHz: 1.3, depth: 0.2 } },
+    { id: 'stormwind', label: '风暴风声', type: 'steady', noise: 'pink', filter: { kind: 'lowpass', freq: 600 }, lfoFilter: { rateHz: 0.1, depthHz: 400 } }
+  ],
+  defaults: { thunder: 55, body_low: 60, body_hiss: 70, patter: 70, stormwind: 45 },
+  presets: [
+    { id: 'distant', label: '远处雷雨', layers: { thunder: 30, body_low: 40, body_hiss: 55, patter: 45, stormwind: 30 } },
+    { id: 'peak', label: '雷雨峰值', layers: { thunder: 75, body_low: 70, body_hiss: 80, patter: 85, stormwind: 60 } },
+    { id: 'night', label: '深夜雷雨', layers: { thunder: 45, body_low: 55, body_hiss: 50, patter: 40, stormwind: 35 } }
+  ]
+}
+
+/** 雪夜场景（260921）：雪本体无声——夜空底噪 + 轻风 + 落雪簌簌 + 偶发枝雪坠落/树枝吱呀 */
+const SNOW: NoiseScene = {
+  id: 'snow',
+  label: '雪夜',
+  icon: 'weather_snowy',
+  layers: [
+    { id: 'still', label: '夜空底噪', type: 'steady', noise: 'brown', filter: { kind: 'lowpass', freq: 90 } },
+    { id: 'breeze', label: '轻风', type: 'steady', noise: 'pink', filter: { kind: 'bandpass', freq: 400, q: 0.4 }, lfoFilter: { rateHz: 0.06, depthHz: 200 } },
+    { id: 'powder', label: '落雪簌簌', type: 'steady', noise: 'white', filter: { kind: 'bandpass', freq: 5000, q: 0.5 }, am: { rateHz: 0.4, depth: 0.3 } },
+    { id: 'shed', label: '枝雪坠落', type: 'event', minGapSec: 5, maxGapSec: 18, spawn: 'crackle', spawnCfg: { freqMin: 2500 } },
+    { id: 'branch', label: '树枝吱呀', type: 'event', minGapSec: 8, maxGapSec: 25, spawn: 'chirp', spawnCfg: { freqMin: 180, freqMax: 420, durMin: 0.3, durMax: 0.9, chirpsMax: 1 } }
+  ],
+  defaults: { still: 30, breeze: 35, powder: 22, shed: 25, branch: 15 },
+  presets: [
+    { id: 'quiet', label: '静雪夜', layers: { still: 35, breeze: 25, powder: 15, shed: 12, branch: 8 } },
+    { id: 'powder', label: '簌簌落雪', layers: { still: 25, breeze: 35, powder: 55, shed: 30, branch: 10 } },
+    { id: 'windy', label: '风卷雪', layers: { still: 30, breeze: 65, powder: 40, shed: 35, branch: 25 } }
+  ]
+}
+
+/** 风场景（260921）：三段滤波噪声慢扫 + 偶发呼啸 */
+const WIND: NoiseScene = {
+  id: 'wind',
+  label: '风',
+  icon: 'air',
+  layers: [
+    { id: 'gust_low', label: '低吟', type: 'steady', noise: 'brown', filter: { kind: 'lowpass', freq: 300 }, lfoFilter: { rateHz: 0.05, depthHz: 200 } },
+    { id: 'gust_mid', label: '风声主体', type: 'steady', noise: 'pink', filter: { kind: 'bandpass', freq: 700, q: 0.5 }, am: { rateHz: 0.2, depth: 0.3 }, lfoFilter: { rateHz: 0.08, depthHz: 350 } },
+    { id: 'hiss', label: '高频风切', type: 'steady', noise: 'white', filter: { kind: 'bandpass', freq: 3000, q: 0.6 }, am: { rateHz: 0.3, depth: 0.35 } },
+    { id: 'howl', label: '呼啸', type: 'event', minGapSec: 6, maxGapSec: 20, spawn: 'chirp', spawnCfg: { freqMin: 300, freqMax: 700, durMin: 0.8, durMax: 2.0, chirpsMax: 1 } }
+  ],
+  defaults: { gust_low: 45, gust_mid: 55, hiss: 30, howl: 25 },
+  presets: [
+    { id: 'breeze', label: '微风', layers: { gust_low: 25, gust_mid: 35, hiss: 15, howl: 10 } },
+    { id: 'gale', label: '大风', layers: { gust_low: 60, gust_mid: 75, hiss: 55, howl: 40 } },
+    { id: 'night', label: '夜风', layers: { gust_low: 50, gust_mid: 40, hiss: 12, howl: 15 } }
+  ]
+}
+
+/** 溪流场景（260921）：三段流水稳态 + 偶发水花溅跃 */
+const STREAM: NoiseScene = {
+  id: 'stream',
+  label: '溪流',
+  icon: 'water',
+  layers: [
+    { id: 'flow_hi', label: '流水·清亮', type: 'steady', noise: 'white', filter: { kind: 'bandpass', freq: 2800, q: 0.5 }, am: { rateHz: 0.8, depth: 0.15 } },
+    { id: 'flow_body', label: '水流主体', type: 'steady', noise: 'pink', filter: { kind: 'bandpass', freq: 900, q: 0.5 } },
+    { id: 'flow_low', label: '水底沉流', type: 'steady', noise: 'brown', filter: { kind: 'lowpass', freq: 200 } },
+    { id: 'splash', label: '水花溅跃', type: 'event', minGapSec: 2, maxGapSec: 9, spawn: 'drip' }
+  ],
+  defaults: { flow_hi: 45, flow_body: 60, flow_low: 35, splash: 30 },
+  presets: [
+    { id: 'brook', label: '浅溪', layers: { flow_hi: 55, flow_body: 50, flow_low: 20, splash: 35 } },
+    { id: 'rapids', label: '急流', layers: { flow_hi: 65, flow_body: 75, flow_low: 45, splash: 45 } },
+    { id: 'calm', label: '静潭', layers: { flow_hi: 20, flow_body: 35, flow_low: 40, splash: 12 } }
+  ]
+}
+
+/** 内置触发音注册表（260921 触发音轮）：合成实现见 triggerSynth.ts，同 id 一一对应 */
+export interface BuiltinTriggerDef {
+  id: string
+  label: string
+  icon: string
+}
+
+export const BUILTIN_TRIGGERS: BuiltinTriggerDef[] = [
+  { id: 'tap_wood', label: '木桌轻叩', icon: 'table_restaurant' },
+  { id: 'tap_glass', label: '玻璃轻敲', icon: 'local_bar' },
+  { id: 'page', label: '翻书页', icon: 'menu_book' },
+  { id: 'keyboard', label: '机械键盘', icon: 'keyboard' },
+  { id: 'scissors', label: '剪刀开合', icon: 'content_cut' },
+  { id: 'bubble', label: '泡泡纸', icon: 'bubble_chart' },
+  { id: 'crinkle', label: '塑料袋窸窣', icon: 'shopping_bag' },
+  { id: 'chime', label: '风铃', icon: 'toys' },
+  { id: 'bowl', label: '颂钵', icon: 'self_improvement' }
+]
+
+export const SCENES: NoiseScene[] = [RAIN, FOREST, OCEAN, FIRE, CAFE, STORM, SNOW, WIND, STREAM]
 
 export function sceneById(id: string): NoiseScene | undefined {
   return SCENES.find((s) => s.id === id)

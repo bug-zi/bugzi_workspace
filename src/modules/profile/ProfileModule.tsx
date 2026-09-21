@@ -12,6 +12,7 @@ import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSetting
 import type { CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 import WhoamiZone from './WhoamiZone'
+import AgentSettingsSection from './AgentSettingsSection'
 
 /** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
 const PROFILE_CATEGORIES = [
@@ -966,6 +967,9 @@ export default function ProfileModule() {
         </div>
       </section>
 
+      {/* Embedding 配置（2.0 批次A：LLM 配置下方，总纲 §6） */}
+      <AgentSettingsSection part="embedding" />
+
       {/* AI 使用统计（260910 推理角效率优化；zone 折叠 260910 追加） */}
       <section className="zone">
         <div className="zone-header" onClick={() => setUsageZoneCollapsed((v) => !v)}>
@@ -1181,6 +1185,9 @@ export default function ProfileModule() {
           ))}
         </div>
       </section>
+
+      {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6） */}
+      <AgentSettingsSection part="agent" />
 
       {/* LLM 编辑弹窗 */}
       {llmForm && (

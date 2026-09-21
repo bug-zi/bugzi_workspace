@@ -13,6 +13,8 @@ import { ensureLearnStock } from './services/learnStock'
 import { ensureWhoamiDaily } from './services/whoami'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
+import './services/agent/bootstrap'
+import { startAgent } from './services/agent/engine'
 import { createTray } from './services/tray'
 import { initUpdater } from './services/updater'
 import { getSetting } from './db/settings'
@@ -96,6 +98,8 @@ if (!app.requestSingleInstanceLock()) {
     initDb()
     registerIpc()
     startSchedulers()
+    // 超级工作台 2.0 引擎（自判 agent_enabled，关闭态零副作用待命）
+    startAgent()
     // 存量汤诡计摘要一次性回填（海龟汤质量优化 spec）：错开启动高峰，失败静默（内部自 catch）
     setTimeout(() => void backfillTrickNotes(), 10_000).unref()
     // 推理角题库预生成泵（v1.3）：同样错开启动高峰；存量达标即 no-op，内部自 catch 永不抛错

@@ -14,8 +14,8 @@ export type ModuleId =
   | 'recycle'
   | 'profile'
 
-/** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet） */
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet'
+/** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet，2.0 批次C 新增 literature） */
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
 
 /** 草稿本频道（DB v14）：固定两频道起步 */
 export type DraftChannel = 'general' | 'turtle'
@@ -161,6 +161,17 @@ export interface MusicImportSummary {
 export interface MusicListResult {
   playlists: MusicPlaylistRow[]
   tracks: MusicTrackRow[]
+}
+export interface TriggerSoundRow {
+  id: number
+  name: string
+  file_path: string
+  created_at: string
+}
+export interface TriggerImportSummary {
+  imported: number
+  skipped: number
+  failed: number
 }
 
 // ===== 学习库（DB v33，学习库 specs）=====
@@ -916,6 +927,118 @@ export interface McpResearch {
   notes: string
 }
 
+// ===== 超级工作台 2.0（批次A；与 src/shared/types.ts 同步的渲染层副本）=====
+export type AgentTrack = 'deep' | 'science'
+export type AgentPhase = 'idle' | 'working' | 'paused'
+export interface AgentDomainRow {
+  id: number
+  name: string
+  track: AgentTrack
+  keywords: string[]
+  enabled: boolean
+  last_scan_at: string | null
+  created_at: string
+  updated_at: string
+}
+export interface AgentStatusSnapshot {
+  phase: AgentPhase
+  pauseReason: string | null
+  cpu: number
+  memFreeBytes: number
+  memTotalBytes: number
+  budgetUsedToday: number
+  runningTypes: string[]
+  /** 最近一次队列事件（渲染层增量刷新依据） */
+  lastEvent: { type: string; status: string } | null
+}
+export interface EmbeddingConfig {
+  enabled: boolean
+  baseUrl: string
+  model: string
+  ollamaPath: string
+}
+export interface AgentConfigView {
+  enabled: boolean
+  cpuPause: number
+  cpuResume: number
+  budget: number
+  privacyProfile: boolean
+  privacyLearn: boolean
+  embedding: EmbeddingConfig
+}
+export interface DiscoverItemRow {
+  id: number
+  source_type: 'paper' | 'article'
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（NULL 回落 year 展示） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: string
+  length_est: string
+  url: string
+  source: string
+  reason: string
+  status: 'discovered' | 'accepted' | 'rejected'
+  domain_id: number | null
+  created_at: string
+}
+export interface PaperRow {
+  id: number
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（NULL 回落 year） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: string
+  url: string
+  source: string
+  status: 'ready' | 'meta_only'
+  fulltext_path: string | null
+  digest_md: string | null
+  glossary: string | null
+  discovery_id: number | null
+  created_at: string
+  updated_at: string
+}
+export interface InterpretationRow {
+  id: number
+  owner_type: 'paper' | 'science_article' | 'book'
+  owner_id: number
+  kind: 'digest' | 'lecture' | 'translation' | 'book_digest'
+  status: 'running' | 'done' | 'failed'
+  md_path: string | null
+  tokens_used: number
+  created_at: string
+  updated_at: string
+}
+export interface TaskRunRow {
+  id: number
+  task_type: string
+  trigger: 'scheduled' | 'manual' | 'auto'
+  status: 'running' | 'done' | 'failed' | 'skipped'
+  ref_id: number | null
+  started_at: string
+  finished_at: string | null
+  tokens_used: number
+  error: string | null
+}
+export interface AgentDayStats {
+  enabled: boolean
+  phase: 'idle' | 'working' | 'paused'
+  pauseReason: string | null
+  runningTypes: string[]
+  pendingDiscover: number
+  budgetToday: number
+  today: Record<string, number>
+  yesterday: Record<string, number>
+  generatedAt: string
+}
+
 // preload 暴露的完整 API 形状（与 electron/preload.ts 保持同步）
 export interface Api {
   settings: {
@@ -1448,6 +1571,8 @@ export interface Api {
     highlights(): Promise<WikiHighlightRow[]>
     addHighlight(entryId: number, text: string): Promise<boolean>
     deleteHighlight(id: number): Promise<boolean>
+    /** 卡片内取消高光（优化建议区第48轮）：按词条+文本删高光记录（划词气泡「取消高光」入口） */
+    removeHighlight(entryId: number, text: string): Promise<boolean>
     discardEntry(id: number): Promise<boolean>
   }
   learn: {
@@ -1490,6 +1615,8 @@ export interface Api {
     highlights(): Promise<LearnHighlightRow[]>
     addHighlight(nodeId: number, text: string): Promise<boolean>
     deleteHighlight(id: number): Promise<boolean>
+    /** 卡片内取消高光（优化建议区第49轮，学习库同万象库补齐）：按节点+文本删高光记录 */
+    removeHighlight(nodeId: number, text: string): Promise<boolean>
     /** 今日小测卷（无则 null；answering 态隐去答案与解析） */
     quizGet(): Promise<LearnQuizView | null>
     /** 出今日卷（一天一卷幂等，已存在直接返回；force=true 换一张覆盖旧卷；可取消）；可测卡不足抛错 */
@@ -1522,6 +1649,13 @@ export interface Api {
     trackMove(id: number, playlistId: number | null): Promise<void>
     trackDelete(id: number): Promise<void>
     duration(id: number, sec: number): Promise<void>
+    file(id: number): Promise<Uint8Array>
+  }
+  trigger: {
+    list(): Promise<TriggerSoundRow[]>
+    importDialog(): Promise<TriggerImportSummary>
+    rename(id: number, name: string): Promise<void>
+    delete(id: number): Promise<void>
     file(id: number): Promise<Uint8Array>
   }
   challenge: {
@@ -1627,6 +1761,55 @@ export interface Api {
     onData(cb: (p: { id: string; data: string }) => void): () => void
     /** 进程退出推送 */
     onExit(cb: (p: { id: string; exitCode: number }) => void): () => void
+  }
+  agent: {
+    /** 引擎状态快照（呼吸灯/任务中心用） */
+    statusGet(): Promise<AgentStatusSnapshot>
+    configGet(): Promise<AgentConfigView>
+    /** 白名单键设置；agent_enabled 变更即时起/停引擎 */
+    configSet(key: string, value: string): Promise<boolean>
+    domains(): Promise<AgentDomainRow[]>
+    domainSave(
+      id: number | null,
+      input: { name: string; track: AgentTrack; keywords: string[]; enabled: boolean }
+    ): Promise<number>
+    domainDelete(id: number): Promise<boolean>
+    tokensToday(): Promise<number>
+    /** 引擎状态任何变化推送，返回取消订阅 */
+    onAgentStatus(cb: (s: AgentStatusSnapshot) => void): () => void
+    // ---------- 深读线（批次B） ----------
+    discoverList(status?: 'discovered' | 'accepted' | 'rejected'): Promise<DiscoverItemRow[]>
+    discoverAccept(id: number): Promise<{ paperId: number }>
+    discoverReject(id: number): Promise<boolean>
+    papers(): Promise<PaperRow[]>
+    paperDetail(id: number): Promise<{
+      paper: PaperRow
+      interpretations: InterpretationRow[]
+      related: { dst_type: string; dst_id: number; title: string; score: number }[]
+    }>
+    /** 手动海选：返回 runId（进展见任务中心） */
+    runCollect(domainId: number): Promise<number>
+    /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    runInterpret(paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number>
+    importPaperPdf(paperId: number): Promise<boolean>
+    pendingCounts(): Promise<{ discovered: number }>
+    /** 彻底删除正式文献（连带解读 md/全文缓存/向量/链接，二次确认由渲染层负责） */
+    paperDelete(id: number): Promise<boolean>
+    /** 彻底删除发现条目（连带其向量，二次确认由渲染层负责） */
+    discoverDelete(id: number): Promise<boolean>
+    // ---------- 感知层（批次C） ----------
+    runsList(limit?: number): Promise<TaskRunRow[]>
+    dayStats(): Promise<AgentDayStats>
+    /** 文献追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
+    askLiterature(paperId: number): Promise<{ sessionId: number }>
+    /** 冷启动向导完成：开引擎 + 置标记；runFirst 时对全部启用 deep 领域跑一轮海选 */
+    coldStartFinish(runFirst: boolean): Promise<{ queued: number }>
+  }
+  embedding: {
+    /** 测试连接：向量化一个词返回维度；失败抛 message */
+    test(): Promise<{ dim: number }>
+    /** 一键拉起 Ollama（探测 + spawn serve + 轮询就绪） */
+    serve(): Promise<{ ok: boolean }>
   }
 }
 

@@ -23,7 +23,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify,
   learn: SettingsKeys.AiActiveSessionLearn,
-  prophet: SettingsKeys.AiActiveSessionProphet
+  prophet: SettingsKeys.AiActiveSessionProphet,
+  literature: SettingsKeys.AiActiveSessionLiterature
 }
 
 /** 会话列表（最近活跃在前，按频道隔离） */
@@ -217,7 +218,9 @@ const CHANNEL_PERSONAS: Record<AiChannel, string> = {
   learn:
     '当前频道是「学习·问答」，你是计算机专业知识的学习助教：用通俗、准确的方式讲解计算机专业知识，多举实际例子（命令、配置、代码），必要时指出常见误区与工程实践要点。',
   prophet:
-    '当前频道是「致知己·预言家」，你是预言分析师：围绕用户的预测/推断，基于检索到的资料给出充分全面的说明与推演（支持与反对的依据都要讲）；欢迎质疑，逐条回应，证据不足时明说；绝不替用户下最终结论，判断由用户自己做。'
+    '当前频道是「致知己·预言家」，你是预言分析师：围绕用户的预测/推断，基于检索到的资料给出充分全面的说明与推演（支持与反对的依据都要讲）；欢迎质疑，逐条回应，证据不足时明说；绝不替用户下最终结论，判断由用户自己做。',
+  literature:
+    '当前频道是「文献·追问」，你是论文研读助手：围绕会话中注入的文献上下文（导读卡/全文）回答提问——解释概念与术语、评估方法与结论、联系领域背景、指出局限；资料之外的问题明确说明超出该文献范围，不硬答。'
 }
 
 /** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
@@ -335,9 +338,24 @@ export async function aiChat(
   ]
     .filter(Boolean)
     .join('\n')
+  // 文献·追问特例（2.0 批次C）：history 过滤排除了 system 行（辩真进度只作展示），
+  // literature 通道需把会话最新一条注入的文献上下文作为额外 system 交给 LLM
+  let litContext: string | null = null
+  if (ch === 'literature') {
+    const ctxRow = getDb()
+      .prepare(
+        "SELECT content FROM ai_messages WHERE session_id = ? AND role = 'system' AND content LIKE '%<<<LIT:%' ORDER BY id DESC LIMIT 1"
+      )
+      .get(sessionId) as { content: string } | undefined
+    litContext = ctxRow?.content ?? null
+  }
   // 记忆化（优化建议区第13轮）：画像只带索引，AI 需要时经 PROFILE_LOOKUP 检索详情
   const res = await chatWithProfileLookup({
-    messages: [{ role: 'system', content: system }, ...history],
+    messages: [
+      { role: 'system', content: system },
+      ...(litContext ? [{ role: 'system' as const, content: litContext }] : []),
+      ...history
+    ],
     temperature: 0.8,
     scene: 'ai:chat',
     signal

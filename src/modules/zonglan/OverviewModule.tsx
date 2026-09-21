@@ -9,6 +9,7 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
 import type { ModuleId, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
+import type { AgentDayStats } from '../../renderer/api'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import HeatmapCard, { heatmapRange } from './HeatmapCard'
 import ChallengeManageDialog from './ChallengeManageDialog'
@@ -58,6 +59,8 @@ export default function OverviewModule() {
     pendingCount: number
   } | null>(null)
   const [heat, setHeat] = useState<HeatmapDay[] | null>(null)
+  // 超级工作台聚合块（2.0 批次C）：昨日成果 + 待终选 + 相位
+  const [agentStats, setAgentStats] = useState<AgentDayStats | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
 
   /** 深链：派发导航事件（App 集中切模块，目标模块 useModuleNavigate 切内部视图） */
@@ -175,6 +178,13 @@ export default function OverviewModule() {
       setHeat(null)
     }
   }, [])
+  const loadAgent = useCallback(async (): Promise<void> => {
+    try {
+      setAgentStats(await window.api.agent.dayStats())
+    } catch {
+      setAgentStats(null)
+    }
+  }, [])
 
   const loadAll = useCallback((): void => {
     void loadMottos()
@@ -186,7 +196,8 @@ export default function OverviewModule() {
     void loadChallenge()
     void loadWhoami()
     void loadHeat()
-  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat])
+    void loadAgent()
+  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat, loadAgent])
 
   useEffect(() => {
     loadAll()
@@ -289,6 +300,29 @@ export default function OverviewModule() {
               ? `已完成 · 连胜 ${wallState.streak} 天`
               : `未打卡 · 连胜 ${wallState.streak} 天`
             : '加载失败'}
+        </span>
+      </button>
+
+      {/* 超级工作台（2.0 批次C）：昨日成果 + 待终选 + 相位；点击进任务中心（独立事件，'agent' 非 ModuleId） */}
+      <button
+        className="card zl-row"
+        onClick={() => window.dispatchEvent(new CustomEvent('bugzi:open-agent-center'))}
+        title="打开任务中心"
+      >
+        <span className="material-symbols-outlined">smart_toy</span>
+        <span className="zl-row-title">超级工作台</span>
+        <span className="module-sub">
+          {agentStats == null
+            ? '加载失败'
+            : !agentStats.enabled
+              ? '未启用 · 去个人档开启'
+              : `昨日海选 ${agentStats.yesterday.collect_deep ?? 0} · 解读 ${
+                  (agentStats.yesterday.make_digest ?? 0) +
+                  (agentStats.yesterday.lecture ?? 0) +
+                  (agentStats.yesterday.translate ?? 0)
+                } · 待终选 ${agentStats.pendingDiscover}${
+                  agentStats.phase === 'paused' ? ' · 已暂停' : agentStats.phase === 'working' ? ' · 工作中' : ''
+                }`}
         </span>
       </button>
 

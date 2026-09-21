@@ -1,5 +1,7 @@
 # debugzi 统一会话流（频道降级为会话标签）实施计划
 
+> **已实施归档（260921 20:10）**：全部任务落地，typecheck 双配置 + build 通过，开发者确认效果；本文随 design 移入 `debugzi/archive/`，优化建议区归档为第48轮。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 删除 debugzi 边栏常驻 7 频道 pill 条，频道降级为会话属性标签——边栏变为「全量会话列表 + 聊天区」，模块动作照旧自动切入对应场景会话。

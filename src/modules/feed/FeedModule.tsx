@@ -4,14 +4,24 @@ import type { ArticleSummary, FeedRecord, FeedView } from '../../shared/types'
 import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ArticleView, { relTime } from './ArticleView'
+import LiteraturePanel from './LiteraturePanel'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { useModuleNavigate } from '../../hooks/useModuleNavigate'
+import type { AiChannel } from '../../shared/types'
 import './feed.css'
 
 type FeedWithUnread = FeedRecord & { unread: number }
 
-export default function FeedModule(props: { onNavigateToProfile?: () => void }) {
+export default function FeedModule(props: {
+  onNavigateToProfile?: () => void
+  /** 文献追问入口（2.0 批次C）：App.openAiWith，显式指定 literature 场景 */
+  onOpenAi?: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
+}) {
   const { toast } = useToast()
+  // 主页签（2.0 批次B）：订阅=自读区（原有全部内容）；文献=深读线（发现箱+正式文献区）
+  const [mainTab, setMainTab] = useState<'feed' | 'literature'>('feed')
+  const [litPending, setLitPending] = useState(0)
   const [feeds, setFeeds] = useState<FeedWithUnread[]>([])
   const [activeFeed, setActiveFeed] = useState<number | null>(null)
   const [articles, setArticles] = useState<ArticleSummary[]>([])
@@ -83,6 +93,15 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
   useEffect(() => {
     void load()
   }, [load])
+
+  // 总导览/任务中心深链：切到文献页签（2.0 批次B 先行铺好，批次 C 直达用）
+  useModuleNavigate('feed', (target) => {
+    if (target === 'literature') setMainTab('literature')
+  })
+  useEffect(() => {
+    if (mainTab !== 'literature') return
+    void window.api.agent.pendingCounts().then((c) => setLitPending(c.discovered))
+  }, [mainTab])
 
   const totalUnread = feeds.reduce((n, f) => n + f.unread, 0)
   const activeFeedRow = feeds.find((f) => f.id === activeFeed)
@@ -195,44 +214,68 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
     <div className="module-page feed-page">
       <div className="module-header">
         <div className="module-title">信息源</div>
+        {/* 主页签（2.0 批次B）：订阅=自读区 / 文献=深读线 */}
         <div className="recycle-tabs" style={{ marginLeft: 14 }}>
           <button
-            className={`recycle-tab${view === 'unread' ? ' active' : ''}`}
-            onClick={() => switchView('unread')}
+            className={`recycle-tab${mainTab === 'feed' ? ' active' : ''}`}
+            onClick={() => setMainTab('feed')}
           >
-            收件箱
+            订阅
           </button>
           <button
-            className={`recycle-tab${view === 'archive' ? ' active' : ''}`}
-            onClick={() => switchView('archive')}
+            className={`recycle-tab${mainTab === 'literature' ? ' active' : ''}`}
+            onClick={() => setMainTab('literature')}
           >
-            已归档
-          </button>
-          <button
-            className={`recycle-tab${view === 'favorite' ? ' active' : ''}`}
-            onClick={() => switchView('favorite')}
-          >
-            收藏
+            文献
           </button>
         </div>
-        <div className="module-sub">{feeds.length} 个源{totalUnread > 0 ? ` · ${totalUnread} 篇未读` : ''}</div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={() => void refresh()} disabled={fetching}>
-            <span className={`material-symbols-outlined${fetching ? ' spin' : ''}`}>refresh</span>
-            {fetching ? '拉取中' : '刷新'}
-          </button>
-          <button
-            className="btn"
-            onClick={async () => {
-              await window.api.articles.markAllRead(activeFeed)
-              await load()
-            }}
-          >
-            <span className="material-symbols-outlined">done_all</span>全部标已读
-          </button>
-        </div>
+        {mainTab === 'feed' ? (
+          <>
+            <div className="recycle-tabs" style={{ marginLeft: 14 }}>
+              <button
+                className={`recycle-tab${view === 'unread' ? ' active' : ''}`}
+                onClick={() => switchView('unread')}
+              >
+                收件箱
+              </button>
+              <button
+                className={`recycle-tab${view === 'archive' ? ' active' : ''}`}
+                onClick={() => switchView('archive')}
+              >
+                已归档
+              </button>
+              <button
+                className={`recycle-tab${view === 'favorite' ? ' active' : ''}`}
+                onClick={() => switchView('favorite')}
+              >
+                收藏
+              </button>
+            </div>
+            <div className="module-sub">{feeds.length} 个源{totalUnread > 0 ? ` · ${totalUnread} 篇未读` : ''}</div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={() => void refresh()} disabled={fetching}>
+                <span className={`material-symbols-outlined${fetching ? ' spin' : ''}`}>refresh</span>
+                {fetching ? '拉取中' : '刷新'}
+              </button>
+              <button
+                className="btn"
+                onClick={async () => {
+                  await window.api.articles.markAllRead(activeFeed)
+                  await load()
+                }}
+              >
+                <span className="material-symbols-outlined">done_all</span>全部标已读
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="module-sub">
+            深读线{litPending > 0 ? ` · ${litPending} 条待终选` : ''} · AI 只呈元信息，入库由你决定
+          </div>
+        )}
       </div>
 
+      {mainTab === 'feed' ? (
       <div className="feed-body">
         {/* 左窄栏：源列表 */}
         <aside className="feed-sources">
@@ -354,6 +397,9 @@ export default function FeedModule(props: { onNavigateToProfile?: () => void }) 
           )}
         </div>
       </div>
+      ) : (
+        <LiteraturePanel onOpenAi={() => props.onOpenAi?.('', { channel: 'literature' })} />
+      )}
 
       {/* 添加订阅弹窗：URL → 验证显源名 → 订阅 */}
       {addOpen && (

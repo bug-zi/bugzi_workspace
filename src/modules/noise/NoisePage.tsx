@@ -2,7 +2,8 @@
 // 白噪音 tab 内保留既有「混音器 | 播放队列」子 tab 与两面板（零改动）；页头大播放按钮按
 // 当前活跃音源口径（谁在播控谁；都停着控上次音源，从未播过默认白噪音——audioExclusive）。
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { noiseEngine } from '../../services/noiseEngine'
+import { noiseEngine, type TriggerState } from '../../services/noiseEngine'
+import { SCENES } from '../../services/noiseScenes'
 import { musicEngine } from '../../services/musicEngine'
 import { activeAudioKind } from '../../services/audioExclusive'
 import { SettingsKeys } from '../../shared/types'
@@ -13,13 +14,58 @@ import MusicPanel from './MusicPanel'
 import { QUEUE_DEFAULT_MINUTES, genQueueItemId, saveQueueConfig, type QueueSoundRef } from './queueStore'
 import './noise.css'
 
-/** 自定义混音（noise_custom_mixes JSON 条目；不含主音量） */
+/** 自定义混音（noise_custom_mixes JSON 条目；不含主音量；triggers = 260921 起携带的触发层快照，旧混音无此字段）；
+ *  factoryKey = 出厂预设播种行（260921 冒烟反馈轮起预设并入本列表，可删不复活）；isDefault = 该场景默认混音 */
 export interface CustomMix {
   id: string
   name: string
   sceneId: string
   layers: Record<string, number>
+  triggers?: Record<string, TriggerState>
+  factoryKey?: string
+  isDefault?: boolean
   createdAt: string
+}
+
+/** 隐藏名单（noise_hidden JSON；260921 冒烟反馈轮）：删除场景/内置触发音/出厂混音行 = 进名单不显示、不复活 */
+export interface NoiseHiddenData {
+  scenes: string[]
+  builtinTriggers: string[]
+  factoryMixes: string[]
+}
+
+export function parseHidden(raw: string | null): NoiseHiddenData {
+  const empty: NoiseHiddenData = { scenes: [], builtinTriggers: [], factoryMixes: [] }
+  if (!raw) return empty
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>
+    const arr = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+    return { scenes: arr(o.scenes), builtinTriggers: arr(o.builtinTriggers), factoryMixes: arr(o.factoryMixes) }
+  } catch {
+    return empty
+  }
+}
+
+/** 出厂预设播种：不在隐藏名单且列表里没有同 factoryKey 行的，追加为出厂混音（幂等） */
+function seedFactories(mixes: CustomMix[], hidden: NoiseHiddenData): CustomMix[] {
+  const next = [...mixes]
+  for (const scene of SCENES) {
+    for (const p of scene.presets) {
+      const key = `${scene.id}:${p.id}`
+      if (hidden.factoryMixes.includes(key)) continue
+      if (next.some((m) => m.factoryKey === key)) continue
+      next.push({
+        id: `f:${key}`,
+        name: p.label,
+        sceneId: scene.id,
+        layers: { ...p.layers },
+        factoryKey: key,
+        createdAt: new Date().toISOString()
+      })
+    }
+  }
+  return next
 }
 
 /** settings JSON 容错解析：非数组/缺关键字段的条目丢弃，坏数据不炸页面 */
@@ -28,15 +74,21 @@ function parseMixes(raw: string | null): CustomMix[] {
   try {
     const arr = JSON.parse(raw) as unknown
     if (!Array.isArray(arr)) return []
-    return arr.filter(
-      (m): m is CustomMix =>
-        !!m &&
-        typeof m === 'object' &&
-        typeof (m as CustomMix).id === 'string' &&
-        typeof (m as CustomMix).name === 'string' &&
-        typeof (m as CustomMix).sceneId === 'string' &&
-        typeof (m as CustomMix).layers === 'object'
-    )
+    return arr
+      .filter(
+        (m): m is CustomMix =>
+          !!m &&
+          typeof m === 'object' &&
+          typeof (m as CustomMix).id === 'string' &&
+          typeof (m as CustomMix).name === 'string' &&
+          typeof (m as CustomMix).sceneId === 'string' &&
+          typeof (m as CustomMix).layers === 'object'
+      )
+      .map((m) => ({
+        ...m,
+        factoryKey: typeof m.factoryKey === 'string' ? m.factoryKey : undefined,
+        isDefault: m.isDefault === true
+      }))
   } catch {
     return []
   }
@@ -49,10 +101,29 @@ export default function NoisePage() {
   const [pageTab, setPageTab] = useState<'music' | 'noise'>('music')
   const [tab, setTab] = useState<'mixer' | 'queue'>('mixer')
   const [mixes, setMixes] = useState<CustomMix[]>([])
+  const [hidden, setHidden] = useState<NoiseHiddenData>({ scenes: [], builtinTriggers: [], factoryMixes: [] })
 
   useEffect(() => {
-    void window.api.settings.get(SettingsKeys.NoiseCustomMixes).then((raw) => setMixes(parseMixes(raw)))
+    void (async () => {
+      const [mixRaw, hiddenRaw] = await Promise.all([
+        window.api.settings.get(SettingsKeys.NoiseCustomMixes),
+        window.api.settings.get(SettingsKeys.NoiseHidden)
+      ])
+      const loaded = parseMixes(mixRaw)
+      const h = parseHidden(hiddenRaw)
+      const seeded = seedFactories(loaded, h)
+      setHidden(h)
+      setMixes(seeded)
+      if (seeded.length !== loaded.length) {
+        void window.api.settings.set(SettingsKeys.NoiseCustomMixes, JSON.stringify(seeded))
+      }
+    })()
   }, [])
+
+  const persistHidden = (next: NoiseHiddenData): void => {
+    setHidden(next)
+    void window.api.settings.set(SettingsKeys.NoiseHidden, JSON.stringify(next))
+  }
 
   // 引擎通知 → toast（白噪音：退出队列/队列播完等轻提示；本页 keep-alive 常驻，挂载即接管）
   useEffect(() => {
@@ -140,6 +211,8 @@ export default function NoisePage() {
             <MixerPanel
               mixes={mixes}
               persistMixes={persistMixes}
+              hidden={hidden}
+              persistHidden={persistHidden}
               onAddToQueue={addToQueue}
               onViewQueue={() => setTab('queue')}
             />

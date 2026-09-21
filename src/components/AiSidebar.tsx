@@ -49,7 +49,8 @@ const CHANNELS: { id: AiChannel; label: string; icon: string }[] = [
   { id: 'wiki', label: '万象·问答', icon: 'public' },
   { id: 'zhijiji', label: '致知己·追问', icon: 'self_improvement' },
   { id: 'verify', label: '辩真·核查', icon: 'fact_check' },
-  { id: 'prophet', label: '致知己·预言家', icon: 'auto_awesome' }
+  { id: 'prophet', label: '致知己·预言家', icon: 'auto_awesome' },
+  { id: 'literature', label: '文献·追问', icon: 'auto_stories' }
 ]
 
 const channelInfo = (ch: AiChannel): { label: string; icon: string } =>
@@ -63,7 +64,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   zhijiji: SettingsKeys.AiActiveSessionZhijiji,
   verify: SettingsKeys.AiActiveSessionVerify,
   learn: SettingsKeys.AiActiveSessionLearn,
-  prophet: SettingsKeys.AiActiveSessionProphet
+  prophet: SettingsKeys.AiActiveSessionProphet,
+  literature: SettingsKeys.AiActiveSessionLiterature
 }
 
 /** 画像提炼协议标记（主进程 PROFILE_SUGGEST_INSTRUCTION 约定）：<<<PROFILE_SUGGEST:类别|内容>>> */

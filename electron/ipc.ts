@@ -28,6 +28,27 @@ import {
 } from './services/wikiQuizStock'
 import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
 import { whoamiGet, whoamiGenerateIpc, whoamiAnswer, whoamiExtract, whoamiResolve } from './services/whoami'
+import { getStatus, applyEnabledSwitch } from './services/agent/engine'
+import { listDomains, saveDomain, deleteDomain } from './services/agent/domains'
+import { agentTokensToday } from './services/agent/budget'
+import { getEmbeddingConfig, testEmbedding, ensureOllama } from './services/agent/embedding'
+import {
+  listDiscover,
+  rejectDiscover,
+  acceptDiscover,
+  listPapers,
+  getPaper,
+  listInterpretations,
+  importManualPdf,
+  paperRelated,
+  pendingDiscoverCount,
+  deletePaper,
+  deleteDiscover
+} from './services/agent/papers'
+import { runInterpret } from './services/agent/interpret'
+import { enqueue } from './services/agent/queue'
+import { listRuns, dayStats } from './services/agent/center'
+import { startLiteratureAsk } from './services/agent/ask'
 import {
   listAiMessages,
   appendSystemToChannelSession,
@@ -146,7 +167,7 @@ import {
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, CustomFontInfo } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -154,6 +175,7 @@ import { currentDataDir, migrateDataDir } from './services/storage'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './services/terminal'
 import type { TerminalCreateOpts } from './services/terminal'
 import { listMusic, importTracks, playlistCreate, playlistRename, playlistDelete, trackMove, trackDelete, setTrackDuration, readTrackFile } from './services/music'
+import { listTriggers, importTriggers, triggerRename, triggerDelete, readTriggerFile } from './services/trigger'
 import { getUpdateState, checkForUpdates, downloadUpdate, installUpdate } from './services/updater'
 
 function win(): BrowserWindow | undefined {
@@ -286,6 +308,21 @@ export function registerIpc(): void {
   ipcMain.handle('music:trackDelete', (_e, id: number) => trackDelete(id))
   ipcMain.handle('music:duration', (_e, id: number, sec: number) => setTrackDuration(id, sec))
   ipcMain.handle('music:file', (_e, id: number) => readTrackFile(id))
+
+  // ---------- 音乐吧·触发音（260921 新功能开发区） ----------
+  ipcMain.handle('trigger:list', () => listTriggers())
+  ipcMain.handle('trigger:import', async (): Promise<TriggerImportSummary> => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择触发音（可多选）',
+      filters: [{ name: '音频', extensions: ['mp3', 'wav', 'ogg'] }],
+      properties: ['openFile', 'multiSelections']
+    })
+    if (r.canceled || r.filePaths.length === 0) return { imported: 0, skipped: 0, failed: 0 }
+    return importTriggers(r.filePaths)
+  })
+  ipcMain.handle('trigger:rename', (_e, id: number, name: string) => triggerRename(id, name))
+  ipcMain.handle('trigger:delete', (_e, id: number) => triggerDelete(id))
+  ipcMain.handle('trigger:file', (_e, id: number) => readTriggerFile(id))
 
   // ---------- 头像上传 / 背景素材库 ----------
   ipcMain.handle(
@@ -882,6 +919,11 @@ export function registerIpc(): void {
   })
   ipcMain.handle('wiki:deleteHighlight', (_e, id: number) => {
     getDb().prepare('DELETE FROM wiki_highlights WHERE id = ?').run(id)
+    return true
+  })
+  // 卡片内取消高光（优化建议区第48轮）：按词条+文本删记录（划词气泡「取消高光」入口）
+  ipcMain.handle('wiki:removeHighlight', (_e, entryId: number, text: string) => {
+    getDb().prepare('DELETE FROM wiki_highlights WHERE entry_id = ? AND text = ?').run(entryId, text)
     return true
   })
   ipcMain.handle('wiki:mcpStatus', () => ({ enabled: getEnabledMcps().length }))
@@ -1482,6 +1524,11 @@ export function registerIpc(): void {
   })
   ipcMain.handle('learn:deleteHighlight', (_e, id: number) => {
     getDb().prepare('DELETE FROM learn_highlights WHERE id = ?').run(id)
+    return true
+  })
+  // 卡片内取消高光（优化建议区第49轮，学习库同万象库补齐）：按节点+文本删记录
+  ipcMain.handle('learn:removeHighlight', (_e, nodeId: number, text: string) => {
+    getDb().prepare('DELETE FROM learn_highlights WHERE node_id = ? AND text = ?').run(nodeId, text)
     return true
   })
 
@@ -3379,6 +3426,109 @@ export function registerIpc(): void {
   ipcMain.handle('clipboard:writeText', (_e, text: string) => {
     clipboard.writeText(text)
     return true
+  })
+
+  // ---------- 超级工作台引擎（2.0 批次A，idea/超级工作台2.0/designs-specs-批次A §4） ----------
+  ipcMain.handle('agent:statusGet', () => getStatus())
+  ipcMain.handle('agent:configGet', () => {
+    const num = (key: string, d: number): number => {
+      const v = Number(getSetting(key))
+      return Number.isFinite(v) && v > 0 ? v : d
+    }
+    return {
+      enabled: getSetting(SettingsKeys.AgentEnabled) === '1',
+      cpuPause: num(SettingsKeys.AgentCpuPause, 80),
+      cpuResume: num(SettingsKeys.AgentCpuResume, 50),
+      budget: Math.max(0, Math.floor(Number(getSetting(SettingsKeys.AgentDailyBudget) ?? 0) || 0)),
+      privacyProfile: getSetting(SettingsKeys.AgentPrivacyProfile) === '1',
+      privacyLearn: getSetting(SettingsKeys.AgentPrivacyLearn) === '1',
+      embedding: getEmbeddingConfig()
+    }
+  })
+  // 键白名单：embedding_config 走 settings:set 通用通道（无副作用），其余引擎键在此收口
+  const AGENT_SETTING_KEYS: readonly string[] = [
+    SettingsKeys.AgentEnabled,
+    SettingsKeys.AgentCpuPause,
+    SettingsKeys.AgentCpuResume,
+    SettingsKeys.AgentDailyBudget,
+    SettingsKeys.AgentPrivacyProfile,
+    SettingsKeys.AgentPrivacyLearn
+  ]
+  ipcMain.handle('agent:configSet', (_e, key: string, value: string) => {
+    if (!AGENT_SETTING_KEYS.includes(key)) throw new Error('非法设置键')
+    setSetting(key, value)
+    if (key === SettingsKeys.AgentEnabled) applyEnabledSwitch(value === '1')
+    return true
+  })
+  ipcMain.handle('agent:domains', () => listDomains())
+  ipcMain.handle(
+    'agent:domainSave',
+    (_e, id: number | null, input: { name: string; track: 'deep' | 'science'; keywords: string[]; enabled: boolean }) =>
+      saveDomain(id, input)
+  )
+  ipcMain.handle('agent:domainDelete', (_e, id: number) => {
+    deleteDomain(id)
+    return true
+  })
+  ipcMain.handle('agent:tokensToday', () => agentTokensToday())
+  ipcMain.handle('embedding:test', () => testEmbedding())
+  ipcMain.handle('embedding:serve', async () => ({ ok: await ensureOllama() }))
+
+  // ---------- 超级工作台·深读线（2.0 批次B） ----------
+  ipcMain.handle('agent:discoverList', (_e, status?: 'discovered' | 'accepted' | 'rejected') =>
+    listDiscover(status)
+  )
+  ipcMain.handle('agent:discoverAccept', (_e, id: number) => acceptDiscover(id))
+  ipcMain.handle('agent:discoverReject', (_e, id: number) => {
+    rejectDiscover(id)
+    return true
+  })
+  ipcMain.handle('agent:papers', () => listPapers())
+  ipcMain.handle('agent:paperDetail', (_e, id: number) => {
+    const paper = getPaper(id)
+    if (!paper) throw new Error('NOT_FOUND')
+    return { paper, interpretations: listInterpretations(id), related: paperRelated(id) }
+  })
+  ipcMain.handle('agent:runCollect', (_e, domainId: number) =>
+    enqueue('collect_deep', { refId: domainId, trigger: 'manual' })
+  )
+  ipcMain.handle('agent:runInterpret', (_e, paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean) =>
+    runInterpret(paperId, kind, force ?? false)
+  )
+  ipcMain.handle('agent:importPaperPdf', async (_e, paperId: number) => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '选择论文 PDF（导入后自动抽取全文）',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      properties: ['openFile']
+    })
+    if (r.canceled || r.filePaths.length === 0) return false
+    await importManualPdf(paperId, r.filePaths[0])
+    return true
+  })
+  ipcMain.handle('agent:pendingCounts', () => ({ discovered: pendingDiscoverCount() }))
+  ipcMain.handle('agent:paperDelete', (_e, id: number) => {
+    deletePaper(id)
+    return true
+  })
+  ipcMain.handle('agent:discoverDelete', (_e, id: number) => {
+    deleteDiscover(id)
+    return true
+  })
+  ipcMain.handle('agent:runsList', (_e, limit?: number) => listRuns(limit ?? 100))
+  ipcMain.handle('agent:dayStats', () => dayStats())
+  ipcMain.handle('agent:askLiterature', (_e, paperId: number) => startLiteratureAsk(paperId))
+  ipcMain.handle('agent:coldStartFinish', (_e, runFirst: boolean) => {
+    setSetting(SettingsKeys.AgentEnabled, '1')
+    setSetting(SettingsKeys.AgentColdStartDone, '1')
+    applyEnabledSwitch(true)
+    let queued = 0
+    if (runFirst) {
+      for (const d of listDomains().filter((x) => x.track === 'deep' && x.enabled)) {
+        enqueue('collect_deep', { refId: d.id, trigger: 'manual' })
+        queued++
+      }
+    }
+    return { queued }
   })
 }
 

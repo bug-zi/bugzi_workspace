@@ -23,8 +23,8 @@ export interface ModuleNavDetail {
   payload?: Record<string, unknown>
 }
 
-// AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant）
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet'
+// AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant；2.0 批次C 增 literature）
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
 
 // 草稿本频道（优化建议区第21轮，DB v14：drafts.channel）：固定两频道起步，加频道零迁移
 export type DraftChannel = 'general' | 'turtle'
@@ -79,6 +79,8 @@ export const SettingsKeys = {
   // 白噪音（260908 立项）：当前混音状态 + 自定义混音列表（均 JSON 字符串；重启记参数默认暂停）
   NoiseState: 'noise_state',
   NoiseCustomMixes: 'noise_custom_mixes',
+  // 白噪音隐藏名单（260921 冒烟反馈轮）：JSON { scenes, builtinTriggers, factoryMixes }——删除场景/内置触发音/出厂混音行
+  NoiseHidden: 'noise_hidden',
   // 白噪音播放队列（260911 播放队列轮）：JSON { items, mode }；运行态不持久化，重启默认暂停从头开始
   NoisePlayQueue: 'noise_play_queue',
   // 画布（新功能开发区 260909）：右缘第三面板宽度 + 当前激活画布
@@ -109,7 +111,24 @@ export const SettingsKeys = {
   LaunchOnBoot: 'launch_on_boot',
   CloseAction: 'close_action',
   // 音乐吧（260915 新功能开发区）：轻音乐播放状态 JSON { trackId, loopMode, volume }（重启记参数默认暂停）
-  MusicState: 'music_state'
+  MusicState: 'music_state',
+  // ---------- 超级工作台 2.0（批次 A，idea/超级工作台2.0/designs-specs-批次A §2） ----------
+  /** 引擎总开关（'1'/'0'，默认关；冷启动向导批次 C 完成后置 '1'） */
+  AgentEnabled: 'agent_enabled',
+  /** 冷启动向导已完成标记（'1'；空 = 未走向导） */
+  AgentColdStartDone: 'agent_cold_start_done',
+  /** 负载卫兵：CPU 暂停阈值 %（默认 80）与恢复阈值 %（迟滞，默认 50） */
+  AgentCpuPause: 'agent_cpu_pause',
+  AgentCpuResume: 'agent_cpu_resume',
+  /** 每日 token 软上限（'0'=不限）；超限暂停搜集类任务，按需任务不受限 */
+  AgentDailyBudget: 'agent_daily_budget',
+  /** 隐私白名单（默认全关）：后台任务可参考画像/学习记录 */
+  AgentPrivacyProfile: 'agent_privacy_profile',
+  AgentPrivacyLearn: 'agent_privacy_learn',
+  /** Embedding 配置 JSON EmbeddingConfig（Ollama bge-m3） */
+  EmbeddingConfig: 'embedding_config',
+  /** 「文献·追问」场景激活会话（批次 C 消费，键先行占位） */
+  AiActiveSessionLiterature: 'ai_active_session_literature'
 } as const
 
 // 内置终端（260912）：shell 三选 + 默认工作目录 + 面板高度（settings JSON 键 terminal）
@@ -158,6 +177,23 @@ export interface MusicListResult {
   playlists: MusicPlaylistRow[]
   tracks: MusicTrackRow[]
 }
+
+// 触发音（260921 新功能开发区；DB v49 trigger_sounds）
+export interface TriggerSoundRow {
+  id: number
+  name: string
+  /** 相对 userData 的路径 triggers/<id>.<ext> */
+  file_path: string
+  created_at: string
+}
+
+/** trigger:import 返回汇总 */
+export interface TriggerImportSummary {
+  imported: number
+  skipped: number
+  failed: number
+}
+
 /** 从 settings 原始 JSON 解析终端配置（坏数据/缺字段逐项回落默认） */
 export function parseTerminalSettings(raw: string | null | undefined): TerminalSettings {
   const d = TERMINAL_DEFAULTS
@@ -254,6 +290,10 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'wenbi:copilot': '文笔坊·协笔',
   'feed:summary': '信息源·总结',
   'mcp:research': 'MCP·配置研究',
+  'agent:collect': '工作台·海选',
+  'agent:digest': '工作台·导读卡',
+  'agent:lecture': '工作台·精讲',
+  'agent:translate': '工作台·精译',
   other: '其他'
 }
 
@@ -1076,4 +1116,150 @@ export interface WhoamiGetResult {
   today: WhoamiQuestionView[]
   /** 往日已答但候选未处理完的（保留到处理完才消失） */
   pending: WhoamiQuestionView[]
+}
+
+// ===== 超级工作台 2.0（idea/超级工作台2.0/designs-specs-批次A §2；DB v48 七表）=====
+
+/** 领域两档深度：deep=职业发展（深读线论文）/ science=兴趣拓展（科普线文章，二期管道） */
+export type AgentTrack = 'deep' | 'science'
+
+/** 引擎相位：idle=待命 working=任务进行中 paused=负载暂停（呼吸灯/任务中心共用） */
+export type AgentPhase = 'idle' | 'working' | 'paused'
+
+/** 领域配置（agent_domains 表；keywords 为 JSON 列解析后的数组） */
+export interface AgentDomainRow {
+  id: number
+  name: string
+  track: AgentTrack
+  keywords: string[]
+  enabled: boolean
+  last_scan_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 发现箱条目（discover_items 表）：AI 海选元信息，人工终选前不进正式区 */
+export interface DiscoverItemRow {
+  id: number
+  source_type: 'paper' | 'article'
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（渠道原始值精确到日；NULL 回落 year 展示） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: string
+  length_est: string
+  url: string
+  /** 渠道标识：'arxiv' / 'mcp:{配置名}' */
+  source: string
+  /** AI 一句话推荐理由 */
+  reason: string
+  status: 'discovered' | 'accepted' | 'rejected'
+  domain_id: number | null
+  created_at: string
+}
+
+/** 正式文献（papers 表）：终选转正后入库 */
+export interface PaperRow {
+  id: number
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（同 discover_items；NULL 回落 year） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: string
+  url: string
+  source: string
+  /** ready=全文缓存可用 meta_only=仅元信息（抓取失败，可手动传 PDF 兜底） */
+  status: 'ready' | 'meta_only'
+  /** userData 相对路径（.txt 全文缓存或原始 .pdf） */
+  fulltext_path: string | null
+  /** 导读卡 md 路径 */
+  digest_md: string | null
+  /** 精译术语表 JSON */
+  glossary: string | null
+  discovery_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+/** 解读产物登记（interpretations 表）：导读卡/精讲/精译/书籍解读的台账 */
+export interface InterpretationRow {
+  id: number
+  owner_type: 'paper' | 'science_article' | 'book'
+  owner_id: number
+  kind: 'digest' | 'lecture' | 'translation' | 'book_digest'
+  status: 'running' | 'done' | 'failed'
+  md_path: string | null
+  tokens_used: number
+  created_at: string
+  updated_at: string
+}
+
+/** 任务台账行（task_runs 表）：负载卫兵的 load_pause/load_resume 也记于此 */
+export interface TaskRunRow {
+  id: number
+  task_type: string
+  trigger: 'scheduled' | 'manual' | 'auto'
+  status: 'running' | 'done' | 'failed' | 'skipped'
+  ref_id: number | null
+  started_at: string
+  finished_at: string | null
+  tokens_used: number
+  error: string | null
+}
+
+/** 引擎状态快照（agent:statusGet 返回 / agent:status 推送载荷） */
+export interface AgentStatusSnapshot {
+  phase: AgentPhase
+  /** paused 时的原因文案 */
+  pauseReason: string | null
+  /** 最近一次采样 CPU 占用 %（未出首帧为 0） */
+  cpu: number
+  memFreeBytes: number
+  memTotalBytes: number
+  /** 今日 agent 场景 token 消耗 */
+  budgetUsedToday: number
+  /** 在跑任务类型列表 */
+  runningTypes: string[]
+  /** 最近一次队列事件（enqueued=入队 done/failed/skipped=终态；渲染层增量刷新依据） */
+  lastEvent: { type: string; status: string } | null
+}
+
+/** agent:dayStats 返回体（任务中心/总导览聚合块） */
+export interface AgentDayStats {
+  enabled: boolean
+  phase: AgentPhase
+  pauseReason: string | null
+  runningTypes: string[]
+  pendingDiscover: number
+  budgetToday: number
+  /** 按任务类型的当日/昨日 done 计数 */
+  today: Record<string, number>
+  yesterday: Record<string, number>
+  generatedAt: string
+}
+
+/** Embedding 配置（settings embedding_config JSON；读时逐字段兜底合并） */
+export interface EmbeddingConfig {
+  enabled: boolean
+  baseUrl: string
+  model: string
+  /** ollama.exe 路径（「一键拉起」spawn serve 用） */
+  ollamaPath: string
+}
+
+/** agent:configGet 返回体 */
+export interface AgentConfigView {
+  enabled: boolean
+  cpuPause: number
+  cpuResume: number
+  budget: number
+  privacyProfile: boolean
+  privacyLearn: boolean
+  embedding: EmbeddingConfig
 }

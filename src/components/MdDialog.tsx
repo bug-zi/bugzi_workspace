@@ -26,6 +26,8 @@ export interface MdDialogProps {
   /** 划词能力（万象卡片高光+问AI；问答弹窗仅问AI——无词条载体） */
   selectionActions?: {
     onHighlight?: (text: string) => void
+    /** 选区落在既有 <mark> 高光内时出「取消高光」（text 为整段标记文本；不传则该场景仍出「高光」） */
+    onUnhighlight?: (text: string) => void
     onAskAi: (text: string) => void
   }
   /** 头部标题可编辑（灵感泉：标题改后列表同步） */
@@ -225,9 +227,15 @@ export default function MdDialog(props: MdDialogProps) {
         })
         return b
       }
-      const { onHighlight } = selectionActions
+      // 选区整体落在既有高光 <mark> 内 → 出「取消高光」（整段标记文本，局部选中同段整体取消），
+      // 不再出「高光」（高光内再划高光会在 md 中产生嵌套 ==标记== 的脏写）
+      const anc = range.commonAncestorContainer
+      const ancEl = anc.nodeType === Node.TEXT_NODE ? anc.parentElement : (anc as Element)
+      const markEl = ancEl?.closest('mark') ?? null
+      const { onHighlight, onUnhighlight } = selectionActions
       const btns = [mkBtn('问 AI', () => selectionActions.onAskAi(text))]
-      if (onHighlight) btns.unshift(mkBtn('高光', () => onHighlight(text)))
+      if (markEl && onUnhighlight) btns.unshift(mkBtn('取消高光', () => onUnhighlight(markEl.textContent ?? '')))
+      else if (onHighlight) btns.unshift(mkBtn('高光', () => onHighlight(text)))
       bubble.append(...btns)
       document.body.appendChild(bubble)
       const bw = 150

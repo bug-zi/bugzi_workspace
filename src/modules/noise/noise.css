@@ -290,3 +290,47 @@
   accent-color: var(--color-primary);
   cursor: pointer;
 }
+
+/* ===== 触发音与声像（260921）===== */
+.noise-fader .noise-fader-pan {
+  width: 46px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.noise-trigger-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.noise-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.noise-trigger-row:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.noise-trigger-row .t-name {
+  flex: 0 0 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.noise-trigger-row input[type='range'] {
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.noise-trigger-row .t-vol {
+  width: 92px;
+}
+.noise-trigger-row .t-pan {
+  width: 76px;
+}
+.noise-mix-star {
+  color: var(--color-text-secondary);
+}
+.noise-mix-star.active {
+  color: var(--color-primary);
+}

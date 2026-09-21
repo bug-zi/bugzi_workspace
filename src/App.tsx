@@ -21,6 +21,9 @@ import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
 import NoisePage from './modules/noise/NoisePage'
+import AgentCenterPage from './modules/agent/AgentCenterPage'
+import AgentColdStartGuide from './modules/agent/AgentColdStartGuide'
+import AgentBreathLight from './components/AgentBreathLight'
 import LlmActivity from './components/LlmActivity'
 import TerminalPanel from './components/terminal/TerminalPanel'
 import { noiseEngine } from './services/noiseEngine'
@@ -57,8 +60,9 @@ const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
   zhijiji: 'zhijiji'
 }
 
-/** 主栏视图：十一模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1） */
-type MainView = ModuleId | 'noise'
+/** 主栏视图：十一模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1）
+ *  + 任务中心页（2.0 批次C，呼吸灯点击进入，同临时视图先例） */
+type MainView = ModuleId | 'noise' | 'agent'
 
 export default function App() {
   return (
@@ -201,6 +205,22 @@ function Shell() {
     return () => window.removeEventListener(MODULE_NAVIGATE_EVENT, onNav)
   }, [activateModule])
 
+  // 任务中心直达（2.0 批次C：呼吸灯/总导览聚合块；'agent' 非 ModuleId，走独立事件不动公共类型）
+  useEffect(() => {
+    const onOpenAgent = (): void => activateModule('agent')
+    window.addEventListener('bugzi:open-agent-center', onOpenAgent)
+    return () => window.removeEventListener('bugzi:open-agent-center', onOpenAgent)
+  }, [activateModule])
+
+  // 冷启动向导（2.0 批次C）：升级用户首启弹一次（首装走 WelcomeGuide 不叠加）；完成/跳过后不再弹
+  const [coldStartOpen, setColdStartOpen] = useState(false)
+  useEffect(() => {
+    if (firstLaunch) return
+    void window.api.settings.get(SettingsKeys.AgentColdStartDone).then((v) => {
+      if (!v) setColdStartOpen(true)
+    })
+  }, [firstLaunch])
+
   // 模块请求展开 AI 边栏（频道制：按当前模块映射频道；opts.channel 显式覆盖——万象库辩真板块直连核查频道；
   // opts.auto 时切频道后自动发送）
   const openAiWith = useCallback(
@@ -210,7 +230,9 @@ function Shell() {
       setAiPending({
         text: prefill ?? '',
         channel:
-          opts?.channel ?? (module !== 'noise' ? CHANNEL_BY_MODULE[module] : undefined) ?? 'assistant',
+          opts?.channel ??
+          (module !== 'noise' && module !== 'agent' ? CHANNEL_BY_MODULE[module] : undefined) ??
+          'assistant',
         auto: opts?.auto ?? false
       })
     },
@@ -240,6 +262,10 @@ function Shell() {
         <nav className="sidebar">
           {MODULES.map((m) => (
             <Fragment key={m.id}>
+              {/* 超级工作台呼吸灯（2.0 批次C）：列于记账本与音乐吧之间，点击进任务中心 */}
+              {m.id === 'recycle' && (
+                <AgentBreathLight active={module === 'agent'} onOpen={() => activateModule('agent')} />
+              )}
               {/* 音乐吧控件列于记账本与回收站之间（260908 进列表；260915 更名音乐吧） */}
               {m.id === 'recycle' && (
                 <button
@@ -301,7 +327,9 @@ function Shell() {
                 <WenbiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
               {m.id === 'zangyue' && <ZangyueModule />}
-              {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
+              {m.id === 'feed' && (
+                <FeedModule onNavigateToProfile={() => activateModule('profile')} onOpenAi={openAiWith} />
+              )}
               {m.id === 'ledger' && <LedgerModule />}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule />}
@@ -309,6 +337,8 @@ function Shell() {
           ))}
           {/* 白噪音混音器页（不 keep-alive：引擎在组件外，页面卸载播放不断；specs §5.1） */}
           {module === 'noise' && <NoisePage />}
+          {/* 任务中心页（2.0 批次C：同临时视图先例，不 keep-alive） */}
+          {module === 'agent' && <AgentCenterPage />}
         </main>
 
         {/* 右侧边栏（右缘四面板互斥：debugzi 常驻挂载保持生成态，草稿本/资源管理器/画布按需挂载）；
@@ -393,6 +423,7 @@ function Shell() {
 
       {/* 首次启动引导（个人中心 specs §4） */}
       <WelcomeGuide open={firstLaunch} onDone={setFirstLaunchDone} onGoProfile={() => activateModule('profile')} />
+      {coldStartOpen && <AgentColdStartGuide onDone={() => setColdStartOpen(false)} />}
     </>
   )
 }

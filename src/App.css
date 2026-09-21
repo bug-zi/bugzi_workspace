@@ -1920,3 +1920,38 @@
   background: currentColor;
   transition: width 0.3s;
 }
+
+/* ---------- 超级工作台呼吸灯（2.0 批次C）：左栏底部引擎状态 ---------- */
+.agent-breath .material-symbols-outlined {
+  transition: opacity 0.4s ease, text-shadow 0.4s ease;
+}
+
+.agent-breath-working .material-symbols-outlined {
+  color: var(--color-primary);
+  animation: agent-breath-pulse 2.4s ease-in-out infinite;
+}
+
+.agent-breath-paused {
+  opacity: 0.55;
+}
+
+.agent-breath-paused .material-symbols-outlined {
+  color: var(--color-text-secondary);
+}
+
+.agent-breath-idle .material-symbols-outlined {
+  color: var(--color-primary);
+  opacity: 0.8;
+}
+
+@keyframes agent-breath-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 3px var(--color-primary-soft);
+  }
+  50% {
+    opacity: 0.5;
+    text-shadow: 0 0 12px var(--color-primary);
+  }
+}

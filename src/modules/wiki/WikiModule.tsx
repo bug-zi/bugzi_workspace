@@ -243,6 +243,24 @@ export default function WikiModule(props: WikiModuleProps) {
     [cardEntry, refreshCard, loadHighlights, toast]
   )
 
+  /** 卡片内取消高光（优化建议区第48轮）：md 解除 ==标记== + 删笔记本记录，卡片重载即时见 */
+  const onUnhighlight = useCallback(
+    async (text: string) => {
+      if (!cardEntry) return
+      const md = await window.api.md.read(cardEntry.md_path)
+      const wrapped = `==${text}==`
+      if (md.includes(wrapped)) {
+        await window.api.md.write(cardEntry.md_path, md.replaceAll(wrapped, text))
+      }
+      await window.api.wiki.removeHighlight(cardEntry.id, text)
+      setMdVersion((v) => v + 1)
+      await refreshCard()
+      await loadHighlights()
+      toast('已取消高光')
+    },
+    [cardEntry, refreshCard, loadHighlights, toast]
+  )
+
   const onAskAi = useCallback(
     (text: string) => {
       props.onOpenAi(`关于词条「${cardEntry?.term ?? ''}」：「${text}」\n\n请帮我解释。`)
@@ -756,7 +774,7 @@ export default function WikiModule(props: WikiModuleProps) {
       )}
 
       <MdDialog
-        key={cardEntry?.id ?? 'none'}
+        key={cardEntry != null ? `${cardEntry.id}-${mdVersion}` : 'none'}
         open={cardEntry != null}
         title={cardEntry?.term ?? ''}
         titleTag={
@@ -774,7 +792,11 @@ export default function WikiModule(props: WikiModuleProps) {
           setCardEntry(null)
         }}
         onChanged={() => void refreshCard()}
-        selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi }}
+        selectionActions={{
+          onHighlight: (t) => void onHighlight(t),
+          onUnhighlight: (t) => void onUnhighlight(t),
+          onAskAi
+        }}
         learnBar={
           cardEntry
             ? {

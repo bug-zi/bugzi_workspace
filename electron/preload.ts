@@ -250,6 +250,9 @@ const api = {
     addHighlight: (entryId: number, text: string): Promise<boolean> =>
       ipcRenderer.invoke('wiki:addHighlight', entryId, text),
     deleteHighlight: (id: number): Promise<boolean> => ipcRenderer.invoke('wiki:deleteHighlight', id),
+    /** 卡片内取消高光（优化建议区第48轮）：按词条+文本删高光记录（划词气泡「取消高光」入口） */
+    removeHighlight: (entryId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('wiki:removeHighlight', entryId, text),
     discardEntry: (id: number): Promise<boolean> => ipcRenderer.invoke('item:discard', 'wiki_entries', id),
     /** 待学习区（260910）：待学习卡片列表（联表板块名） */
     learnEntries: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:learnEntries'),
@@ -806,6 +809,9 @@ const api = {
       ipcRenderer.invoke('learn:addHighlight', nodeId, text),
     deleteHighlight: (id: number): Promise<boolean> =>
       ipcRenderer.invoke('learn:deleteHighlight', id),
+    /** 卡片内取消高光（优化建议区第49轮，学习库同万象库补齐）：按节点+文本删高光记录 */
+    removeHighlight: (nodeId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('learn:removeHighlight', nodeId, text),
     /** 今日小测卷（无则 null；answering 态隐去答案与解析） */
     quizGet: (): Promise<import('../src/shared/types').LearnQuizView | null> =>
       ipcRenderer.invoke('learn:quizGet'),
@@ -856,6 +862,14 @@ const api = {
     trackDelete: (id: number): Promise<void> => ipcRenderer.invoke('music:trackDelete', id),
     duration: (id: number, sec: number): Promise<void> => ipcRenderer.invoke('music:duration', id, sec),
     file: (id: number): Promise<Uint8Array> => ipcRenderer.invoke('music:file', id)
+  },
+  trigger: {
+    list: (): Promise<import('../src/shared/types').TriggerSoundRow[]> => ipcRenderer.invoke('trigger:list'),
+    importDialog: (): Promise<import('../src/shared/types').TriggerImportSummary> =>
+      ipcRenderer.invoke('trigger:import'),
+    rename: (id: number, name: string): Promise<void> => ipcRenderer.invoke('trigger:rename', id, name),
+    delete: (id: number): Promise<void> => ipcRenderer.invoke('trigger:delete', id),
+    file: (id: number): Promise<Uint8Array> => ipcRenderer.invoke('trigger:file', id)
   },
   ledger: {
     /** 账户列表（含实时余额） */
@@ -1024,6 +1038,74 @@ const api = {
     /** 候选逐条处理：accept=true 加入画像（source=ai）/ false 忽略 */
     resolve: (id: number, index: number, accept: boolean): Promise<import('../src/shared/types').WhoamiQuestionView> =>
       ipcRenderer.invoke('whoami:resolve', id, index, accept)
+  },
+  agent: {
+    /** 引擎状态快照（呼吸灯/任务中心用） */
+    statusGet: (): Promise<import('../src/shared/types').AgentStatusSnapshot> =>
+      ipcRenderer.invoke('agent:statusGet'),
+    configGet: (): Promise<import('../src/shared/types').AgentConfigView> =>
+      ipcRenderer.invoke('agent:configGet'),
+    /** 白名单键设置；agent_enabled 变更即时起/停引擎 */
+    configSet: (key: string, value: string): Promise<boolean> =>
+      ipcRenderer.invoke('agent:configSet', key, value),
+    domains: (): Promise<import('../src/shared/types').AgentDomainRow[]> =>
+      ipcRenderer.invoke('agent:domains'),
+    domainSave: (
+      id: number | null,
+      input: { name: string; track: import('../src/shared/types').AgentTrack; keywords: string[]; enabled: boolean }
+    ): Promise<number> => ipcRenderer.invoke('agent:domainSave', id, input),
+    domainDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:domainDelete', id),
+    tokensToday: (): Promise<number> => ipcRenderer.invoke('agent:tokensToday'),
+    /** 引擎状态任何变化推送，返回取消订阅 */
+    onAgentStatus: (cb: (s: import('../src/shared/types').AgentStatusSnapshot) => void): (() => void) => {
+      const listener = (_e: unknown, s: import('../src/shared/types').AgentStatusSnapshot): void => {
+        cb(s)
+      }
+      ipcRenderer.on('agent:status', listener)
+      return () => ipcRenderer.removeListener('agent:status', listener)
+    },
+    // ---------- 深读线（批次B） ----------
+    discoverList: (
+      status?: 'discovered' | 'accepted' | 'rejected'
+    ): Promise<import('../src/shared/types').DiscoverItemRow[]> =>
+      ipcRenderer.invoke('agent:discoverList', status),
+    discoverAccept: (id: number): Promise<{ paperId: number }> =>
+      ipcRenderer.invoke('agent:discoverAccept', id),
+    discoverReject: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:discoverReject', id),
+    papers: (): Promise<import('../src/shared/types').PaperRow[]> => ipcRenderer.invoke('agent:papers'),
+    paperDetail: (
+      id: number
+    ): Promise<{
+      paper: import('../src/shared/types').PaperRow
+      interpretations: import('../src/shared/types').InterpretationRow[]
+      related: { dst_type: string; dst_id: number; title: string; score: number }[]
+    }> => ipcRenderer.invoke('agent:paperDetail', id),
+    /** 手动海选：返回 runId（进展见任务中心） */
+    runCollect: (domainId: number): Promise<number> => ipcRenderer.invoke('agent:runCollect', domainId),
+    /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    runInterpret: (paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number> =>
+      ipcRenderer.invoke('agent:runInterpret', paperId, kind, force),
+    importPaperPdf: (paperId: number): Promise<boolean> => ipcRenderer.invoke('agent:importPaperPdf', paperId),
+    pendingCounts: (): Promise<{ discovered: number }> => ipcRenderer.invoke('agent:pendingCounts'),
+    paperDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:paperDelete', id),
+    discoverDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:discoverDelete', id),
+    // ---------- 感知层（批次C） ----------
+    runsList: (limit?: number): Promise<import('../src/shared/types').TaskRunRow[]> =>
+      ipcRenderer.invoke('agent:runsList', limit),
+    dayStats: (): Promise<import('../src/shared/types').AgentDayStats> =>
+      ipcRenderer.invoke('agent:dayStats'),
+    /** 文献追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
+    askLiterature: (paperId: number): Promise<{ sessionId: number }> =>
+      ipcRenderer.invoke('agent:askLiterature', paperId),
+    /** 冷启动向导完成：开引擎 + 置标记；runFirst 时对全部启用 deep 领域跑一轮海选 */
+    coldStartFinish: (runFirst: boolean): Promise<{ queued: number }> =>
+      ipcRenderer.invoke('agent:coldStartFinish', runFirst)
+  },
+  embedding: {
+    /** 测试连接：向量化一个词返回维度；失败抛 message */
+    test: (): Promise<{ dim: number }> => ipcRenderer.invoke('embedding:test'),
+    /** 一键拉起 Ollama（探测 + spawn serve + 轮询就绪） */
+    serve: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('embedding:serve')
   }
 }
 

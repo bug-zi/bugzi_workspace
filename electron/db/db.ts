@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'canvas', 'books', 'covers', 'bg']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -1122,6 +1122,125 @@ function migrate(): void {
     )`)
     d.exec('CREATE INDEX IF NOT EXISTS idx_whoami_date ON whoami_questions(date)')
     d.exec('PRAGMA user_version = 47')
+  }
+
+  if (version < 48) {
+    // v48：超级工作台 2.0 批次A（idea/超级工作台2.0/designs-specs-批次A §1）——引擎底座七表，
+    // 纯新增零迁移。science_articles 留二期新版本号；不依赖外键级联（domain_id 断链服务层显式处理）。
+    d.exec(`CREATE TABLE agent_domains (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      track TEXT NOT NULL CHECK (track IN ('deep','science')),
+      keywords TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_scan_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE discover_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL CHECK (source_type IN ('paper','article')),
+      title TEXT NOT NULL,
+      authors TEXT NOT NULL DEFAULT '[]',
+      year INTEGER,
+      summary TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      language TEXT NOT NULL DEFAULT 'en',
+      length_est TEXT,
+      url TEXT NOT NULL,
+      source TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'discovered' CHECK (status IN ('discovered','accepted','rejected')),
+      url_hash TEXT NOT NULL UNIQUE,
+      domain_id INTEGER,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE papers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      authors TEXT NOT NULL DEFAULT '[]',
+      year INTEGER,
+      summary TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      language TEXT NOT NULL DEFAULT 'en',
+      url TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','meta_only')),
+      fulltext_path TEXT,
+      digest_md TEXT,
+      glossary TEXT,
+      discovery_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE interpretations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('paper','science_article','book')),
+      owner_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('digest','lecture','translation','book_digest')),
+      status TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('running','done','failed')),
+      md_path TEXT,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE task_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_type TEXT NOT NULL,
+      trigger TEXT NOT NULL CHECK (trigger IN ('scheduled','manual','auto')),
+      status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','done','failed','skipped')),
+      ref_id INTEGER,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE knowledge_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      src_type TEXT NOT NULL,
+      dst_type TEXT NOT NULL,
+      src_id INTEGER NOT NULL,
+      dst_id INTEGER NOT NULL,
+      origin TEXT NOT NULL CHECK (origin IN ('manual','similarity')),
+      score REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      UNIQUE (src_type, src_id, dst_type, dst_id, origin)
+    )`)
+    d.exec(`CREATE TABLE embeddings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      vector BLOB NOT NULL,
+      model TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (entity_type, entity_id)
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_discover_status ON discover_items(status)')
+    d.exec('CREATE INDEX IF NOT EXISTS idx_task_runs_started ON task_runs(started_at)')
+    d.exec('CREATE INDEX IF NOT EXISTS idx_interpret_owner ON interpretations(owner_type, owner_id)')
+    d.exec('PRAGMA user_version = 48')
+  }
+
+  if (version < 49) {
+    // v49：触发音（2026-09-21-触发音与白噪音体验升级-design.md §三）——导入触发音登记表。
+    // 文件复制进 userData/triggers/<id>.<ext>（DB 存相对路径，同轻音乐曲目模式）；
+    // name UNIQUE 供导入/改名重名拒绝；删除彻底删连文件，不入回收站。v48 已被超级工作台 2.0 批次A 占用顺延。
+    d.exec(`CREATE TABLE trigger_sounds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      file_path TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('PRAGMA user_version = 49')
+  }
+
+  if (version < 50) {
+    // v50：超级工作台 2.0 批次B 反馈（260921 验证）——发现箱/文献补发布日期精确到日
+    // （'YYYY-MM-DD'，arXiv published 原样映射不走 LLM 转述）；存量行 date 为 NULL 回落 year 展示。
+    d.exec('ALTER TABLE discover_items ADD COLUMN date TEXT')
+    d.exec('ALTER TABLE papers ADD COLUMN date TEXT')
+    d.exec('PRAGMA user_version = 50')
   }
 }
 

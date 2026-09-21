@@ -411,6 +411,25 @@ export default function LearnModule() {
     [card, loadHighlights, toast]
   )
 
+  /** 卡片内取消高光（优化建议区第49轮，学习库同万象库补齐）：md 解除 ==标记== + 删高光笔记记录 */
+  const onUnhighlight = useCallback(
+    async (text: string) => {
+      if (!card) return
+      const p = `md/learn/${card.id}.md`
+      const md = await window.api.md.read(p)
+      const wrapped = `==${text}==`
+      if (md.includes(wrapped)) {
+        await window.api.md.write(p, md.replaceAll(wrapped, text))
+      }
+      await window.api.learn.removeHighlight(card.id, text)
+      setMdVersion((v) => v + 1)
+      setCard(await window.api.learn.getCard(crypto.randomUUID(), card.id))
+      await loadHighlights()
+      toast('已取消高光')
+    },
+    [card, loadHighlights, toast]
+  )
+
   // 问 AI 拓展坞（优化建议区第42轮）：弹窗右侧内嵌「学习·问答」频道会话视图（与右栏同频道同数据），
   // 布局偏好持久化；划词问 AI 直发坞内，交互不出弹窗
   const [askPrompt, setAskPrompt] = useState<{ text: string; n: number } | null>(null)
@@ -973,7 +992,11 @@ export default function LearnModule() {
         filePath={card ? `md/learn/${card.id}.md` : ''}
         onClose={() => setCard(null)}
         onChanged={() => setMdVersion((v) => v + 1)}
-        selectionActions={{ onHighlight: (t) => void onHighlight(t), onAskAi: (t) => void onAskAi(t) }}
+        selectionActions={{
+          onHighlight: (t) => void onHighlight(t),
+          onUnhighlight: (t) => void onUnhighlight(t),
+          onAskAi: (t) => void onAskAi(t)
+        }}
         studyBar={
           card
             ? {
