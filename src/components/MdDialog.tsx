@@ -84,10 +84,12 @@ export interface MdDialogProps {
   /** 右侧内嵌栏（共享组件 ChannelChatPanel：致知己追问栏第13轮 / 学习库问 AI 拓展坞第42轮）：
    *  传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
   sidePanel?: ReactNode
+  /** 拦截正文 wiki:// 链接（科普线批次D：[术语](wiki://术语) → 词条跳转/建词条；不传则保持外链行为，零波及） */
+  onWikiLink?: (term: string) => void
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel, footerBar } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel, footerBar, onWikiLink } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -143,17 +145,28 @@ export default function MdDialog(props: MdDialogProps) {
   useEffect(() => {
     if (!open || loading || !bodyRef.current) return
     bodyRef.current.innerHTML = renderMd(content)
-    // 链接拦截：外链走系统浏览器
+    // 链接拦截：外链走系统浏览器；wiki:// 走词条跳转回调（科普线批次D，prop 缺省零变化）
     bodyRef.current.querySelectorAll('a').forEach((a) => {
       const href = a.getAttribute('href') ?? ''
-      if (/^https?:/.test(href)) {
+      if (href.startsWith('wiki://')) {
+        a.addEventListener('click', (e) => {
+          e.preventDefault()
+          let term = href.slice('wiki://'.length)
+          try {
+            term = decodeURIComponent(term)
+          } catch {
+            /* 已是明文 */
+          }
+          onWikiLink?.(term)
+        })
+      } else if (/^https?:/.test(href)) {
         a.addEventListener('click', (e) => {
           e.preventDefault()
           void window.api.shell.openExternal(href)
         })
       }
     })
-  }, [content, open, editing, loading])
+  }, [content, open, editing, loading, onWikiLink])
 
   const saveAndExit = useCallback(async () => {
     if (draft !== content) {

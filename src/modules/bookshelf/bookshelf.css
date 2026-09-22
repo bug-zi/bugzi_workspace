@@ -658,3 +658,7 @@
 .bk-menu-move {
   right: 30px;
 }
+/* AI 解读钮（批次E）：第三颗书卡悬浮钮 */
+.bk-menu-digest {
+  right: 56px;
+}

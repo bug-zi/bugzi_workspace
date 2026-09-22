@@ -27,7 +27,15 @@ import {
   recordQuizAnswer
 } from './services/wikiQuizStock'
 import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
-import { whoamiGet, whoamiGenerateIpc, whoamiAnswer, whoamiExtract, whoamiResolve } from './services/whoami'
+import {
+  whoamiGet,
+  whoamiGenerateIpc,
+  whoamiAnswer,
+  whoamiExtract,
+  whoamiResolve,
+  whoamiSuggestionUpdate,
+  whoamiAskOne
+} from './services/whoami'
 import { getStatus, applyEnabledSwitch } from './services/agent/engine'
 import { listDomains, saveDomain, deleteDomain } from './services/agent/domains'
 import { agentTokensToday } from './services/agent/budget'
@@ -40,12 +48,28 @@ import {
   getPaper,
   listInterpretations,
   importManualPdf,
-  paperRelated,
   pendingDiscoverCount,
   deletePaper,
   deleteDiscover
 } from './services/agent/papers'
 import { runInterpret } from './services/agent/interpret'
+import { runScienceInterpret } from './services/agent/interpretScience'
+import { bookDigestStatus, runBookDigest } from './services/agent/bookDigest'
+import {
+  listScienceArticles,
+  getScienceArticle,
+  listScienceHighlights,
+  scienceRelated,
+  deleteScienceArticle,
+  retryScienceFetch,
+  addScienceHighlight,
+  removeScienceHighlight,
+  scienceLinkManual,
+  listLinks,
+  entitySearch,
+  addLink,
+  deleteLink
+} from './services/agent/science'
 import { enqueue } from './services/agent/queue'
 import { listRuns, dayStats } from './services/agent/center'
 import { startLiteratureAsk } from './services/agent/ask'
@@ -2958,6 +2982,10 @@ export function registerIpc(): void {
   ipcMain.handle('whoami:resolve', (_e, id: number, index: number, accept: boolean) =>
     whoamiResolve(id, index, accept)
   )
+  ipcMain.handle('whoami:suggestionUpdate', (_e, id: number, index: number, category: string, content: string) =>
+    whoamiSuggestionUpdate(id, index, category, content)
+  )
+  ipcMain.handle('whoami:askOne', () => whoamiAskOne())
 
   // ---------- 思维墙·练习场（design v2 备选提前落地）：随时刷题，不计入墙/连胜/月历 ----------
   // 会话级作答态暂存主进程内存（practiceBank）；题目本体生成即入题库 wall_bank（todo 态，
@@ -3487,11 +3515,18 @@ export function registerIpc(): void {
   ipcMain.handle('agent:paperDetail', (_e, id: number) => {
     const paper = getPaper(id)
     if (!paper) throw new Error('NOT_FOUND')
-    return { paper, interpretations: listInterpretations(id), related: paperRelated(id) }
+    // 相关内容统一走 listLinks（批次F：双向合并 + link_id/origin，peer 标题已解析）
+    return { paper, interpretations: listInterpretations(id), related: listLinks('paper', id) }
   })
-  ipcMain.handle('agent:runCollect', (_e, domainId: number) =>
-    enqueue('collect_deep', { refId: domainId, trigger: 'manual' })
-  )
+  ipcMain.handle('agent:runCollect', (_e, domainId: number) => {
+    // 按领域 track 路由（批次D）：deep→collect_deep、science→collect_science
+    const d = listDomains().find((x) => x.id === domainId)
+    if (!d) throw new Error('NOT_FOUND')
+    return enqueue(d.track === 'science' ? 'collect_science' : 'collect_deep', {
+      refId: domainId,
+      trigger: 'manual'
+    })
+  })
   ipcMain.handle('agent:runInterpret', (_e, paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean) =>
     runInterpret(paperId, kind, force ?? false)
   )
@@ -3516,7 +3551,9 @@ export function registerIpc(): void {
   })
   ipcMain.handle('agent:runsList', (_e, limit?: number) => listRuns(limit ?? 100))
   ipcMain.handle('agent:dayStats', () => dayStats())
-  ipcMain.handle('agent:askLiterature', (_e, paperId: number) => startLiteratureAsk(paperId))
+  ipcMain.handle('agent:askLiterature', (_e, type: 'paper' | 'science' | 'book', id: number) =>
+    startLiteratureAsk({ type, id })
+  )
   ipcMain.handle('agent:coldStartFinish', (_e, runFirst: boolean) => {
     setSetting(SettingsKeys.AgentEnabled, '1')
     setSetting(SettingsKeys.AgentColdStartDone, '1')
@@ -3530,6 +3567,61 @@ export function registerIpc(): void {
     }
     return { queued }
   })
+
+  // ---------- 超级工作台·科普线（2.0 批次D） ----------
+  ipcMain.handle('agent:scienceList', () => listScienceArticles())
+  ipcMain.handle('agent:scienceDetail', (_e, id: number) => {
+    const article = getScienceArticle(id)
+    if (!article) throw new Error('NOT_FOUND')
+    return {
+      article,
+      interpretations: getDb()
+        .prepare(
+          'SELECT * FROM interpretations WHERE owner_type = ? AND owner_id = ? ORDER BY id DESC'
+        )
+        .all('science_article', id),
+      highlights: listScienceHighlights(id),
+      related: scienceRelated(id)
+    }
+  })
+  ipcMain.handle('agent:scienceDelete', (_e, id: number) => {
+    deleteScienceArticle(id)
+    return true
+  })
+  ipcMain.handle('agent:scienceRetryFetch', (_e, id: number) => retryScienceFetch(id))
+  ipcMain.handle(
+    'agent:scienceInterpret',
+    (_e, id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean) =>
+      runScienceInterpret(id, kind, force ?? false)
+  )
+  ipcMain.handle('agent:scienceHighlightAdd', (_e, articleId: number, text: string) => {
+    addScienceHighlight(articleId, text)
+    return true
+  })
+  ipcMain.handle('agent:scienceHighlightRemove', (_e, articleId: number, text: string) => {
+    removeScienceHighlight(articleId, text)
+    return true
+  })
+  ipcMain.handle('agent:scienceLinkManual', (_e, articleId: number, term: string, entryId: number) => {
+    scienceLinkManual(articleId, term, entryId)
+    return true
+  })
+  ipcMain.handle('agent:linksList', (_e, srcType: string, srcId: number) => listLinks(srcType, srcId))
+  ipcMain.handle('agent:entitySearch', (_e, type: string, q: string) => entitySearch(type, q))
+  ipcMain.handle('agent:linkAdd', (_e, srcType: string, srcId: number, dstType: string, dstId: number) => {
+    addLink(srcType, srcId, dstType, dstId)
+    return true
+  })
+  ipcMain.handle('agent:linkDel', (_e, linkId: number) => {
+    deleteLink(linkId)
+    return true
+  })
+
+  // ---------- 超级工作台·书籍解读（2.0 批次E） ----------
+  ipcMain.handle('agent:bookDigestGet', (_e, bookId: number) => bookDigestStatus(bookId))
+  ipcMain.handle('agent:bookDigestRun', (_e, bookId: number, force?: boolean) =>
+    runBookDigest(bookId, force ?? false)
+  )
 }
 
 // ---------- 推理角辅助（turtle:* / wall:* 共用，specs §4） ----------

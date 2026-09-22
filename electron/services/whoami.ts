@@ -3,20 +3,16 @@
 // 历史行永不删：显示只取当日，历史供防重复提问。启动/午夜触发静默失败，LLM 未配置跳过不记日期。
 import { getDb, nowIso } from '../db/db'
 import { getSetting, setSetting } from '../db/settings'
-import { SettingsKeys } from '../../src/shared/types'
+import { PROFILE_CATEGORIES, SettingsKeys } from '../../src/shared/types'
 import type { WhoamiGetResult, WhoamiQuestionView } from '../../src/shared/types'
 import { chatCompletion } from '../ai/llm'
 import { isLlmConfigured } from '../ai/services'
 import { mdRead } from './files'
 
-/** 候选类别清单（与 PROFILE_SUGGEST 指令、个人档 datalist 同款十类） */
-const PROFILE_CATEGORIES = [
-  '基本档案', '性格特质', '擅长能力', '兴趣爱好', '生活方式', '社交出行',
-  '学习与技能', '职业规划', '价值观', '其他'
-]
-
 /** 单飞标志：启动/午夜/手动触发叠投时只跑一趟 */
 let generating = false
+/** 「来一问」单飞标志：连点只认第一下 */
+let askingOne = false
 
 // ---------- 行读写 helpers ----------
 
@@ -401,6 +397,32 @@ export async function whoamiGenerateIpc(): Promise<WhoamiGetResult> {
   return whoamiGet()
 }
 
+/** 「来一问」（260923 开发者指令）：点击实时生成一问追加今日——点击时刻现读广谱上下文（含 recentAsked 防重复），
+ *  零缓存零预生成；不动每日批次的幂等语义与 WhoamiDailyDate 标记 */
+export async function whoamiAskOne(): Promise<WhoamiQuestionView> {
+  if (askingOne) throw new Error('BUSY')
+  if (!isLlmConfigured()) throw new Error('LLM_NOT_CONFIGURED')
+  askingOne = true
+  try {
+    const res = await chatCompletion({
+      messages: [{ role: 'user', content: buildDailyPrompt(1) }],
+      temperature: 0.8,
+      scene: 'whoami:askOne'
+    })
+    const [q] = parseQuestions(res.content, 1)
+    if (!q) throw new Error('PARSE_EMPTY')
+    const now = nowIso()
+    const id = Number(
+      getDb()
+        .prepare('INSERT INTO whoami_questions (date, question, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run(todayLocal(), q, now, now).lastInsertRowid
+    )
+    return toView(getRow(id)!)
+  } finally {
+    askingOne = false
+  }
+}
+
 /** 逐条确认：accept=true 加入画像（source='ai'）/false 忽略；候选清空即 resolved=1 */
 export function whoamiResolve(id: number, index: number, accept: boolean): WhoamiQuestionView {
   const row = getRow(id)
@@ -419,5 +441,22 @@ export function whoamiResolve(id: number, index: number, accept: boolean): Whoam
   getDb()
     .prepare('UPDATE whoami_questions SET suggestions = ?, resolved = ?, updated_at = ? WHERE id = ?')
     .run(JSON.stringify(items), items.length === 0 ? 1 : 0, nowIso(), id)
+  return toView(getRow(id)!)
+}
+
+/** 就地编辑候选条目（优化建议区第51轮）：类别须在清单内、内容 trim 非空（≤120 字与提炼口径一致）；原位替换写回候选记录 */
+export function whoamiSuggestionUpdate(id: number, index: number, category: string, content: string): WhoamiQuestionView {
+  const row = getRow(id)
+  if (!row) throw new Error('NOT_FOUND')
+  const items = row.suggestions ? (JSON.parse(row.suggestions) as { category: string; content: string }[]) : []
+  if (index < 0 || index >= items.length) throw new Error('INDEX_OUT_OF_RANGE')
+  const cat = category.trim()
+  const text = content.trim().slice(0, 120)
+  if (!PROFILE_CATEGORIES.includes(cat)) throw new Error('BAD_CATEGORY')
+  if (!text) throw new Error('CONTENT_EMPTY')
+  items[index] = { category: cat, content: text }
+  getDb()
+    .prepare('UPDATE whoami_questions SET suggestions = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(items), nowIso(), id)
   return toView(getRow(id)!)
 }

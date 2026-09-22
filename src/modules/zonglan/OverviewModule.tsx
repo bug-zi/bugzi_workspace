@@ -3,12 +3,14 @@
 // 热力图卡（260916）+ 底部格言轮播。纯渲染层并行聚合既有 IPC（零 AI、逐块独立
 // catch；挑战/热力图走专属 challenge/overview 通道）；深链 = 派发 MODULE_NAVIGATE_EVENT，
 // App 集中切模块、目标模块 useModuleNavigate 切内部视图（260915 起单一导航路径）。
+// 双模式（260922）：随 prop 换块——公共=问候/我是谁/挑战/热力图；学习=今日学习/待学习区/
+// 超级工作台/信息源未读/格言轮播；生活=每日一题/续读/本月支出+十二问题。块内逻辑与加载照旧。
 import { useCallback, useEffect, useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
-import type { ModuleId, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
+import type { ModuleId, ModuleMode, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
 import type { AgentDayStats } from '../../renderer/api'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import HeatmapCard, { heatmapRange } from './HeatmapCard'
@@ -28,7 +30,7 @@ function nextMottoIdx(len: number, cur: number): number {
   return n
 }
 
-export default function OverviewModule() {
+export default function OverviewModule({ mode }: { mode: ModuleMode }) {
   const { settings } = useAppSettings()
 
   // ----- 各块状态（null = 加载失败 → 该块显示「--」/失败态，不拖垮整页） -----
@@ -249,82 +251,90 @@ export default function OverviewModule() {
         <span className="module-sub">{greetLine}</span>
       </div>
 
-      {/* 今日学习（整卡深链「今日学习」tab；260915 起显示每日要求状态行） */}
-      <button className="card zl-row" onClick={() => go('learn', 'today')} title="进入学习库·今日学习">
-        <span className="material-symbols-outlined">school</span>
-        <div className="zl-row-main">
-          <div className="zl-row-line">
-            <span className="zl-row-title">今日学习</span>
-            <span className="module-sub">
-              {learnReq
-                ? learnReq.done
-                  ? `今日要求已完成 · 连胜 ${learnReq.streak} 天`
-                  : `新学 ${learnReq.learned}/${learnReq.goal} · 小测${
-                      learnReq.quizStatus === 'graded'
-                        ? '已交卷'
-                        : learnReq.quizStatus === 'answering'
-                          ? '作答中'
-                          : '未出卷'
-                    } · 连胜 ${learnReq.streak} 天`
-                : '加载失败'}
-            </span>
+      {/* 今日学习（整卡深链「今日学习」tab；260915 起显示每日要求状态行）——学习模式块 */}
+      {mode === 'learn' && (
+        <button className="card zl-row" onClick={() => go('learn', 'today')} title="进入学习库·今日学习">
+          <span className="material-symbols-outlined">school</span>
+          <div className="zl-row-main">
+            <div className="zl-row-line">
+              <span className="zl-row-title">今日学习</span>
+              <span className="module-sub">
+                {learnReq
+                  ? learnReq.done
+                    ? `今日要求已完成 · 连胜 ${learnReq.streak} 天`
+                    : `新学 ${learnReq.learned}/${learnReq.goal} · 小测${
+                        learnReq.quizStatus === 'graded'
+                          ? '已交卷'
+                          : learnReq.quizStatus === 'answering'
+                            ? '作答中'
+                            : '未出卷'
+                      } · 连胜 ${learnReq.streak} 天`
+                  : '加载失败'}
+              </span>
+            </div>
           </div>
-        </div>
-      </button>
+        </button>
+      )}
 
-      {/* 待消化（0 置灰不可点） */}
-      <button
-        className={`card zl-row${learnCount === 0 ? ' zl-muted' : ''}`}
-        disabled={learnCount === 0}
-        onClick={() => go('wiki', 'learn-zone')}
-        title="进入万象库·待学习区"
-      >
-        <span className="material-symbols-outlined">public</span>
-        <span className="zl-row-title">待学习区</span>
-        <span className="module-sub">
-          {learnCount == null ? '加载失败' : learnCount === 0 ? '今日无待消化' : `${learnCount} 张待消化`}
-        </span>
-      </button>
+      {/* 待消化（0 置灰不可点）——学习模式块 */}
+      {mode === 'learn' && (
+        <button
+          className={`card zl-row${learnCount === 0 ? ' zl-muted' : ''}`}
+          disabled={learnCount === 0}
+          onClick={() => go('wiki', 'learn-zone')}
+          title="进入万象库·待学习区"
+        >
+          <span className="material-symbols-outlined">public</span>
+          <span className="zl-row-title">待学习区</span>
+          <span className="module-sub">
+            {learnCount == null ? '加载失败' : learnCount === 0 ? '今日无待消化' : `${learnCount} 张待消化`}
+          </span>
+        </button>
+      )}
 
-      {/* 每日一题（wall.month 被动查，绝不触发出题） */}
-      <button
-        className="card zl-row"
-        onClick={() => go('reasoning', 'daily')}
-        title="进入推理角·思维墙"
-      >
-        <span className="material-symbols-outlined">psychology</span>
-        <span className="zl-row-title">每日一题</span>
-        <span className="module-sub">
-          {wallState
-            ? wallState.done
-              ? `已完成 · 连胜 ${wallState.streak} 天`
-              : `未打卡 · 连胜 ${wallState.streak} 天`
-            : '加载失败'}
-        </span>
-      </button>
+      {/* 每日一题（wall.month 被动查，绝不触发出题）——生活模式块 */}
+      {mode === 'life' && (
+        <button
+          className="card zl-row"
+          onClick={() => go('reasoning', 'daily')}
+          title="进入推理角·思维墙"
+        >
+          <span className="material-symbols-outlined">psychology</span>
+          <span className="zl-row-title">每日一题</span>
+          <span className="module-sub">
+            {wallState
+              ? wallState.done
+                ? `已完成 · 连胜 ${wallState.streak} 天`
+                : `未打卡 · 连胜 ${wallState.streak} 天`
+              : '加载失败'}
+          </span>
+        </button>
+      )}
 
-      {/* 超级工作台（2.0 批次C）：昨日成果 + 待终选 + 相位；点击进任务中心（独立事件，'agent' 非 ModuleId） */}
-      <button
-        className="card zl-row"
-        onClick={() => window.dispatchEvent(new CustomEvent('bugzi:open-agent-center'))}
-        title="打开任务中心"
-      >
-        <span className="material-symbols-outlined">smart_toy</span>
-        <span className="zl-row-title">超级工作台</span>
-        <span className="module-sub">
-          {agentStats == null
-            ? '加载失败'
-            : !agentStats.enabled
-              ? '未启用 · 去个人档开启'
-              : `昨日海选 ${agentStats.yesterday.collect_deep ?? 0} · 解读 ${
-                  (agentStats.yesterday.make_digest ?? 0) +
-                  (agentStats.yesterday.lecture ?? 0) +
-                  (agentStats.yesterday.translate ?? 0)
-                } · 待终选 ${agentStats.pendingDiscover}${
-                  agentStats.phase === 'paused' ? ' · 已暂停' : agentStats.phase === 'working' ? ' · 工作中' : ''
-                }`}
-        </span>
-      </button>
+      {/* 超级工作台（2.0 批次C）：昨日成果 + 待终选 + 相位；点击进任务中心（独立事件，'agent' 非 ModuleId）——学习模式块 */}
+      {mode === 'learn' && (
+        <button
+          className="card zl-row"
+          onClick={() => window.dispatchEvent(new CustomEvent('bugzi:open-agent-center'))}
+          title="打开任务中心"
+        >
+          <span className="material-symbols-outlined">smart_toy</span>
+          <span className="zl-row-title">超级工作台</span>
+          <span className="module-sub">
+            {agentStats == null
+              ? '加载失败'
+              : !agentStats.enabled
+                ? '未启用 · 去个人档开启'
+                : `昨日海选 ${agentStats.yesterday.collect_deep ?? 0} · 解读 ${
+                    (agentStats.yesterday.make_digest ?? 0) +
+                    (agentStats.yesterday.lecture ?? 0) +
+                    (agentStats.yesterday.translate ?? 0)
+                  } · 待终选 ${agentStats.pendingDiscover}${
+                    agentStats.phase === 'paused' ? ' · 已暂停' : agentStats.phase === 'working' ? ' · 工作中' : ''
+                  }`}
+          </span>
+        </button>
+      )}
 
       {/* 今日挑战（260916 新功能开发区）：日定一条 + 可逆打卡 + 池管理；div 卡（内嵌按钮不可用 button） */}
       <div className="card zl-row zl-challenge-card">
@@ -397,48 +407,55 @@ export default function OverviewModule() {
         </button>
       )}
 
-      {/* 续读（无在读书显引导） */}
-      {reading ? (
-        <button
-          className="card zl-row"
-          onClick={() => go('zangyue', 'read', { bookId: reading.id })}
-          title="继续阅读"
-        >
-          <span className="material-symbols-outlined">auto_stories</span>
-          <span className="zl-row-title">继续阅读：{reading.title}</span>
-          <span className="module-sub">
-            {reading.percent}% · {reading.todayLabel}
-          </span>
-        </button>
-      ) : (
-        <button className="card zl-row" onClick={() => go('zangyue')} title="进入图书馆">
-          <span className="material-symbols-outlined">auto_stories</span>
-          <span className="zl-row-title">图书馆·书架</span>
-          <span className="module-sub">没有在读的书 · 去导入一本</span>
-        </button>
-      )}
+      {/* 续读（无在读书显引导）——生活模式块 */}
+      {mode === 'life' &&
+        (reading ? (
+          <button
+            className="card zl-row"
+            onClick={() => go('zangyue', 'read', { bookId: reading.id })}
+            title="继续阅读"
+          >
+            <span className="material-symbols-outlined">auto_stories</span>
+            <span className="zl-row-title">继续阅读：{reading.title}</span>
+            <span className="module-sub">
+              {reading.percent}% · {reading.todayLabel}
+            </span>
+          </button>
+        ) : (
+          <button className="card zl-row" onClick={() => go('zangyue')} title="进入图书馆">
+            <span className="material-symbols-outlined">auto_stories</span>
+            <span className="zl-row-title">图书馆·书架</span>
+            <span className="module-sub">没有在读的书 · 去导入一本</span>
+          </button>
+        ))}
 
-      {/* 轻数字条（点击直达对应模块） */}
+      {/* 轻数字条（点击直达对应模块；260922 双模式拆源：学习=信息源未读，生活=本月支出+十二问题） */}
       <div className="zl-numbar">
-        <button className="zl-num" onClick={() => go('feed')} title="进入信息源">
-          <span className="zl-num-val">{feedUnread ?? '--'}</span>
-          <span className="module-sub">信息源未读</span>
-        </button>
-        <button className="zl-num" onClick={() => go('ledger')} title="进入记账本">
-          <span className="zl-num-val">{monthExpense ?? '--'}</span>
-          <span className="module-sub">本月支出</span>
-        </button>
-        <button className="zl-num" onClick={() => go('zhijiji', 'twelve')} title="进入致知己·十二问题">
-          <span className="zl-num-val">{twelve ?? '--'}</span>
-          <span className="module-sub">十二问题</span>
-        </button>
+        {mode === 'learn' && (
+          <button className="zl-num" onClick={() => go('feed')} title="进入信息源">
+            <span className="zl-num-val">{feedUnread ?? '--'}</span>
+            <span className="module-sub">信息源未读</span>
+          </button>
+        )}
+        {mode === 'life' && (
+          <>
+            <button className="zl-num" onClick={() => go('ledger')} title="进入记账本">
+              <span className="zl-num-val">{monthExpense ?? '--'}</span>
+              <span className="module-sub">本月支出</span>
+            </button>
+            <button className="zl-num" onClick={() => go('zhijiji', 'twelve')} title="进入致知己·十二问题">
+              <span className="zl-num-val">{twelve ?? '--'}</span>
+              <span className="module-sub">十二问题</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* 热力图（260916 新功能开发区）：近一年三任务完成度四档 */}
       <HeatmapCard days={heat} />
 
-      {/* 底部格言轮播（沉淀区随机 10s 换 + 手动换一条，点击进格言库） */}
-      {motto && (
+      {/* 底部格言轮播（沉淀区随机 10s 换 + 手动换一条，点击进格言库）——学习模式块 */}
+      {mode === 'learn' && motto && (
         <div className="card zl-quote" onClick={() => go('wenbi', 'mottos')} title="进入格言库">
           <span className="zl-quote-text">{motto.content}</span>
           {motto.source && <span className="zl-quote-src module-sub">—— {motto.source}</span>}

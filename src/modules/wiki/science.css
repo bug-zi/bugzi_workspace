@@ -1,0 +1,213 @@
+/* 科普页签（超级工作台 2.0 批次D）：仅补海选卡/列表/阅读视图 footer 布局，色系全部走主题变量 */
+.science-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* AI 科普海选卡（照文献页签 lit-collect-bar 同款骨架） */
+.sci-collect-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.25));
+  border-radius: 12px;
+  background: var(--color-surface, rgba(128, 128, 128, 0.06));
+}
+
+.sci-collect-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sci-collect-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.sci-collect-title .material-symbols-outlined {
+  font-size: 19px;
+  color: var(--color-primary, currentColor);
+}
+
+.sci-collect-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sci-select {
+  min-width: 150px;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.35));
+  border-radius: 8px;
+  background: var(--color-surface, transparent);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.sci-select:focus {
+  border-color: var(--color-primary, currentColor);
+}
+
+/* 列表 */
+.sci-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+
+.sci-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.25));
+  border-radius: 10px;
+  background: var(--color-surface, transparent);
+  cursor: pointer;
+}
+
+.sci-item:hover {
+  border-color: var(--color-primary, currentColor);
+}
+
+.sci-item .row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sci-item .row-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sci-item .row-sub {
+  font-size: 0.85em;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.sci-item .row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 子页签工具行（260923 反馈：发现箱/正式文章分页签） */
+.sci-toolbar {
+  display: flex;
+  align-items: center;
+}
+
+/* 候选推荐理由（引言样式，同文献页签 lit-reason 口径） */
+.sci-reason {
+  font-size: 0.85em;
+  opacity: 0.85;
+  margin-top: 4px;
+  border-left: 3px solid var(--color-primary, currentColor);
+  padding-left: 8px;
+}
+
+/* 阅读视图 footer（产物 chips / 出处 / 关联词条） */
+.sci-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.sci-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sci-concepts {
+  border-top: 1px dashed var(--color-border, rgba(128, 128, 128, 0.25));
+  padding-top: 8px;
+}
+
+.sci-concepts-label {
+  font-size: 0.85em;
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+.sci-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  background: var(--color-surface, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.sci-chip:hover {
+  border-color: var(--color-primary, currentColor);
+}
+
+.sci-chip.missing {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.sci-chip-add {
+  font-size: 0.8em;
+  color: var(--color-primary, currentColor);
+}
+
+/* 相关内容 chip 行内类型图标 */
+.sci-chip-icon {
+  font-size: 14px;
+  color: var(--color-primary, currentColor);
+}
+
+/* 词条弹窗「出自科普文章」回链区（WikiModule footerBar） */
+.wiki-entry-backlinks {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+}
+
+.wiki-entry-backlinks .science-backlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.wiki-entry-backlinks .science-backlink .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-primary, currentColor);
+}

@@ -8,17 +8,11 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { FONT_FAMILIES, withCustomGlobalFonts } from '../../theme/fonts'
 import { customFontCssValue, invalidateCustomFonts, registerCustomFontFaces } from '../../theme/customFonts'
-import { LLM_SCENE_LABELS, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
+import { LLM_SCENE_LABELS, PROFILE_CATEGORIES, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
 import type { CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 import WhoamiZone from './WhoamiZone'
 import AgentSettingsSection from './AgentSettingsSection'
-
-/** 画像类别预设（datalist 建议，可自定义输入；与主进程画像提炼指令同款清单） */
-const PROFILE_CATEGORIES = [
-  '基本档案', '性格特质', '擅长能力', '兴趣爱好', '生活方式', '社交出行',
-  '学习与技能', '职业规划', '价值观', '其他'
-]
 
 // 内置字体 FONT_FAMILIES 已迁共享模块 src/theme/fonts.ts（字体选择轮 §1.1，书架字体浮层反查全局名共用）
 

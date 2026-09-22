@@ -202,3 +202,9 @@
   font-size: 0.8em;
   opacity: 0.6;
 }
+
+/* 相关内容行来源徽章（批次F：手动/相似） */
+.lit-origin-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+}

@@ -75,3 +75,24 @@
   margin: 14px 0 8px;
   color: var(--color-text-secondary);
 }
+
+/* 来一问（260923 开发者指令）：正文顶部右对齐工具行 */
+.whoami-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+/* 候选条目就地编辑（优化建议区第51轮）：编辑态实线描边 + 实底区分默认虚线行 */
+.whoami-suggestion-editing {
+  border-style: solid;
+  background: var(--color-surface-strong);
+}
+.whoami-select {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+}

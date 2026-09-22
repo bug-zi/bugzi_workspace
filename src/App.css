@@ -1523,6 +1523,26 @@
   color: var(--color-primary);
 }
 
+/* ===== 模式切换按钮（优化建议区 260922 双模式）：右下角最底位（原主题按钮位），其余按钮上移一位 =====
+   单按钮往返：图标=将切去的模式（与主题按钮「显示目标」约定一致）；显隐同主题按钮（四面板收起态）；
+   同款钉宽防撑宽 right-col（第29轮原理） */
+.right-col-mode {
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ai-width-collapsed);
+}
+.right-col-mode:hover {
+  background: var(--color-primary-soft);
+}
+
 /* ===== AI 使用统计（260910 推理角效率优化）：个人档 zone 内卡片/表格/范围 pill ===== */
 .llm-usage-range {
   display: flex;

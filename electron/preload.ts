@@ -1037,7 +1037,18 @@ const api = {
       ipcRenderer.invoke('whoami:extract', id),
     /** 候选逐条处理：accept=true 加入画像（source=ai）/ false 忽略 */
     resolve: (id: number, index: number, accept: boolean): Promise<import('../src/shared/types').WhoamiQuestionView> =>
-      ipcRenderer.invoke('whoami:resolve', id, index, accept)
+      ipcRenderer.invoke('whoami:resolve', id, index, accept),
+    /** 就地编辑候选条目（优化建议区第51轮）：类别+内容写回候选记录 */
+    suggestionUpdate: (
+      id: number,
+      index: number,
+      category: string,
+      content: string
+    ): Promise<import('../src/shared/types').WhoamiQuestionView> =>
+      ipcRenderer.invoke('whoami:suggestionUpdate', id, index, category, content),
+    /** 来一问（260923 开发者指令）：实时生成一问追加今日 */
+    askOne: (): Promise<import('../src/shared/types').WhoamiQuestionView> =>
+      ipcRenderer.invoke('whoami:askOne')
   },
   agent: {
     /** 引擎状态快照（呼吸灯/任务中心用） */
@@ -1069,7 +1080,7 @@ const api = {
       status?: 'discovered' | 'accepted' | 'rejected'
     ): Promise<import('../src/shared/types').DiscoverItemRow[]> =>
       ipcRenderer.invoke('agent:discoverList', status),
-    discoverAccept: (id: number): Promise<{ paperId: number }> =>
+    discoverAccept: (id: number): Promise<{ paperId: number } | { scienceId: number }> =>
       ipcRenderer.invoke('agent:discoverAccept', id),
     discoverReject: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:discoverReject', id),
     papers: (): Promise<import('../src/shared/types').PaperRow[]> => ipcRenderer.invoke('agent:papers'),
@@ -1078,7 +1089,8 @@ const api = {
     ): Promise<{
       paper: import('../src/shared/types').PaperRow
       interpretations: import('../src/shared/types').InterpretationRow[]
-      related: { dst_type: string; dst_id: number; title: string; score: number }[]
+      /** 双向合并相关内容（批次F：peer 标题已解析） */
+      related: { link_id: number; peer_type: string; peer_id: number; title: string; origin: string; score: number }[]
     }> => ipcRenderer.invoke('agent:paperDetail', id),
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect: (domainId: number): Promise<number> => ipcRenderer.invoke('agent:runCollect', domainId),
@@ -1094,12 +1106,63 @@ const api = {
       ipcRenderer.invoke('agent:runsList', limit),
     dayStats: (): Promise<import('../src/shared/types').AgentDayStats> =>
       ipcRenderer.invoke('agent:dayStats'),
-    /** 文献追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
-    askLiterature: (paperId: number): Promise<{ sessionId: number }> =>
-      ipcRenderer.invoke('agent:askLiterature', paperId),
+    /** 文献/科普/书籍追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
+    askLiterature: (type: 'paper' | 'science' | 'book', id: number): Promise<{ sessionId: number }> =>
+      ipcRenderer.invoke('agent:askLiterature', type, id),
     /** 冷启动向导完成：开引擎 + 置标记；runFirst 时对全部启用 deep 领域跑一轮海选 */
     coldStartFinish: (runFirst: boolean): Promise<{ queued: number }> =>
       ipcRenderer.invoke('agent:coldStartFinish', runFirst)
+  },
+  // ---------- 科普线（批次D） + 链接通用（批次D 建 IPC，批次 F 挂 UI） ----------
+  science: {
+    list: (): Promise<import('../src/shared/types').ScienceArticleRow[]> =>
+      ipcRenderer.invoke('agent:scienceList'),
+    detail: (
+      id: number
+    ): Promise<{
+      article: import('../src/shared/types').ScienceArticleRow
+      interpretations: import('../src/shared/types').InterpretationRow[]
+      highlights: import('../src/shared/types').ScienceHighlightRow[]
+      /** 双向合并相关内容（批次F：peer 标题已解析） */
+      related: { link_id: number; peer_type: string; peer_id: number; title: string; origin: string; score: number }[]
+    }> => ipcRenderer.invoke('agent:scienceDetail', id),
+    delete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceDelete', id),
+    retryFetch: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceRetryFetch', id),
+    /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    interpret: (
+      id: number,
+      kind: 'translate' | 'light' | 'lecture',
+      force?: boolean
+    ): Promise<number> => ipcRenderer.invoke('agent:scienceInterpret', id, kind, force),
+    highlightAdd: (articleId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('agent:scienceHighlightAdd', articleId, text),
+    highlightRemove: (articleId: number, text: string): Promise<boolean> =>
+      ipcRenderer.invoke('agent:scienceHighlightRemove', articleId, text),
+    /** 建词条成功回写（concepts.entry_id + manual 链接） */
+    linkManual: (articleId: number, term: string, entryId: number): Promise<boolean> =>
+      ipcRenderer.invoke('agent:scienceLinkManual', articleId, term, entryId)
+  },
+  links: {
+    /** 双向合并链接列表（peer 标题已解析） */
+    list: (
+      srcType: string,
+      srcId: number
+    ): Promise<{ link_id: number; peer_type: string; peer_id: number; title: string; origin: string; score: number }[]> =>
+      ipcRenderer.invoke('agent:linksList', srcType, srcId),
+    /** 相关内容标题检索（五类型全量：paper/science_article/wiki/book/learn_node） */
+    entitySearch: (type: string, q: string): Promise<{ id: number; title: string }[]> =>
+      ipcRenderer.invoke('agent:entitySearch', type, q),
+    add: (srcType: string, srcId: number, dstType: string, dstId: number): Promise<boolean> =>
+      ipcRenderer.invoke('agent:linkAdd', srcType, srcId, dstType, dstId),
+    del: (linkId: number): Promise<boolean> => ipcRenderer.invoke('agent:linkDel', linkId)
+  },
+  // ---------- 书籍解读（批次E） ----------
+  bookDigest: {
+    get: (bookId: number): Promise<{ status: 'none' | 'running' | 'done' | 'failed'; md_path: string | null }> =>
+      ipcRenderer.invoke('agent:bookDigestGet', bookId),
+    /** done 且未 force 抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    run: (bookId: number, force?: boolean): Promise<number> =>
+      ipcRenderer.invoke('agent:bookDigestRun', bookId, force)
   },
   embedding: {
     /** 测试连接：向量化一个词返回维度；失败抛 message */

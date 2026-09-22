@@ -27,7 +27,7 @@ interface Candidate {
   source: string
 }
 
-interface Selection {
+export interface Selection {
   title: string
   authors?: string[]
   year?: number | null
@@ -40,8 +40,8 @@ interface Selection {
   reason?: string
 }
 
-/** 容错 JSON 提取：剥代码围栏后取首 { 到尾 } */
-function extractJson(raw: string): Record<string, unknown> {
+/** 容错 JSON 提取：剥代码围栏后取首 { 到尾 }（collectScience 复用） */
+export function extractJson(raw: string): Record<string, unknown> {
   const cleaned = raw.replace(/```(?:json)?/g, '').trim()
   const s = cleaned.indexOf('{')
   const e = cleaned.lastIndexOf('}')
@@ -62,7 +62,7 @@ function urlWhitelist(candidates: Candidate[]): Set<string> {
   return set
 }
 
-function matchesWhitelist(url: string, whitelist: Set<string>): boolean {
+export function matchesWhitelist(url: string, whitelist: Set<string>): boolean {
   const clean = url.trim().replace(/\/+$/, '')
   if (whitelist.has(clean)) return true
   try {
@@ -74,7 +74,7 @@ function matchesWhitelist(url: string, whitelist: Set<string>): boolean {
 }
 
 /** 候选 url（origin+path 归一键）→ 原始元信息：日期/渠道直接映射材料值，不经 LLM 转述防篡改 */
-function candidateMetaMap(candidates: Candidate[]): Map<string, { date: string | null; source: string }> {
+export function candidateMetaMap(candidates: Candidate[]): Map<string, { date: string | null; source: string }> {
   const map = new Map<string, { date: string | null; source: string }>()
   for (const c of candidates) {
     try {
@@ -100,7 +100,7 @@ function lookupMeta(
 }
 
 /** 与发现箱既有向量近重复判定（> 0.92 视为重复）；embedding 不可用返回 false（降级放行） */
-async function isNearDuplicate(title: string, summary: string): Promise<boolean> {
+export async function isNearDuplicate(title: string, summary: string): Promise<boolean> {
   const cfg = getEmbeddingConfig()
   if (!cfg.enabled) return false
   try {
@@ -273,7 +273,7 @@ ${mcpText.trim() ? wrapMaterial('MCP 搜索原始结果', mcpText.slice(0, 30000
   console.info(`[agent:collect] 领域「${domain.name}」海选完成：候选 ${candidates.length}，入选 ${items.length}，新增 ${added}`)
 }
 
-async function embedDiscoverVector(title: string, summary: string): Promise<number[] | null> {
+export async function embedDiscoverVector(title: string, summary: string): Promise<number[] | null> {
   const cfg = getEmbeddingConfig()
   if (!cfg.enabled) return null
   try {

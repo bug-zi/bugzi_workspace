@@ -9,6 +9,7 @@ import { getDb, nowIso, userDataDir } from '../../db/db'
 import { mdDelete, mdWrite } from '../files'
 import { politeFetch, politeFetchBinary } from './guardrails'
 import { enqueue } from './queue'
+import { scienceAcceptRow } from './science'
 import type { DiscoverItemRow, InterpretationRow, PaperRow } from '../../../src/shared/types'
 
 function parseJsonArr(raw: unknown): string[] {
@@ -76,13 +77,15 @@ export function rejectDiscover(id: number): void {
   getDb().prepare("UPDATE discover_items SET status = 'rejected' WHERE id = ?").run(id)
 }
 
-export function acceptDiscover(id: number): { paperId: number } {
+export function acceptDiscover(id: number): { paperId: number } | { scienceId: number } {
   const d = getDb()
   const row = d.prepare('SELECT * FROM discover_items WHERE id = ?').get(id) as
-    | (Record<string, unknown> & { status: string })
+    | (Record<string, unknown> & { status: string; source_type: string })
     | undefined
   if (!row) throw new Error('NOT_FOUND')
   if (row.status !== 'discovered') throw new Error('该条目已处理')
+  // 科普分流（批次D）：article 条目转正入 science_articles，主进程路由、渲染层零分支
+  if (row.source_type === 'article') return scienceAcceptRow(row)
   const now = nowIso()
   const r = d
     .prepare(
@@ -131,30 +134,10 @@ export function listInterpretations(ownerId: number): InterpretationRow[] {
     .all('paper', ownerId) as unknown as InterpretationRow[]
 }
 
-/** 相关内容（knowledge_links 联表标题；空标题行剔除） */
-export function paperRelated(paperId: number): { dst_type: string; dst_id: number; title: string; score: number }[] {
-  const links = getDb()
-    .prepare("SELECT dst_type, dst_id, score FROM knowledge_links WHERE src_type = 'paper' AND src_id = ? ORDER BY score DESC LIMIT 5")
-    .all(paperId) as { dst_type: string; dst_id: number; score: number }[]
-  return links
-    .map((l) => {
-      let title = ''
-      if (l.dst_type === 'paper') {
-        const r = getDb().prepare('SELECT title FROM papers WHERE id = ?').get(l.dst_id) as { title: string } | undefined
-        title = r?.title ?? ''
-      } else if (l.dst_type === 'wiki') {
-        const r = getDb().prepare('SELECT term FROM wiki_entries WHERE id = ?').get(l.dst_id) as { term: string } | undefined
-        title = r?.term ?? ''
-      }
-      return { dst_type: l.dst_type, dst_id: l.dst_id, title, score: l.score }
-    })
-    .filter((x) => !!x.title)
-}
-
-/** 发现箱待终选数（任务中心/总导览用） */
+/** 发现箱待终选数（任务中心/总导览用；260923 修订：科普候选归万象库科普页签，此处只计论文） */
 export function pendingDiscoverCount(): number {
   const r = getDb()
-    .prepare("SELECT COUNT(*) AS n FROM discover_items WHERE status = 'discovered'")
+    .prepare("SELECT COUNT(*) AS n FROM discover_items WHERE status = 'discovered' AND source_type = 'paper'")
     .get() as { n: number }
   return Number(r.n) || 0
 }
@@ -212,8 +195,8 @@ function arxivIdOf(url: string): string | null {
   return m[1].replace(/\.pdf$/, '').replace(/v\d+$/, '')
 }
 
-/** pdfjs legacy 构建（Node fake worker）逐页抽文本 */
-async function extractPdfText(pdfAbsPath: string): Promise<string> {
+/** pdfjs legacy 构建（Node fake worker）逐页抽文本（书籍解读批次E 复用） */
+export async function extractPdfText(pdfAbsPath: string): Promise<string> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const data = new Uint8Array(readFileSync(pdfAbsPath))
   const loadingTask = pdfjs.getDocument({ data, useSystemFonts: false })

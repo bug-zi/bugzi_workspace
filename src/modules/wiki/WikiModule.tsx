@@ -7,12 +7,15 @@ import type { WikiEntry, WikiSection, WikiHighlightRow, WikiQuizBankQuestion, Wi
 import type { AiChannel } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
+import KnowledgeLinksDialog, { type RelatedLink } from '../../components/KnowledgeLinksDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
+import { openRelated, relatedIcon } from '../../services/relatedNav'
 import VerifyPanel from './VerifyPanel'
 import QaPanel from './QaPanel'
+import SciencePanel from './SciencePanel'
 
 export interface WikiModuleProps {
   onOpenAi: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
@@ -39,8 +42,8 @@ function termExampleOf(sectionName: string): string {
 export default function WikiModule(props: WikiModuleProps) {
   const { toast } = useToast()
   const [view, setView] = useState<View>({ kind: 'overview' })
-  // 三板块 tab（260908 辩真阁并入；260912 知识问答加入；默认百科，选择不持久化——推理角同款）
-  const [tab, setTab] = useState<'wiki' | 'verify' | 'qa'>('wiki')
+  // 四页签 tab（260908 辩真阁并入；260912 知识问答加入；260922 科普线加入；默认百科，选择不持久化——推理角同款）
+  const [tab, setTab] = useState<'wiki' | 'science' | 'verify' | 'qa'>('wiki')
   const [sections, setSections] = useState<WikiSection[]>([])
   const [entries, setEntries] = useState<WikiEntry[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
@@ -96,6 +99,10 @@ export default function WikiModule(props: WikiModuleProps) {
   // 当前题是否已提交（提交前仅预选高亮；提交后亮对错 + 解析）
   const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [quizFinished, setQuizFinished] = useState(false)
+  // 科普页签（批次D）：词条弹窗跳转入口 + 当前词条的关联（批次F 全量相关内容）
+  const [scienceOpenArticleId, setScienceOpenArticleId] = useState<number | null>(null)
+  const [entryRelated, setEntryRelated] = useState<RelatedLink[]>([])
+  const [wikiLinksOpen, setWikiLinksOpen] = useState(false)
 
   const loadSections = useCallback(async () => {
     const rows = await window.api.wiki.sections()
@@ -122,11 +129,23 @@ export default function WikiModule(props: WikiModuleProps) {
   }, [loadSections, loadHighlights, loadLearn])
 
   // keep-alive：切回万象库时刷新板块/词条/高光/待学习（后台生成可能已入库）+ 后库泵触发
-  // 总导览深链（260912）：切到百科 tab 的待学习区视图；深链 quiz（260915 反馈修订）：出题完成跳转
-  useModuleNavigate('wiki', (target) => {
+  // 总导览深链（260912）：切到百科 tab 的待学习区视图；深链 quiz（260915 反馈修订）：出题完成跳转；
+  // 批次F 相关内容跳转：science-article 切科普页签开文 / wiki-entry 开词条卡
+  useModuleNavigate('wiki', (target, payload) => {
     if (target === 'learn-zone') {
       setTab('wiki')
       setView({ kind: 'learn' })
+    }
+    if (target === 'science-article') {
+      const id = Number(payload?.articleId)
+      if (!Number.isFinite(id)) return
+      setTab('science')
+      setScienceOpenArticleId(id)
+    }
+    if (target === 'wiki-entry') {
+      const id = Number(payload?.entryId)
+      if (!Number.isFinite(id)) return
+      void window.api.wiki.entry(id).then((x: WikiEntry) => setCardEntry(x))
     }
   })
   useModuleActivated('wiki', () => {
@@ -164,6 +183,18 @@ export default function WikiModule(props: WikiModuleProps) {
     })
   }, [jumpEntryId])
 
+  // 词条弹窗相关内容（批次F：linksList 全量双向，点击跳转 + 管理入口）
+  useEffect(() => {
+    if (!cardEntry) {
+      setEntryRelated([])
+      return
+    }
+    void window.api.links
+      .list('wiki', cardEntry.id)
+      .then((rows) => setEntryRelated(rows as RelatedLink[]))
+      .catch(() => setEntryRelated([]))
+  }, [cardEntry])
+
   const openSection = (id: number): void => setView({ kind: 'section', id })
   const refreshCard = useCallback(async () => {
     if (!cardEntry) return
@@ -190,8 +221,8 @@ export default function WikiModule(props: WikiModuleProps) {
     }
   }
 
-  const runGenerate = async (term: string | null, sectionId: number | null): Promise<void> => {
-    if (genJob) return
+  const runGenerate = async (term: string | null, sectionId: number | null): Promise<number | null> => {
+    if (genJob) return null
     const jobId = crypto.randomUUID()
     setGenJob(jobId)
     try {
@@ -204,16 +235,18 @@ export default function WikiModule(props: WikiModuleProps) {
         const e = await window.api.wiki.entry(r.data.entryId)
         setCardEntry(e)
         setMdVersion((v) => v + 1)
-      } else {
-        // 已存在 → 拦截提示 + 可跳原卡片（conflictId 主进程带回：原卡可能在待学习区，板块列表找不到）
-        setConflictTerm(r.conflict)
-        setConflictEntry(r.conflictId != null ? await window.api.wiki.entry(r.conflictId) : null)
+        return r.data.entryId
       }
+      // 已存在 → 拦截提示 + 可跳原卡片（conflictId 主进程带回：原卡可能在待学习区，板块列表找不到）
+      setConflictTerm(r.conflict)
+      setConflictEntry(r.conflictId != null ? await window.api.wiki.entry(r.conflictId) : null)
+      return null
     } catch (e) {
       const msg = String((e as Error).message)
       if (msg.includes('已取消')) toast('已取消')
       else if (msg.includes('LLM_NOT_CONFIGURED')) setGoConfig('llm')
       else setFailMsg(msg)
+      return null
     } finally {
       setGenJob(null)
     }
@@ -389,10 +422,13 @@ export default function WikiModule(props: WikiModuleProps) {
         )}
       </div>
 
-      {/* 双板块 tab（260908 辩真阁并入万象库）：百科 = 原有内容；辩真 = 原辩真阁面板 */}
+      {/* 四页签 tab（260908 辩真阁并入万象库）：百科 = 原有内容；科普 = 批次D；辩真/问答照旧 */}
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'wiki' ? ' active' : ''}`} onClick={() => setTab('wiki')}>
           百科
+        </button>
+        <button className={`recycle-tab${tab === 'science' ? ' active' : ''}`} onClick={() => setTab('science')}>
+          科普
         </button>
         <button className={`recycle-tab${tab === 'verify' ? ' active' : ''}`} onClick={() => setTab('verify')}>
           辩真
@@ -808,6 +844,48 @@ export default function WikiModule(props: WikiModuleProps) {
               }
             : undefined
         }
+        footerBar={
+          entryRelated.length > 0 || cardEntry ? (
+            <div className="wiki-entry-backlinks">
+              {entryRelated.length > 0 && (
+                <>
+                  <span className="module-sub">相关内容</span>
+                  {entryRelated.map((l) => (
+                    <button
+                      key={l.link_id}
+                      className="btn btn-ghost science-backlink"
+                      title={l.origin === 'manual' ? '手动关联，点击打开' : `语义相似 ${Math.round(l.score * 100)}%，点击打开`}
+                      onClick={() => {
+                        if (l.peer_type === 'wiki') {
+                          void window.api.wiki.entry(l.peer_id).then((x: WikiEntry) => setCardEntry(x))
+                          return
+                        }
+                        if (l.peer_type === 'science_article') {
+                          setCardEntry(null)
+                          setTab('science')
+                          setScienceOpenArticleId(l.peer_id)
+                          return
+                        }
+                        setCardEntry(null)
+                        openRelated(l)
+                      }}
+                    >
+                      <span className="material-symbols-outlined">{relatedIcon(l.peer_type)}</span>
+                      {l.title}
+                      <span className={`badge ${l.origin === 'manual' ? 'primary' : ''}`}>
+                        {l.origin === 'manual' ? '手动' : `${Math.round(l.score * 100)}%`}
+                      </span>
+                    </button>
+                  ))}
+                </>
+              )}
+              <button className="btn science-backlink" onClick={() => setWikiLinksOpen(true)}>
+                <span className="material-symbols-outlined">hub</span>
+                关联知识
+              </button>
+            </div>
+          ) : undefined
+        }
       />
 
       {/* 手动输入生成 */}
@@ -1090,6 +1168,15 @@ export default function WikiModule(props: WikiModuleProps) {
         onCancel={() => setGoConfig(null)}
       />
 
+      {/* 词条关联知识管理（批次F） */}
+      <KnowledgeLinksDialog
+        open={wikiLinksOpen && cardEntry != null}
+        srcType="wiki"
+        srcId={cardEntry?.id ?? 0}
+        title={cardEntry?.term ?? ''}
+        onClose={() => setWikiLinksOpen(false)}
+      />
+
       {/* 生成失败 */}
       {failMsg && (
         <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setFailMsg(null)}>
@@ -1103,6 +1190,18 @@ export default function WikiModule(props: WikiModuleProps) {
           </div>
         </div>
       )}
+      </div>
+
+      {/* 科普板块（批次D）：科普文章列表 + 解读阅读视图；词条跳转/建词条回调注入，万象生成链路保持单点 */}
+      <div className={tab === 'science' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'science'}>
+        <SciencePanel
+          onOpenAi={(p) => props.onOpenAi(p)}
+          bumpAi={props.bumpAi}
+          onOpenEntry={(entryId) => void window.api.wiki.entry(entryId).then((x: WikiEntry) => setCardEntry(x))}
+          onCreateEntry={(term, sectionId) => runGenerate(term, sectionId)}
+          openArticleId={scienceOpenArticleId}
+          onOpenArticleConsumed={() => setScienceOpenArticleId(null)}
+        />
       </div>
 
       {/* 辩真板块（原辩真阁整面板迁入，数据层零改动；onOpenAi 包装直连「辩真·核查」频道） */}

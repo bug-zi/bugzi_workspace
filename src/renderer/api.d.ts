@@ -1005,11 +1005,55 @@ export interface PaperRow {
   created_at: string
   updated_at: string
 }
+export interface ScienceConcept {
+  term: string
+  entry_id: number | null
+}
+export interface ScienceArticleRow {
+  id: number
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（NULL 回落 year 展示） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: 'en' | 'zh'
+  url: string
+  /** 渠道标识：'mcp:{配置名}' 等 */
+  source: string
+  domain_id: number | null
+  /** 联表 agent_domains.name（详情列表展示用） */
+  domain_name: string | null
+  status: 'ready' | 'meta_only'
+  fulltext_path: string | null
+  /** 英文全文解读术语表（JSON 解析后；null=无） */
+  glossary: { en: string; zh: string }[] | null
+  concepts: ScienceConcept[]
+  discovery_id: number | null
+  created_at: string
+  updated_at: string
+}
+export interface ScienceHighlightRow {
+  id: number
+  article_id: number
+  text: string
+  created_at: string
+}
+/** knowledge_links 双向合并行（links.list / 详情 related）：peer 标题已解析 */
+export interface RelatedLink {
+  link_id: number
+  peer_type: string
+  peer_id: number
+  title: string
+  origin: string
+  score: number
+}
 export interface InterpretationRow {
   id: number
   owner_type: 'paper' | 'science_article' | 'book'
   owner_id: number
-  kind: 'digest' | 'lecture' | 'translation' | 'book_digest'
+  kind: 'digest' | 'lecture' | 'translation' | 'light' | 'book_digest'
   status: 'running' | 'done' | 'failed'
   md_path: string | null
   tokens_used: number
@@ -1680,6 +1724,8 @@ export interface Api {
     answer(id: number, answer: string | null): Promise<import('../shared/types').WhoamiQuestionView>
     extract(id: number): Promise<import('../shared/types').WhoamiQuestionView>
     resolve(id: number, index: number, accept: boolean): Promise<import('../shared/types').WhoamiQuestionView>
+    suggestionUpdate(id: number, index: number, category: string, content: string): Promise<import('../shared/types').WhoamiQuestionView>
+    askOne(): Promise<import('../shared/types').WhoamiQuestionView>
   }
   inspirations: {
     list(): Promise<InspirationRecord[]>
@@ -1779,13 +1825,14 @@ export interface Api {
     onAgentStatus(cb: (s: AgentStatusSnapshot) => void): () => void
     // ---------- 深读线（批次B） ----------
     discoverList(status?: 'discovered' | 'accepted' | 'rejected'): Promise<DiscoverItemRow[]>
-    discoverAccept(id: number): Promise<{ paperId: number }>
+    discoverAccept(id: number): Promise<{ paperId: number } | { scienceId: number }>
     discoverReject(id: number): Promise<boolean>
     papers(): Promise<PaperRow[]>
     paperDetail(id: number): Promise<{
       paper: PaperRow
       interpretations: InterpretationRow[]
-      related: { dst_type: string; dst_id: number; title: string; score: number }[]
+      /** 双向合并相关内容（批次F：peer 标题已解析） */
+      related: RelatedLink[]
     }>
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect(domainId: number): Promise<number>
@@ -1800,10 +1847,45 @@ export interface Api {
     // ---------- 感知层（批次C） ----------
     runsList(limit?: number): Promise<TaskRunRow[]>
     dayStats(): Promise<AgentDayStats>
-    /** 文献追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
-    askLiterature(paperId: number): Promise<{ sessionId: number }>
+    /** 文献/科普/书籍追问入口：定位/新建 literature 会话并注入上下文（推送自动跟随） */
+    askLiterature(type: 'paper' | 'science' | 'book', id: number): Promise<{ sessionId: number }>
     /** 冷启动向导完成：开引擎 + 置标记；runFirst 时对全部启用 deep 领域跑一轮海选 */
     coldStartFinish(runFirst: boolean): Promise<{ queued: number }>
+  }
+  // ---------- 书籍解读（批次E） ----------
+  bookDigest: {
+    get(bookId: number): Promise<{ status: 'none' | 'running' | 'done' | 'failed'; md_path: string | null }>
+    /** done 且未 force 抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    run(bookId: number, force?: boolean): Promise<number>
+  }
+  // ---------- 科普线（批次D） + 链接通用（批次D 建 IPC，批次 F 挂 UI） ----------
+  science: {
+    list(): Promise<ScienceArticleRow[]>
+    detail(id: number): Promise<{
+      article: ScienceArticleRow
+      interpretations: InterpretationRow[]
+      highlights: ScienceHighlightRow[]
+      /** 双向合并相关内容（批次F：peer 标题已解析） */
+      related: RelatedLink[]
+    }>
+    /** 彻底删除科普文章（连带解读 md/全文缓存/高光/链接/向量，二次确认由渲染层负责） */
+    delete(id: number): Promise<boolean>
+    /** meta_only「重试抓取」：成功自动入队解读 */
+    retryFetch(id: number): Promise<boolean>
+    /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
+    interpret(id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean): Promise<number>
+    highlightAdd(articleId: number, text: string): Promise<boolean>
+    highlightRemove(articleId: number, text: string): Promise<boolean>
+    /** 建词条成功回写（concepts.entry_id + manual 链接） */
+    linkManual(articleId: number, term: string, entryId: number): Promise<boolean>
+  }
+  links: {
+    /** 双向合并链接列表（peer 标题已解析） */
+    list(srcType: string, srcId: number): Promise<RelatedLink[]>
+    /** 相关内容标题检索（五类型全量） */
+    entitySearch(type: string, q: string): Promise<{ id: number; title: string }[]>
+    add(srcType: string, srcId: number, dstType: string, dstId: number): Promise<boolean>
+    del(linkId: number): Promise<boolean>
   }
   embedding: {
     /** 测试连接：向量化一个词返回维度；失败抛 message */

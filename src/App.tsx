@@ -32,23 +32,25 @@ import { activeAudioKind } from './services/audioExclusive'
 import { sceneById } from './services/noiseScenes'
 import { useToast } from './components/Toast'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
-import type { AiChannel, ModuleId } from './shared/types'
+import type { AiChannel, ModuleId, ModuleMode } from './shared/types'
 import './App.css'
 
 // 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项；260912 总导览置顶 11→12 项；260916 藏阅阁更名图书馆）
-const MODULES: { id: ModuleId; label: string; icon: string }[] = [
-  { id: 'zonglan', label: '总导览', icon: 'space_dashboard' },
-  { id: 'learn', label: '学习库', icon: 'school' },
-  { id: 'wiki', label: '万象库', icon: 'public' },
-  { id: 'zhijiji', label: '致知己', icon: 'self_improvement' },
-  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb' },
-  { id: 'wenbi', label: '文笔坊', icon: 'history_edu' },
-  { id: 'feed', label: '信息源', icon: 'rss_feed' },
-  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark' },
-  { id: 'reasoning', label: '推理角', icon: 'psychology' },
-  { id: 'ledger', label: '记账本', icon: 'account_balance_wallet' },
-  { id: 'recycle', label: '回收站', icon: 'delete' },
-  { id: 'profile', label: '个人档', icon: 'person' }
+// 260922 双模式：mode 标记归属——学习=工作台(特殊项)/学习库/万象库/文笔坊/信息源；生活=致知己/灵感泉/图书馆/推理角/记账本；
+// 常驻=总导览/音乐吧(特殊项)/回收站/个人档。左栏按当前模式过滤，各组内保持本数组相对顺序；主栏 keep-alive 挂载仍用全量数组不受过滤影响
+const MODULES: { id: ModuleId; label: string; icon: string; mode: 'learn' | 'life' | 'common' }[] = [
+  { id: 'zonglan', label: '总导览', icon: 'space_dashboard', mode: 'common' },
+  { id: 'learn', label: '学习库', icon: 'school', mode: 'learn' },
+  { id: 'wiki', label: '万象库', icon: 'public', mode: 'learn' },
+  { id: 'zhijiji', label: '致知己', icon: 'self_improvement', mode: 'life' },
+  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb', mode: 'life' },
+  { id: 'wenbi', label: '文笔坊', icon: 'history_edu', mode: 'learn' },
+  { id: 'feed', label: '信息源', icon: 'rss_feed', mode: 'learn' },
+  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark', mode: 'life' },
+  { id: 'reasoning', label: '推理角', icon: 'psychology', mode: 'life' },
+  { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', mode: 'life' },
+  { id: 'recycle', label: '回收站', icon: 'delete', mode: 'common' },
+  { id: 'profile', label: '个人档', icon: 'person', mode: 'common' }
 ]
 
 /** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道；
@@ -100,6 +102,8 @@ function Shell() {
   // 内置终端（260912）：open 默认收起（pty 不跨重启）；Ctrl+J 呼出/收起、Ctrl+Shift+J 新建标签
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalNewTabSignal, setTerminalNewTabSignal] = useState(0)
+  // 学习/生活双模式（优化建议区 260922）：当前模式；启动经下方 effect 恢复（主栏仍固定落总导览）
+  const [appMode, setAppMode] = useState<ModuleMode>('learn')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -134,6 +138,13 @@ function Shell() {
       else if (v === 'files') setRightPanel('files')
       else if (v === '') setRightPanel(null)
       else setRightPanel('ai')
+    })
+  }, [])
+
+  // 双模式恢复（优化建议区 260922）：左栏按上次模式过滤；主栏仍固定落总导览（现状不变）
+  useEffect(() => {
+    void window.api.settings.get(SettingsKeys.AppMode).then((v) => {
+      if (v === 'life') setAppMode('life')
     })
   }, [])
 
@@ -194,23 +205,67 @@ function Shell() {
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
+  // 视图所属模式（双模式）：'agent'（任务中心）视为学习专属，'noise'（音乐吧）常驻，其余查 MODULES
+  const modeOfView = useCallback((id: MainView): 'learn' | 'life' | 'common' => {
+    if (id === 'agent') return 'learn'
+    if (id === 'noise') return 'common'
+    return MODULES.find((m) => m.id === id)?.mode ?? 'common'
+  }, [])
+
+  // 模式 last 专属模块记录（双模式）：仅专属模块记账，常驻（总导览/音乐吧/回收站/个人档）不记——
+  // 切走再切回 = 回到该模式上次工作现场
+  useEffect(() => {
+    const m = modeOfView(module)
+    if (m === 'common') return
+    void window.api.settings.set(m === 'learn' ? SettingsKeys.ModeLastLearn : SettingsKeys.ModeLastLife, module)
+  }, [module, modeOfView])
+
+  // 模式切换（双模式）：写 app_mode → 主栏落到 landTo（深链等显式指定）或目标模式 last 专属模块（无记录落总导览）。
+  // landTo 必须同步 activateModule——不能走异步 get 回来再切，否则会晚于调用方的 activateModule 把主栏抢走
+  const switchMode = useCallback(
+    (next: ModuleMode, landTo?: MainView): void => {
+      setAppMode(next)
+      void window.api.settings.set(SettingsKeys.AppMode, next)
+      if (landTo) {
+        activateModule(landTo)
+        return
+      }
+      void window.api.settings
+        .get(next === 'learn' ? SettingsKeys.ModeLastLearn : SettingsKeys.ModeLastLife)
+        .then((v) => activateModule((v || 'zonglan') as MainView))
+    },
+    [activateModule]
+  )
+
   // 深链集中切换（260915 优化区：原仅总导览 onNavigate；现在任何常驻模块都可派发事件跳转，
-  // 如学习库深挖完成后轻提示点击跨模块跳回）：目标模块内部视图由其 useModuleNavigate 自行处理
+  // 如学习库深挖完成后轻提示点击跨模块跳回）：目标模块内部视图由其 useModuleNavigate 自行处理；
+  // 双模式（260922）：目标模块不在当前模式时自动切到目标模式——深链是明确意图，模式跟着走
+  // （回收站恢复跳转同规则）；landTo 显式传深链目标，防异步 last 落点抢走深链跳转
   useEffect(() => {
     const onNav = (e: Event): void => {
       const detail = (e as CustomEvent<{ module: ModuleId }>).detail
-      if (detail && detail.module) activateModule(detail.module)
+      if (!detail || !detail.module) return
+      const target = modeOfView(detail.module)
+      if (target !== 'common' && target !== appMode) {
+        switchMode(target, detail.module)
+        return
+      }
+      activateModule(detail.module)
     }
     window.addEventListener(MODULE_NAVIGATE_EVENT, onNav)
     return () => window.removeEventListener(MODULE_NAVIGATE_EVENT, onNav)
-  }, [activateModule])
+  }, [activateModule, appMode, switchMode, modeOfView])
 
-  // 任务中心直达（2.0 批次C：呼吸灯/总导览聚合块；'agent' 非 ModuleId，走独立事件不动公共类型）
+  // 任务中心直达（2.0 批次C：呼吸灯/总导览聚合块；'agent' 非 ModuleId，走独立事件不动公共类型）；
+  // 双模式（260922）：'agent' 学习专属——生活模式下直达自动切回学习模式（landTo='agent' 同步落位）
   useEffect(() => {
-    const onOpenAgent = (): void => activateModule('agent')
+    const onOpenAgent = (): void => {
+      if (appMode === 'life') switchMode('learn', 'agent')
+      else activateModule('agent')
+    }
     window.addEventListener('bugzi:open-agent-center', onOpenAgent)
     return () => window.removeEventListener('bugzi:open-agent-center', onOpenAgent)
-  }, [activateModule])
+  }, [activateModule, appMode, switchMode])
 
   // 冷启动向导（2.0 批次C）：升级用户首启弹一次（首装走 WelcomeGuide 不叠加）；完成/跳过后不再弹
   const [coldStartOpen, setColdStartOpen] = useState(false)
@@ -260,13 +315,13 @@ function Shell() {
       <div className="app-shell">
         {/* 左侧边栏 */}
         <nav className="sidebar">
-          {MODULES.map((m) => (
+          {MODULES.filter((m) => m.mode === 'common' || m.mode === appMode).map((m) => (
             <Fragment key={m.id}>
-              {/* 超级工作台呼吸灯（2.0 批次C）：列于记账本与音乐吧之间，点击进任务中心 */}
-              {m.id === 'recycle' && (
+              {/* 超级工作台呼吸灯（2.0 批次C；260922 双模式迁至总导览后第 2 位——随学习库行插位，学习专属故生活模式随行隐藏）：点击进任务中心 */}
+              {m.id === 'learn' && (
                 <AgentBreathLight active={module === 'agent'} onOpen={() => activateModule('agent')} />
               )}
-              {/* 音乐吧控件列于记账本与回收站之间（260908 进列表；260915 更名音乐吧） */}
+              {/* 音乐吧控件列于记账本与回收站之间（260908 进列表；260915 更名音乐吧；260922 双模式起常驻） */}
               {m.id === 'recycle' && (
                 <button
                   className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
@@ -309,7 +364,7 @@ function Shell() {
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
               aria-hidden={m.id !== module}
             >
-              {m.id === 'zonglan' && <OverviewModule />}
+              {m.id === 'zonglan' && <OverviewModule mode={appMode} />}
               {m.id === 'learn' && <LearnModule />}
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
@@ -404,6 +459,17 @@ function Shell() {
               title={theme === 'light' ? '切到深色' : '切到浅色'}
             >
               <span className="material-symbols-outlined">{theme === 'light' ? 'dark_mode' : 'light_mode'}</span>
+            </button>
+          )}
+          {/* 模式切换（优化建议区 260922 双模式）：右下角最底位（原主题按钮位），其余按钮上移一位；
+              单按钮往返，图标=将切去的模式（与主题按钮「显示目标」约定一致）；显隐同主题按钮（四面板收起态） */}
+          {rightPanel === null && (
+            <button
+              className="right-col-mode"
+              onClick={() => switchMode(appMode === 'learn' ? 'life' : 'learn')}
+              title={appMode === 'learn' ? '切换到生活模式' : '切换到学习模式'}
+            >
+              <span className="material-symbols-outlined">{appMode === 'learn' ? 'home' : 'school'}</span>
             </button>
           )}
           </div>

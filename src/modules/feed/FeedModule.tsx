@@ -22,6 +22,8 @@ export default function FeedModule(props: {
   // 主页签（2.0 批次B）：订阅=自读区（原有全部内容）；文献=深读线（发现箱+正式文献区）
   const [mainTab, setMainTab] = useState<'feed' | 'literature'>('feed')
   const [litPending, setLitPending] = useState(0)
+  // 批次F 相关内容跳转：待自动打开的文献详情 id（消费后复位）
+  const [litPaperId, setLitPaperId] = useState<number | null>(null)
   const [feeds, setFeeds] = useState<FeedWithUnread[]>([])
   const [activeFeed, setActiveFeed] = useState<number | null>(null)
   const [articles, setArticles] = useState<ArticleSummary[]>([])
@@ -95,8 +97,15 @@ export default function FeedModule(props: {
   }, [load])
 
   // 总导览/任务中心深链：切到文献页签（2.0 批次B 先行铺好，批次 C 直达用）
-  useModuleNavigate('feed', (target) => {
+  useModuleNavigate('feed', (target, payload) => {
     if (target === 'literature') setMainTab('literature')
+    // 批次F 相关内容跳转：切文献页签并打开指定论文详情
+    if (target === 'literature-paper') {
+      const pid = Number(payload?.paperId)
+      if (!Number.isFinite(pid)) return
+      setMainTab('literature')
+      setLitPaperId(pid)
+    }
   })
   useEffect(() => {
     if (mainTab !== 'literature') return
@@ -398,7 +407,11 @@ export default function FeedModule(props: {
         </div>
       </div>
       ) : (
-        <LiteraturePanel onOpenAi={() => props.onOpenAi?.('', { channel: 'literature' })} />
+        <LiteraturePanel
+          onOpenAi={() => props.onOpenAi?.('', { channel: 'literature' })}
+          openPaperId={litPaperId}
+          onOpenPaperConsumed={() => setLitPaperId(null)}
+        />
       )}
 
       {/* 添加订阅弹窗：URL → 验证显源名 → 订阅 */}

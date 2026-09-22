@@ -1,0 +1,84 @@
+/* 知识链接管理弹窗（批次F）：仅补行布局，色系走主题变量 */
+.klinks-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.klinks-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--color-surface, rgba(128, 128, 128, 0.06));
+}
+
+.klinks-row > .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-primary, currentColor);
+  flex-shrink: 0;
+}
+
+.klinks-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+
+.klinks-del {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.klinks-add-label {
+  margin-top: 8px;
+}
+
+.klinks-add-ctrl {
+  display: flex;
+  gap: 8px;
+}
+
+.klinks-type {
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.klinks-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.klinks-results {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border, rgba(128, 128, 128, 0.3));
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.klinks-result-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.klinks-result-row:hover {
+  background: var(--color-surface, rgba(128, 128, 128, 0.12));
+}
+
+.klinks-result-row .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--color-primary, currentColor);
+}

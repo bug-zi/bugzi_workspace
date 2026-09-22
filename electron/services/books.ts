@@ -4,6 +4,7 @@ import { basename, dirname, extname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import { getDb, nowIso, userDataDir } from '../db/db'
+import { mdDelete } from './files'
 import type {
   BooksImportResult,
   BooksNote,
@@ -219,11 +220,16 @@ export function saveProgress(
     .run(p.cfi ?? null, p.page ?? null, p.percent, nowIso(), id)
 }
 
-/** 彻底删除：删行 + 级联清笔记 + 清理书籍/封面物理文件（渲染层已二次确认） */
+/** 彻底删除：删行 + 级联清笔记 + 清理书籍/封面物理文件（渲染层已二次确认）；
+ *  批次E 追加：AI 解读产物 md + interpretations 行 + 全文抽取缓存连带清理 */
 export function deleteBook(id: number): void {
   const row = getDb().prepare('SELECT file_path, cover_path FROM books WHERE id = ?').get(id) as
     | { file_path: string; cover_path: string | null }
     | undefined
+  const interps = getDb()
+    .prepare("SELECT md_path FROM interpretations WHERE owner_type = 'book' AND owner_id = ?")
+    .all(id) as { md_path: string | null }[]
+  getDb().prepare("DELETE FROM interpretations WHERE owner_type = 'book' AND owner_id = ?").run(id)
   getDb().prepare('DELETE FROM books WHERE id = ?').run(id)
   getDb().prepare('DELETE FROM book_notes WHERE book_id = ?').run(id)
   getDb().prepare('DELETE FROM book_marks WHERE book_id = ?').run(id)
@@ -237,6 +243,12 @@ export function deleteBook(id: number): void {
         /* 文件缺失静默 */
       }
     }
+  }
+  for (const it of interps) mdDelete(it.md_path)
+  try {
+    unlinkSync(join(userDataDir(), 'books', `${id}.txt`))
+  } catch {
+    /* 无缓存文件 */
   }
 }
 

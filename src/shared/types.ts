@@ -26,6 +26,10 @@ export interface ModuleNavDetail {
 // AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant；2.0 批次C 增 literature）
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
 
+// 学习/生活双模式（优化建议区 260922）：左栏两套入口视图 + 总导览随模式换块；
+// 模式归属见 App.tsx MODULES[].mode（常驻/学习/生活）
+export type ModuleMode = 'learn' | 'life'
+
 // 草稿本频道（优化建议区第21轮，DB v14：drafts.channel）：固定两频道起步，加频道零迁移
 export type DraftChannel = 'general' | 'turtle'
 
@@ -110,6 +114,10 @@ export const SettingsKeys = {
   // 启动行为（260912）：开机自启（'1'/'0'）+ 关闭按钮行为（'tray' 隐藏到托盘 | 'exit' 直接退出）
   LaunchOnBoot: 'launch_on_boot',
   CloseAction: 'close_action',
+  // 学习/生活双模式（优化建议区 260922）：当前模式（'learn'|'life'，缺省 learn）+ 各模式 last 专属模块（MainView 字符串，常驻不记）
+  AppMode: 'app_mode',
+  ModeLastLearn: 'mode_last_learn',
+  ModeLastLife: 'mode_last_life',
   // 音乐吧（260915 新功能开发区）：轻音乐播放状态 JSON { trackId, loopMode, volume }（重启记参数默认暂停）
   MusicState: 'music_state',
   // ---------- 超级工作台 2.0（批次 A，idea/超级工作台2.0/designs-specs-批次A §2） ----------
@@ -290,6 +298,9 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'wenbi:copilot': '文笔坊·协笔',
   'feed:summary': '信息源·总结',
   'mcp:research': 'MCP·配置研究',
+  'whoami:daily': '我是谁·每日出题',
+  'whoami:extract': '我是谁·候选提炼',
+  'whoami:askOne': '我是谁·来一问',
   'agent:collect': '工作台·海选',
   'agent:digest': '工作台·导读卡',
   'agent:lecture': '工作台·精讲',
@@ -1118,6 +1129,12 @@ export interface WhoamiGetResult {
   pending: WhoamiQuestionView[]
 }
 
+// 画像类别预设十类（个人档 datalist、我是谁候选提炼校验与候选编辑下拉三处共用；260923 收敛为单一来源）
+export const PROFILE_CATEGORIES = [
+  '基本档案', '性格特质', '擅长能力', '兴趣爱好', '生活方式', '社交出行',
+  '学习与技能', '职业规划', '价值观', '其他'
+]
+
 // ===== 超级工作台 2.0（idea/超级工作台2.0/designs-specs-批次A §2；DB v48 七表）=====
 
 /** 领域两档深度：deep=职业发展（深读线论文）/ science=兴趣拓展（科普线文章，二期管道） */
@@ -1192,12 +1209,53 @@ export interface InterpretationRow {
   id: number
   owner_type: 'paper' | 'science_article' | 'book'
   owner_id: number
-  kind: 'digest' | 'lecture' | 'translation' | 'book_digest'
+  kind: 'digest' | 'lecture' | 'translation' | 'light' | 'book_digest'
   status: 'running' | 'done' | 'failed'
   md_path: string | null
   tokens_used: number
   created_at: string
   updated_at: string
+}
+
+/** 科普文章概念关联（science_articles.concepts JSON 项）：entry_id 命中词条 / null 待建词条 */
+export interface ScienceConcept {
+  term: string
+  entry_id: number | null
+}
+
+/** 科普文章（science_articles 表）：发现箱 article 条目转正入库 */
+export interface ScienceArticleRow {
+  id: number
+  title: string
+  authors: string[]
+  year: number | null
+  /** 发布日期 YYYY-MM-DD（渠道原始值；NULL 回落 year 展示） */
+  date: string | null
+  summary: string
+  tags: string[]
+  language: 'en' | 'zh'
+  url: string
+  /** 渠道标识：'mcp:{配置名}' 等 */
+  source: string
+  domain_id: number | null
+  /** 联表 agent_domains.name（详情列表展示用） */
+  domain_name: string | null
+  status: 'ready' | 'meta_only'
+  fulltext_path: string | null
+  /** 英文全文解读术语表（JSON 解析后；null=无） */
+  glossary: { en: string; zh: string }[] | null
+  concepts: ScienceConcept[]
+  discovery_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+/** 科普划词高光（science_highlights 表） */
+export interface ScienceHighlightRow {
+  id: number
+  article_id: number
+  text: string
+  created_at: string
 }
 
 /** 任务台账行（task_runs 表）：负载卫兵的 load_pause/load_resume 也记于此 */

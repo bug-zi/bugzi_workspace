@@ -1,7 +1,9 @@
-// 我是谁 zone（260921 新功能开发区）：个人档·我的画像之下——每日 3-4 问 + 回答提炼候选 + 逐条确认入档
+// 我是谁 zone（260921 新功能开发区）：个人档·我的画像之下——每日 3-4 问 + 回答提炼候选 + 逐条确认入档；
+// 260923 第51轮：候选条目支持行内就地编辑（类别 select + 内容输入框，保存写回候选记录）
 import { useCallback, useEffect, useState } from 'react'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
+import { PROFILE_CATEGORIES } from '../../shared/types'
 import type { WhoamiGetResult, WhoamiQuestionView } from '../../shared/types'
 import './WhoamiZone.css'
 
@@ -17,6 +19,8 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
   const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [extracting, setExtracting] = useState<Record<number, boolean>>({})
   const [extractErr, setExtractErr] = useState<Record<number, string>>({})
+  // 来一问（260923 开发者指令）：实时生成一问的进行中标志
+  const [askingOne, setAskingOne] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -105,6 +109,37 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
     }
   }
 
+  /** 就地编辑候选条目（优化建议区第51轮）：成功 patch 回写返回 true；失败 toast 并保持编辑态 */
+  const doUpdateSuggestion = async (
+    q: WhoamiQuestionView,
+    index: number,
+    category: string,
+    content: string
+  ): Promise<boolean> => {
+    try {
+      patch(await window.api.whoami.suggestionUpdate(q.id, index, category, content))
+      return true
+    } catch (e) {
+      toast((e as Error).message || '保存失败')
+      return false
+    }
+  }
+
+  /** 来一问（260923 开发者指令）：AI 实时生成一问追加今日列表；新行不走 patch，需 append */
+  const doAskOne = async (): Promise<void> => {
+    if (askingOne) return
+    setAskingOne(true)
+    try {
+      const row = await window.api.whoami.askOne()
+      setData((d) => (d ? { ...d, today: [...d.today, row] } : d))
+    } catch (e) {
+      const msg = (e as Error).message
+      if (msg !== 'BUSY') toast(msg === 'LLM_NOT_CONFIGURED' ? '请先在本页上方配置 LLM' : msg || '生成失败，请稍后再试')
+    } finally {
+      setAskingOne(false)
+    }
+  }
+
   return (
     <section className="zone">
       <div className="zone-header" onClick={() => onOpenChange(!open)}>
@@ -114,6 +149,12 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
       </div>
       {open && (
         <div className="zone-body">
+          <div className="whoami-toolbar">
+            <button className="btn" disabled={askingOne} onClick={() => void doAskOne()}>
+              <span className="material-symbols-outlined">{askingOne ? 'hourglass_top' : 'bolt'}</span>
+              {askingOne ? '思考中…' : '来一问'}
+            </button>
+          </div>
           {today.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">psychology</span>
@@ -138,6 +179,7 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
               extractErr={extractErr[q.id] ?? ''}
               onRetryExtract={() => void runExtract(q)}
               onResolve={(i, accept) => void doResolve(q, i, accept)}
+              onUpdateSuggestion={(i, c, t) => doUpdateSuggestion(q, i, c, t)}
             />
           ))}
           {pending.length > 0 && (
@@ -155,6 +197,7 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
               extractErr={extractErr[q.id] ?? ''}
               onRetryExtract={() => void runExtract(q)}
               onResolve={(i, accept) => void doResolve(q, i, accept)}
+              onUpdateSuggestion={(i, c, t) => doUpdateSuggestion(q, i, c, t)}
             />
           ))}
         </div>
@@ -163,7 +206,8 @@ export default function WhoamiZone({ open, onOpenChange }: WhoamiZoneProps) {
   )
 }
 
-/** 题目行三态：待答 / 已答·提炼中 / 已答·候选待确认；跳过与已处理完收起为摘要行 */
+/** 题目行三态：待答 / 已答·提炼中 / 已答·候选待确认；跳过与已处理完收起为摘要行；
+ *  候选条目支持行内就地编辑（第51轮：铅笔 → 类别 select + 内容输入框，保存写回候选记录） */
 function WhoamiItem(props: {
   q: WhoamiQuestionView
   draft: string
@@ -174,8 +218,18 @@ function WhoamiItem(props: {
   extractErr: string
   onRetryExtract: () => void
   onResolve: (index: number, accept: boolean) => void
+  onUpdateSuggestion: (index: number, category: string, content: string) => Promise<boolean>
 }) {
   const { q } = props
+  // 候选就地编辑态（行内局部）：编辑中的候选下标 + 类别/内容草稿
+  const [editIdx, setEditIdx] = useState<number | null>(null)
+  const [editCat, setEditCat] = useState('')
+  const [editText, setEditText] = useState('')
+  const saveEdit = async (i: number): Promise<void> => {
+    const text = editText.trim()
+    if (!text || !editCat) return
+    if (await props.onUpdateSuggestion(i, editCat, text)) setEditIdx(null)
+  }
   if (q.skipped) {
     return (
       <div className="whoami-item whoami-done">
@@ -231,20 +285,61 @@ function WhoamiItem(props: {
               </button>
             </div>
           )}
-          {q.suggestions.map((s, i) => (
-            <div key={i} className="whoami-suggestion">
-              <span className="whoami-cat">{s.category}</span>
-              <span className="whoami-suggestion-content">{s.content}</span>
-              <span className="whoami-suggestion-actions">
-                <button className="btn btn-primary" onClick={() => props.onResolve(i, true)}>
-                  加入画像
-                </button>
-                <button className="btn" onClick={() => props.onResolve(i, false)}>
-                  忽略
-                </button>
-              </span>
-            </div>
-          ))}
+          {q.suggestions.map((s, i) =>
+            editIdx === i ? (
+              <div key={i} className="whoami-suggestion whoami-suggestion-editing">
+                <select className="whoami-select" value={editCat} onChange={(e) => setEditCat(e.target.value)}>
+                  {PROFILE_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="whoami-input"
+                  value={editText}
+                  placeholder="一句话概括…"
+                  onChange={(e) => setEditText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveEdit(i)
+                    else if (e.key === 'Escape') setEditIdx(null)
+                  }}
+                />
+                <span className="whoami-suggestion-actions">
+                  <button className="btn btn-primary" disabled={!editText.trim()} onClick={() => void saveEdit(i)}>
+                    保存
+                  </button>
+                  <button className="btn" onClick={() => setEditIdx(null)}>
+                    取消
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div key={i} className="whoami-suggestion">
+                <span className="whoami-cat">{s.category}</span>
+                <span className="whoami-suggestion-content">{s.content}</span>
+                <span className="whoami-suggestion-actions">
+                  <button
+                    className="icon-btn"
+                    title="编辑此条"
+                    onClick={() => {
+                      setEditIdx(i)
+                      setEditCat(s.category)
+                      setEditText(s.content)
+                    }}
+                  >
+                    <span className="material-symbols-outlined">edit</span>
+                  </button>
+                  <button className="btn btn-primary" onClick={() => props.onResolve(i, true)}>
+                    加入画像
+                  </button>
+                  <button className="btn" onClick={() => props.onResolve(i, false)}>
+                    忽略
+                  </button>
+                </span>
+              </div>
+            )
+          )}
         </>
       )}
     </div>

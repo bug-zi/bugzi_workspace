@@ -4,7 +4,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import MdDialog from '../../components/MdDialog'
+import KnowledgeLinksDialog, { type RelatedLink } from '../../components/KnowledgeLinksDialog'
 import { useToast } from '../../components/Toast'
+import { openRelated, relatedIcon } from '../../services/relatedNav'
 import type {
   AgentDomainRow,
   AgentStatusSnapshot,
@@ -19,7 +21,7 @@ type SubTab = 'discover' | 'papers'
 interface PaperDetail {
   paper: PaperRow
   interpretations: InterpretationRow[]
-  related: { dst_type: string; dst_id: number; title: string; score: number }[]
+  related: RelatedLink[]
 }
 
 const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv' }
@@ -33,7 +35,16 @@ function dateLabel(row: { date: string | null; year: number | null }): string {
   return row.year != null ? String(row.year) : ''
 }
 
-export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void }) {
+export default function LiteraturePanel({
+  onOpenAi,
+  openPaperId,
+  onOpenPaperConsumed
+}: {
+  onOpenAi?: () => void
+  /** 跨模块深链（批次F）：置值时自动打开该文献详情，消费后回调复位 */
+  openPaperId?: number | null
+  onOpenPaperConsumed?: () => void
+}) {
   const { toast } = useToast()
   const [subTab, setSubTab] = useState<SubTab>('discover')
   const [items, setItems] = useState<DiscoverItemRow[]>([])
@@ -46,6 +57,7 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
   const [forceKind, setForceKind] = useState<'digest' | 'lecture' | 'translate' | null>(null)
   const [delPaper, setDelPaper] = useState<PaperRow | null>(null)
   const [delDiscover, setDelDiscover] = useState<DiscoverItemRow | null>(null)
+  const [linksOpen, setLinksOpen] = useState(false)
   const [runningTypes, setRunningTypes] = useState<string[]>([])
   const detailIdRef = useRef<number | null>(null)
 
@@ -98,7 +110,16 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
     detailIdRef.current = detail?.paper.id ?? null
   }, [detail])
 
-  const discovered = items.filter((i) => i.status === 'discovered')
+  // 跨模块深链（批次F）：相关内容点击 → 打开指定文献详情
+  useEffect(() => {
+    if (openPaperId == null) return
+    const id = openPaperId
+    onOpenPaperConsumed?.()
+    void openDetail(id)
+  }, [openPaperId])
+
+  // 信息源·发现箱只呈论文候选（260923 开发者反馈：科普候选归万象库科普页签）
+  const discovered = items.filter((i) => i.status === 'discovered' && i.source_type !== 'article')
   const acceptedCount = items.filter((i) => i.status === 'accepted').length
   const rejectedCount = items.filter((i) => i.status === 'rejected').length
 
@@ -245,7 +266,7 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
               ))}
             </select>
           ) : (
-            <span className="module-sub">暂无启用领域</span>
+            <span className="module-sub">暂无启用深读领域</span>
           )}
           <button className="btn btn-primary" onClick={() => void runCollect()} disabled={collecting}>
             <span className="material-symbols-outlined">play_arrow</span>
@@ -276,7 +297,7 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
           {discovered.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">inbox</span>
-              发现箱空空的——点「跑一轮海选」，AI 找到的候选会先出现在这里，由你决定是否入库
+              发现箱空空的——点「跑一轮海选」，AI 找到的论文候选会先出现在这里，由你决定是否入库
             </div>
           )}
           {discovered.map((it) => (
@@ -307,7 +328,7 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
           ))}
           {(acceptedCount > 0 || rejectedCount > 0) && (
             <div className="lit-muted-row">
-              已接受 {acceptedCount} · 已拒绝 {rejectedCount}（可在正式文献区查看已入库条目）
+              已接受 {acceptedCount} · 已拒绝 {rejectedCount}（论文在正式文献区查看）
             </div>
           )}
         </div>
@@ -416,17 +437,21 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
                   {detail.related.map((r) => (
                     <div
                       className="lit-related-row"
-                      key={`${r.dst_type}-${r.dst_id}`}
+                      key={r.link_id}
                       onClick={() => {
-                        if (r.dst_type === 'paper') void openDetail(r.dst_id)
-                        else toast('词条跳转将在 2.0 二期打通')
+                        if (r.peer_type === 'paper') void openDetail(r.peer_id)
+                        else {
+                          setDetail(null)
+                          openRelated(r)
+                        }
                       }}
+                      title={r.origin === 'manual' ? '手动关联，点击打开' : `语义相似 ${Math.round(r.score * 100)}%，点击打开`}
                     >
-                      <span className="material-symbols-outlined">
-                        {r.dst_type === 'paper' ? 'description' : 'menu_book'}
-                      </span>
+                      <span className="material-symbols-outlined">{relatedIcon(r.peer_type)}</span>
                       {r.title}
-                      <span className="lit-score">{Math.round(r.score * 100)}%</span>
+                      <span className={`badge ${r.origin === 'manual' ? 'primary' : ''} lit-origin-badge`}>
+                        {r.origin === 'manual' ? '手动' : `${Math.round(r.score * 100)}%`}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -436,13 +461,21 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  void window.api.agent.askLiterature(detail.paper.id)
+                  void window.api.agent.askLiterature('paper', detail.paper.id)
                   onOpenAi?.()
                 }}
                 title="注入该文献上下文，在右栏「文献·追问」场景继续提问"
               >
                 <span className="material-symbols-outlined">forum</span>
                 追问
+              </button>
+              <button
+                className="btn"
+                onClick={() => setLinksOpen(true)}
+                title="管理本文献的手动/语义关联"
+              >
+                <span className="material-symbols-outlined">hub</span>
+                关联知识
               </button>
               <button className="btn btn-danger" onClick={() => setDelPaper(detail.paper)}>
                 <span className="material-symbols-outlined">delete</span>
@@ -467,6 +500,15 @@ export default function LiteraturePanel({ onOpenAi }: { onOpenAi?: () => void })
           onChanged={refreshDetail}
         />
       )}
+
+      {/* 关联知识管理（批次F：双向列表 + 手动添加） */}
+      <KnowledgeLinksDialog
+        open={linksOpen && detail != null}
+        srcType="paper"
+        srcId={detail?.paper.id ?? 0}
+        title={detail?.paper.title ?? ''}
+        onClose={() => setLinksOpen(false)}
+      />
 
       {/* 重生成确认 */}
       <ConfirmDialog

@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers', 'science']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -1241,6 +1241,62 @@ function migrate(): void {
     d.exec('ALTER TABLE discover_items ADD COLUMN date TEXT')
     d.exec('ALTER TABLE papers ADD COLUMN date TEXT')
     d.exec('PRAGMA user_version = 50')
+  }
+
+  if (version < 51) {
+    // v51：超级工作台 2.0 批次D（科普线，二期）——科普文章表（转正入库，en/zh 分流解读）+
+    // 科普划词高光表；interpretations 重建扩展 kind CHECK 加 'light'（中文轻加工产物台账，
+    // 小表同事务重建→拷贝→改名，idx_interpret_owner 随 DROP 一并重建；显式事务失败整体回滚）。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE science_articles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      authors TEXT NOT NULL DEFAULT '[]',
+      year INTEGER,
+      date TEXT,
+      summary TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      language TEXT NOT NULL DEFAULT 'zh' CHECK (language IN ('en','zh')),
+      url TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '',
+      domain_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'meta_only' CHECK (status IN ('ready','meta_only')),
+      fulltext_path TEXT,
+      glossary TEXT,
+      concepts TEXT NOT NULL DEFAULT '[]',
+      discovery_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+      d.exec(`CREATE TABLE science_highlights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      article_id INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_science_hl_article ON science_highlights(article_id)')
+      d.exec(`CREATE TABLE interpretations_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('paper','science_article','book')),
+      owner_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('digest','lecture','translation','light','book_digest')),
+      status TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('running','done','failed')),
+      md_path TEXT,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+      d.exec('INSERT INTO interpretations_new SELECT * FROM interpretations')
+      d.exec('DROP TABLE interpretations')
+      d.exec('ALTER TABLE interpretations_new RENAME TO interpretations')
+      d.exec('CREATE INDEX IF NOT EXISTS idx_interpret_owner ON interpretations(owner_type, owner_id)')
+      d.exec('PRAGMA user_version = 51')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
   }
 }
 

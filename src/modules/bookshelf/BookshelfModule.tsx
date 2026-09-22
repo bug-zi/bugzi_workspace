@@ -18,6 +18,7 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import EpubReader, { type EpubReaderHandle } from './EpubReader'
 import PdfReader, { type PdfReaderHandle } from './PdfReader'
+import BookDigestDialog from './BookDigestDialog'
 import ReaderSidebar, { flattenToc, relTime, tocAnchorAt, epubChapterAt, type ReaderLocate, type ReaderTocItem, type SidebarTab } from './ReaderSidebar'
 import { useReadingTimer } from './useReadingTimer'
 import type { ReadingMode } from './readerKeys'
@@ -98,6 +99,8 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   const [customFonts, setCustomFonts] = useState<CustomFontInfo[]>([])
   const [readerLabel, setReaderLabel] = useState('')
   const [delTarget, setDelTarget] = useState<BooksRecord | null>(null)
+  // AI 解读（批次E）：当前打开导读弹窗的书
+  const [digestBook, setDigestBook] = useState<BooksRecord | null>(null)
   const [dupPending, setDupPending] = useState<{ paths: string[]; titles: string[] } | null>(null)
   const importingRef = useRef(false)
   // ----- 阅读编排（优化第1轮） -----
@@ -274,15 +277,28 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
   }, [])
   // 总导览深链（260912）：续读直达——找书 openBook 进阅读器（列表未载完则现拉一次）
   useModuleNavigate('zangyue', (target, payload) => {
-    if (target !== 'read') return
-    const bookId = payload?.bookId
-    if (typeof bookId !== 'number') return
-    void (async () => {
-      const hit =
-        itemsRef.current.find((b) => b.id === bookId) ??
-        (await window.api.books.list()).find((b) => b.id === bookId)
-      if (hit) void openBook(hit)
-    })()
+    if (target === 'read') {
+      const bookId = payload?.bookId
+      if (typeof bookId !== 'number') return
+      void (async () => {
+        const hit =
+          itemsRef.current.find((b) => b.id === bookId) ??
+          (await window.api.books.list()).find((b) => b.id === bookId)
+        if (hit) void openBook(hit)
+      })()
+      return
+    }
+    // 批次F 相关内容跳转：打开该书的 AI 解读弹窗
+    if (target === 'open-digest') {
+      const bookId = payload?.bookId
+      if (typeof bookId !== 'number') return
+      void (async () => {
+        const hit =
+          itemsRef.current.find((b) => b.id === bookId) ??
+          (await window.api.books.list()).find((b) => b.id === bookId)
+        if (hit) setDigestBook(hit)
+      })()
+    }
   })
 
   /** 阅读统计加载（失败静默，不阻断书架；书架 v2.0 §五） */
@@ -1004,6 +1020,16 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
                 <span className="material-symbols-outlined">drive_file_move</span>
               </button>
               <button
+                className="icon-btn bk-menu bk-menu-digest"
+                title="AI 解读（全书导读）"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDigestBook(b)
+                }}
+              >
+                <span className="material-symbols-outlined">psychology</span>
+              </button>
+              <button
                 className="icon-btn bk-menu"
                 title="删除"
                 onClick={(e) => {
@@ -1029,6 +1055,9 @@ export default function BookshelfModule(props: BookshelfModuleProps) {
       >
         将删除《{delTarget?.title}》及其封面文件与划词笔记，不可恢复（不入回收站）。
       </ConfirmDialog>
+
+      {/* AI 解读（批次E）：状态机 + 导读查看/重生成/追问 */}
+      {digestBook && <BookDigestDialog book={digestBook} onClose={() => setDigestBook(null)} />}
 
       {/* 文件夹操作菜单（重命名 / 删除） */}
       {folderAnchor && (
