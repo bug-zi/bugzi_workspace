@@ -11,7 +11,6 @@ import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
-import ProphetPanel from './ProphetPanel'
 import TwelvePanel from './TwelvePanel'
 
 export interface ZhijijiModuleProps {
@@ -63,7 +62,7 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   const [discardTarget, setDiscardTarget] = useState<ZhijijiQuestion | null>(null)
   const [needConfig, setNeedConfig] = useState(false)
   // 三 tab（2026-09-12 设计 §二）：沉淀 = 原问题+版本区；tab 不持久化（万象库/推理角惯例）
-  const [tab, setTab] = useState<'core' | 'prophet' | 'twelve'>('core')
+  const [tab, setTab] = useState<'core' | 'twelve'>('core')
   // 问题分级（优化建议区 260912）：AI 出题候选 / 补评 / 改星菜单 / 星级筛选
   const [suggestions, setSuggestions] = useState<{ title: string; stars: number; note: string }[] | null>(
     null
@@ -73,7 +72,7 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   const [rateJob, setRateJob] = useState<string | null>(null)
   const [starMenu, setStarMenu] = useState<{ q: ZhijijiQuestion; anchor: HTMLElement } | null>(null)
   const [starFilter, setStarFilter] = useState<'all' | '4plus' | '5' | 'unrated'>('all')
-  const switchTab = (t: 'core' | 'prophet' | 'twelve'): void => {
+  const switchTab = (t: 'core' | 'twelve'): void => {
     setTab(t)
     if (t !== 'core') {
       setViewQ(null)
@@ -325,13 +324,10 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         )}
       </div>
 
-      {/* 三 tab：沉淀 ｜ 预言家 ｜ 十二问题（recycle-tabs 同款样式，万象库百科|辩真一致） */}
+      {/* 双 tab：沉淀 ｜ 十二问题（260924 预言家拆入答疑店） */}
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'core' ? ' active' : ''}`} onClick={() => switchTab('core')}>
           沉淀
-        </button>
-        <button className={`recycle-tab${tab === 'prophet' ? ' active' : ''}`} onClick={() => switchTab('prophet')}>
-          预言家
         </button>
         <button className={`recycle-tab${tab === 'twelve' ? ' active' : ''}`} onClick={() => switchTab('twelve')}>
           十二问题
@@ -632,13 +628,6 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         </>
       )}
 
-      {tab === 'prophet' && (
-        <ProphetPanel
-          onOpenAi={props.onOpenAi}
-          bumpAi={props.bumpAi}
-          onNavigateToProfile={props.onNavigateToProfile}
-        />
-      )}
       {tab === 'twelve' && (
         <TwelvePanel onOpenAi={props.onOpenAi} onNavigateToProfile={props.onNavigateToProfile} />
       )}

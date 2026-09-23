@@ -1,6 +1,6 @@
-// 学习库模块（学习库 specs 全量）：今日学习 / 知识树 / 高光笔记 三 tab
-// 知识树（领域→主题→知识点，懒建树）+ 每日新学 3-5 张 + 间隔复习 1/3/7/15 天 + 划词高光/问 AI。
-// 卡片 md 在 md/learn/<id>.md（扁平路径）；划词问 AI 直发弹窗右侧拓展坞（学习·问答频道，与右栏同会话数据）。
+// 学习库模块（学习库 specs 全量 + 260924 面经题库化）：今日刷题 / 题库 / 知识树 / 高光笔记 四 tab
+// 面经题库刷题为主循环（先回忆再对照自评 + 间隔复习 1/3/7/15 天）；知识树降级为自学参考区原样保留。
+// 卡片 md 在 md/learn/<id>.md；划词问 AI 直发弹窗右侧拓展坞（学习·问答频道，与右栏同会话数据）。
 import { useCallback, useEffect, useState } from 'react'
 import type {
   LearnDomain,
@@ -8,7 +8,8 @@ import type {
   LearnCardRow,
   LearnDailyRow,
   LearnHighlightRow,
-  LearnNode
+  LearnNode,
+  InterviewQuestionRow
 } from '../../renderer/api'
 import { SettingsKeys } from '../../shared/types'
 import MdDialog from '../../components/MdDialog'
@@ -16,8 +17,8 @@ import { ChannelChatPanel, ChannelChatRail, CHAT_PANEL_W_DEFAULT, CHAT_PANEL_W_M
 import MdView from '../../components/MdView'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
-import LearnQuizZone from './LearnQuizZone'
 import LearnTaskDialog from './LearnTaskDialog'
+import InterviewBankPanel from './InterviewBankPanel'
 import { cancelLearnGen, enqueueLearnGen, setLearnQueueHandlers, useLearnQueue } from '../../services/learnGenQueue'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
@@ -56,8 +57,9 @@ function stateIcon(n: { state: string; review_stage: number }): string {
   return n.review_stage >= 5 ? 'verified' : 'task_alt'
 }
 
-/** 行首图标（待加载队列版）：排队中/生成中优先于学习状态图标（相位来自 learnGenQueue store） */
-function RowIcon(props: { n: LearnNode; gen?: 'queued' | 'loading' }) {
+/** 行首图标（待加载队列版）：排队中/生成中优先于学习状态图标（相位来自 learnGenQueue store）。
+ *  行参放宽为 {state, review_stage}——面经题行（InterviewQuestionRow）与知识树行（LearnNode）共用 */
+function RowIcon(props: { n: { state: string; review_stage: number }; gen?: 'queued' | 'loading' }) {
   if (props.gen != null) {
     return (
       <span className={`material-symbols-outlined${props.gen === 'loading' ? ' spin' : ''}`}>
@@ -79,17 +81,14 @@ type DigJob = { phase: 'loading' | 'done'; content: string; jobId: string | null
 
 export default function LearnModule() {
   const { toast } = useToast()
-  const [tab, setTab] = useState<'daily' | 'tree' | 'notes'>('daily')
-  // 今日学习
-  const [learnedList, setLearnedList] = useState<LearnDailyRow[]>([])
-  const [reviewList, setReviewList] = useState<LearnDailyRow[]>([])
+  const [tab, setTab] = useState<'daily' | 'bank' | 'tree' | 'notes'>('daily')
+  // 今日刷题（面经题库化 260924）
+  const [learnedList, setLearnedList] = useState<InterviewQuestionRow[]>([])
+  const [reviewList, setReviewList] = useState<InterviewQuestionRow[]>([])
   const [req, setReq] = useState<{
     goal: number
     done: number
     streak: number
-    quizStatus: 'answering' | 'graded' | null
-    quizAnswered: number
-    quizTotal: number
   } | null>(null)
   // 知识树
   const [domains, setDomains] = useState<LearnDomain[]>([])
@@ -105,11 +104,11 @@ export default function LearnModule() {
   const [queueOpen, setQueueOpen] = useState(false)
   // 主题折叠（优化区3）：会话内记忆
   const [collapsedTopics, setCollapsedTopics] = useState<Set<number>>(new Set())
-  // 今日小测答错的节点（LearnQuizZone 上抛，行内标记）
-  const [wrongNodes, setWrongNodes] = useState<Set<number>>(new Set())
+  // 面经刷题弹窗（面经题库化 §五）：recallQ=回忆态（只显题干），openQ=对照态（MdDialog 展开答案）
+  const [recallQ, setRecallQ] = useState<InterviewQuestionRow | null>(null)
+  const [openQ, setOpenQ] = useState<InterviewQuestionRow | null>(null)
   // 实战任务弹窗（主题行入口）
   const [taskTopic, setTaskTopic] = useState<{ id: number; title: string } | null>(null)
-  const [randomJob, setRandomJob] = useState<string | null>(null)
   // 生成 job（建树/展开/手动加）
   const [treeJob, setTreeJob] = useState<string | null>(null)
   const [expandJob, setExpandJob] = useState<string | null>(null)
@@ -147,16 +146,13 @@ export default function LearnModule() {
   }, [])
 
   const loadDaily = useCallback(async () => {
-    const v = await window.api.learn.daily()
+    const v = await window.api.interview.daily()
     setLearnedList(v.learned)
     setReviewList(v.review)
     setReq({
       goal: v.goal,
       done: v.done,
-      streak: v.streak,
-      quizStatus: v.quizStatus,
-      quizAnswered: v.quizAnswered,
-      quizTotal: v.quizTotal
+      streak: v.streak
     })
   }, [])
 
@@ -181,13 +177,16 @@ export default function LearnModule() {
     void reloadAll()
   }, [reloadAll])
 
-  // keep-alive：切回学习库刷新（后台泵可能已补卡）+ 泵触发
+  // keep-alive：切回学习库刷新（后台泵可能已补卡）+ 双泵/定档触发 + 题库存量提醒
   useModuleActivated('learn', () => {
     void loadDomains()
     void loadDaily()
     void loadHighlights()
     if (domainId != null) void loadTree(domainId)
     void window.api.learn.stockCheck()
+    void window.api.interview.stockCheck().then((todoTotal) => {
+      if (todoTotal < 10) toast(`题库存量仅 ${todoTotal} 道，去「题库」搜集一批面经`)
+    })
   })
   // 总导览深链（260912）：切到今日学习；深挖/队列生成完成跳转（260915）：立即打开该卡片弹窗
   useModuleNavigate('learn', (target, payload) => {
@@ -230,12 +229,11 @@ export default function LearnModule() {
     )
   }, [])
 
-  /** 待加载队列：就绪后行内实时补上 content_ready（免整树重拉） */
+  /** 待加载队列：就绪后树行内实时补上 content_ready（免整树重拉；今日刷题列表无队列概念不再回写） */
   const markCardReady = useCallback((id: number) => {
-    const patch = <T extends LearnNode>(rows: T[]): T[] =>
-      rows.map((r) => (r.id === id ? { ...r, content_ready: 1 as const } : r))
-    setLearnedList((rows) => patch(rows))
-    setTree((topics) => topics.map((t) => ({ ...t, points: patch(t.points) })))
+    setTree((topics) =>
+      topics.map((t) => ({ ...t, points: t.points.map((r) => (r.id === id ? { ...r, content_ready: 1 as const } : r)) }))
+    )
   }, [])
 
   /** 队列回调注册：就绪回写行 content_ready + 完成轻提示（点击跳回开卡，260915 反馈修订）；
@@ -276,18 +274,36 @@ export default function LearnModule() {
     })
   }
 
-  /** 随机来一条：优先已生成未学卡秒开；无则现场生成 */
+  /** 随机来一条（面经题库化）：todo 池随机秒开（题目入库即带答案，零生成），进回忆态 */
   const runRandom = async (): Promise<void> => {
-    if (randomJob) return
-    const jobId = crypto.randomUUID()
-    setRandomJob(jobId)
     try {
-      setCard(await window.api.learn.randomOne(jobId))
+      const q = await window.api.interview.randomOne()
+      openQuestion(q)
     } catch (e) {
-      handleAiError(e)
-    } finally {
-      setRandomJob(null)
+      toast(String((e as Error).message).replace(/^.*Error: /, ''))
     }
+  }
+
+  /** 打开面试题：先进回忆态（只显题干），点「查看参考答案」才进对照态 */
+  const openQuestion = (q: InterviewQuestionRow): void => {
+    setOpenQ(null)
+    setRecallQ(q)
+  }
+
+  /** 自评（会了/记住了/忘记了）：关弹窗 + 刷新，completed toast 与原学习口径一致 */
+  const markQ = (id: number, action: 'learn' | 'remember' | 'forget'): void => {
+    void window.api.interview.mark(id, action).then((r) => {
+      if (!r.ok) return
+      setOpenQ(null)
+      setRecallQ(null)
+      void loadDaily()
+      toast(r.completed ? '今日要求完成！' : action === 'learn' ? '已会，明天复习' : '已记录')
+    })
+  }
+
+  /** 新题「还不熟」：不落状态不计数，明天题库里还会遇到（间隔重复的自然重现身机制） */
+  const skipQ = (): void => {
+    toast('别急——明天题库里还会遇到它')
   }
 
   /** 建树（懒建树显式触发） */
@@ -546,14 +562,6 @@ export default function LearnModule() {
   }
 
   const currentDomain = domains.find((d) => d.id === domainId) ?? null
-  const quizLabel =
-    req == null
-      ? ''
-      : req.quizStatus === 'graded'
-        ? '已交卷'
-        : req.quizStatus === 'answering'
-          ? `${req.quizAnswered}/${req.quizTotal} 已答`
-          : '未出卷'
   const queueLoading = queue.items.filter((i) => i.phase === 'loading').length
   const queueTotal = queue.items.length
 
@@ -646,8 +654,11 @@ export default function LearnModule() {
 
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'daily' ? ' active' : ''}`} onClick={() => setTab('daily')}>
-          今日学习
+          今日刷题
           <span className="zone-count">{learnedList.length + reviewList.length}</span>
+        </button>
+        <button className={`recycle-tab${tab === 'bank' ? ' active' : ''}`} onClick={() => setTab('bank')}>
+          题库
         </button>
         <button className={`recycle-tab${tab === 'tree' ? ' active' : ''}`} onClick={() => setTab('tree')}>
           知识树
@@ -658,9 +669,9 @@ export default function LearnModule() {
         </button>
       </div>
 
-      {/* ===== 今日学习 ===== */}
+      {/* ===== 今日刷题（面经题库化 260924） ===== */}
       <div className={tab === 'daily' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'daily'}>
-        {/* 今日要求卡（每日要求设计 §五）：目标进度 + 小测状态 + 打卡态 */}
+        {/* 今日要求卡：目标进度 + 打卡态 */}
         <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className="material-symbols-outlined">flag</span>
@@ -671,7 +682,7 @@ export default function LearnModule() {
                 : `未完成${req && req.streak > 0 ? ` · 连胜 ${req.streak} 天` : ''}`}
             </span>
             <span className="module-sub" style={{ marginLeft: 'auto' }}>
-              新学 {learnedList.length}/{req?.goal ?? '--'} · 小测{quizLabel}
+              刷题 {learnedList.length}/{req?.goal ?? '--'}
             </span>
           </div>
           <div className="learn-goal-bar">
@@ -683,48 +694,35 @@ export default function LearnModule() {
         </div>
 
         <div className="card" style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button className="btn btn-primary" onClick={() => void runRandom()} disabled={randomJob != null}>
-            <span className={`material-symbols-outlined${randomJob ? ' spin' : ''}`}>casino</span>
-            {randomJob ? '生成中…' : '随机来一条'}
+          <button className="btn btn-primary" onClick={() => void runRandom()}>
+            <span className="material-symbols-outlined">casino</span>
+            随机来一条
           </button>
-          {randomJob && (
-            <button className="btn" onClick={() => void window.api.ai.cancel(randomJob)} title="取消本次生成">
-              <span className="material-symbols-outlined">stop_circle</span>
-              取消
-            </button>
-          )}
           <span className="module-sub" style={{ marginLeft: 'auto' }}>
-            学会了进入 1/3/7/15 天间隔复习
+            会了进入 1/3/7/15 天间隔复习，「还不熟」明天再见
           </span>
         </div>
 
         <div className="zone">
           <div className="zone-header" style={{ cursor: 'default' }}>
             <span className="material-symbols-outlined">fiber_new</span>
-            <span>今日已学</span>
+            <span>今日已刷</span>
             <span className="zone-count">{learnedList.length}</span>
           </div>
           <div className="zone-body">
             {learnedList.length === 0 && (
               <div className="empty-state">
                 <span className="material-symbols-outlined">radio_button_unchecked</span>
-                今日还没学会新知识点——去「知识树」自己挑一张，或点「随机来一条」
+                今日还没刷题——点「随机来一条」，或去「题库」挑一道
               </div>
             )}
             {learnedList.map((n) => (
-              <div className="row-item" key={n.id} onClick={() => openCard(n)}>
+              <div className="row-item" key={n.id} onClick={() => openQuestion(n)}>
                 <RowIcon n={n} />
                 <div className="row-main">
-                  <div className="row-title">
-                    {n.title}
-                    {wrongNodes.has(n.id) && (
-                      <span className="material-symbols-outlined quiz-wrong-mark" title="今日小测答错">
-                        error
-                      </span>
-                    )}
-                  </div>
+                  <div className="row-title">{n.question}</div>
                   <div className="row-sub">
-                    {n.domain_name} · {n.topic_title} ｜ {n.summary}
+                    {n.category_name} ｜ 已会{n.source ? ` ｜ ${n.source}` : ''}
                   </div>
                 </div>
               </div>
@@ -742,16 +740,16 @@ export default function LearnModule() {
             {reviewList.length === 0 && (
               <div className="empty-state">
                 <span className="material-symbols-outlined">history_edu</span>
-                今日暂无到期复习卡
+                今日暂无到期复习题
               </div>
             )}
             {reviewList.map((n) => (
-              <div className="row-item" key={n.id} onClick={() => openCard(n)}>
+              <div className="row-item" key={n.id} onClick={() => openQuestion(n)}>
                 <RowIcon n={n} />
                 <div className="row-main">
-                  <div className="row-title">{n.title}</div>
+                  <div className="row-title">{n.question}</div>
                   <div className="row-sub">
-                    {n.domain_name} · {n.topic_title} ｜ 第 {[0, 1, 3, 7, 15][n.review_stage] ?? 0}天档
+                    {n.category_name} ｜ 第 {[0, 1, 3, 7, 15][n.review_stage] ?? 0}天档
                   </div>
                 </div>
               </div>
@@ -759,15 +757,87 @@ export default function LearnModule() {
           </div>
         </div>
 
-        <LearnQuizZone
-          learnedCount={learnedList.length}
-          onWrongChange={setWrongNodes}
-          onChanged={() => void loadDaily()}
-        />
+        {/* 回忆态：只显题干，先自己回忆/口述，再翻答案（面经题库化 §五.1-2） */}
+        {recallQ && !openQ && (
+          <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setRecallQ(null)}>
+            <div className="dialog" style={{ width: 560 }}>
+              <div className="dialog-header">回忆这道题</div>
+              <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span className="dialog-title-tag">{recallQ.category_name}</span>
+                  {recallQ.source && <span className="module-sub">{recallQ.source}</span>}
+                </div>
+                <div style={{ fontSize: '1.15em', fontWeight: 600, lineHeight: 1.7 }}>{recallQ.question}</div>
+                <div className="module-sub">先在脑子里把答案过一遍（或口述一遍），再对照参考答案查漏。</div>
+              </div>
+              <div className="dialog-footer" style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={() => setRecallQ(null)}>
+                  关闭
+                </button>
+                <button className="btn btn-primary" onClick={() => setOpenQ(recallQ)}>
+                  <span className="material-symbols-outlined">visibility</span>
+                  查看参考答案
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* 对照态：MdDialog 展开参考答案 + footerBar 自评条（零 MdDialog 改动） */}
+        {openQ && (
+          <MdDialog
+            open
+            title={openQ.question}
+            titleTag={openQ.category_name}
+            subtitle={openQ.source || undefined}
+            filePath={openQ.answer_path}
+            footerBar={
+              openQ.state === 'todo' ? (
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button className="btn" onClick={skipQ}>
+                    还不熟
+                  </button>
+                  <button className="btn btn-primary" onClick={() => markQ(openQ.id, 'learn')}>
+                    会了
+                  </button>
+                </div>
+              ) : isDue(openQ) ? (
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button className="btn" onClick={() => markQ(openQ.id, 'forget')}>
+                    忘记了
+                  </button>
+                  <button className="btn btn-primary" onClick={() => markQ(openQ.id, 'remember')}>
+                    记住了
+                  </button>
+                </div>
+              ) : (
+                <div className="module-sub" style={{ textAlign: 'right' }}>
+                  {openQ.review_stage >= 5
+                    ? '已毕业'
+                    : openQ.next_review_at != null
+                      ? `已会 · ${daysUntil(openQ.next_review_at) <= 1 ? '明天' : `${daysUntil(openQ.next_review_at)} 天后`}复习`
+                      : '已会'}
+                </div>
+              )
+            }
+            onClose={() => {
+              setOpenQ(null)
+              setRecallQ(null)
+              void loadDaily()
+            }}
+          />
+        )}
+      </div>
+
+      {/* ===== 题库 ===== */}
+      <div className={tab === 'bank' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'bank'}>
+        <InterviewBankPanel />
       </div>
 
       {/* ===== 知识树 ===== */}
       <div className={tab === 'tree' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'tree'}>
+        <div className="module-sub" style={{ padding: '0 2px 8px' }}>
+          自学参考区 · 不计入每日要求（打卡以「今日刷题」为准）
+        </div>
         <div className="recycle-tabs" style={{ flexWrap: 'wrap' }}>
           {domains.map((dm) => (
             <button

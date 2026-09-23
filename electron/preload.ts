@@ -783,8 +783,6 @@ const api = {
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard: (jobId: string, id: number): Promise<import('../src/shared/types').LearnCardRow> =>
       ipcRenderer.invoke('learn:getCard', jobId, id),
-    /** 今日要求汇总（learned_at 今日动态列表 + 复习 + goal/done/streak/小测状态；触发幂等定档 + 后台泵） */
-    daily: (): Promise<import('../src/shared/types').LearnDailySummary> => ipcRenderer.invoke('learn:daily'),
     /** 随机来一条：优先抽已生成的未学卡秒开；无则现场生成（可取消） */
     randomOne: (jobId: string): Promise<import('../src/shared/types').LearnCardRow> =>
       ipcRenderer.invoke('learn:randomOne', jobId),
@@ -848,6 +846,51 @@ const api = {
     /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
     digApply: (nodeId: number, content: string): Promise<{ md: string }> =>
       ipcRenderer.invoke('learn:digApply', nodeId, content)
+  },
+  interview: {
+    categories: (): Promise<import('../src/shared/types').InterviewCategory[]> =>
+      ipcRenderer.invoke('interview:categories'),
+    categoryCreate: (name: string): Promise<import('../src/shared/types').InterviewCategory> =>
+      ipcRenderer.invoke('interview:categoryCreate', name),
+    categoryRename: (id: number, name: string): Promise<boolean> =>
+      ipcRenderer.invoke('interview:categoryRename', id, name),
+    categoryReorder: (id: number, dir: 'up' | 'down'): Promise<boolean> =>
+      ipcRenderer.invoke('interview:categoryReorder', id, dir),
+    /** 删分类：其下题目级联入回收站（明示计数，二次确认在渲染层） */
+    categoryDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('interview:categoryDelete', id),
+    /** 题目列表（categoryId null = 全部；行含 category_name） */
+    questions: (categoryId: number | null): Promise<import('../src/shared/types').InterviewQuestionRow[]> =>
+      ipcRenderer.invoke('interview:questions', categoryId),
+    /** 随机来一条：todo 池随机秒开（题目入库即带答案，零生成） */
+    randomOne: (): Promise<import('../src/shared/types').InterviewQuestionRow> =>
+      ipcRenderer.invoke('interview:randomOne'),
+    /** 状态机操作：learn=会了(记 learned_at) | remember | forget | reburn=回炉(毕业题重置回待刷)；completed=本次操作使每日要求达成 */
+    mark: (
+      id: number,
+      action: 'learn' | 'remember' | 'forget' | 'reburn'
+    ): Promise<{ ok: boolean; completed: boolean }> => ipcRenderer.invoke('interview:mark', id, action),
+    /** 手动添加题（答案空 → fire-and-forget AI 补全）；重复题抛 DUP_QUESTION */
+    questionAdd: (categoryId: number, question: string, answer: string): Promise<number> =>
+      ipcRenderer.invoke('interview:questionAdd', categoryId, question, answer),
+    questionMove: (id: number, categoryId: number): Promise<boolean> =>
+      ipcRenderer.invoke('interview:questionMove', id, categoryId),
+    questionDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('interview:questionDelete', id),
+    /** 待审核列表（pending，联建议分类名） */
+    intakeList: (): Promise<import('../src/shared/types').InterviewIntakeRow[]> =>
+      ipcRenderer.invoke('interview:intakeList'),
+    /** 采纳（可改分类：暂存 md 移为正式路径） */
+    intakeAdopt: (id: number, categoryId: number): Promise<boolean> =>
+      ipcRenderer.invoke('interview:intakeAdopt', id, categoryId),
+    intakeDiscard: (id: number): Promise<boolean> => ipcRenderer.invoke('interview:intakeDiscard', id),
+    /** 全部采纳（未指定分类归第一个分类）/ 全部丢弃 */
+    intakeBatch: (adopt: boolean): Promise<boolean> => ipcRenderer.invoke('interview:intakeBatch', adopt),
+    /** 面经每日要求汇总（触发幂等定档；learn_daily 所有权在面经题库） */
+    daily: (): Promise<import('../src/shared/types').InterviewDailySummary> =>
+      ipcRenderer.invoke('interview:daily'),
+    /** 触发搜集批次（agent 队列 interview_collect，返回 runId；进度/完成经 agent:status） */
+    collect: (): Promise<number> => ipcRenderer.invoke('interview:collect'),
+    /** 进模块检查：幂等定档 + 返回 todo 存量（< 10 渲染层提醒去搜集） */
+    stockCheck: (): Promise<number> => ipcRenderer.invoke('interview:stockCheck')
   },
   music: {
     list: (): Promise<import('../src/shared/types').MusicListResult> => ipcRenderer.invoke('music:list'),

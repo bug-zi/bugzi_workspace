@@ -26,7 +26,9 @@ import {
   insertQuizBankRows,
   recordQuizAnswer
 } from './services/wikiQuizStock'
-import { ensureDailyQueue, ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
+import { ensureLearnStock, addDaysLocal, learnStreak, localNowIso } from './services/learnStock'
+import { ensureInterviewDaily, questionNorm, interviewLearnedToday } from './services/interviewBank'
+import './services/agent/interviewCollect' // 注册 interview_collect 任务（import 即注册）
 import {
   whoamiGet,
   whoamiGenerateIpc,
@@ -118,6 +120,7 @@ import {
   judgeWallAnswer,
   wallStreak,
   localDateStr,
+  supplementInterviewAnswer,
   WALL_TYPE_LIST
 } from './ai/services'
 import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
@@ -1220,44 +1223,6 @@ export function registerIpc(): void {
     d.prepare('UPDATE learn_daily SET done = 1 WHERE date = ?').run(today)
     return true
   }
-  ipcMain.handle('learn:daily', () => {
-    ensureDailyQueue() // 幂等定档（纯 SQL）；随后 fire-and-forget 泵补备学池
-    void ensureLearnStock()
-    const d = getDb()
-    const today = localDateStr()
-    const row = d.prepare('SELECT goal, review_ids, done FROM learn_daily WHERE date = ?').get(today) as
-      | { goal: number; review_ids: string; done: number }
-      | undefined
-    if (!row) {
-      return { learned: [], review: [], goal: 0, done: 0, streak: 0, quizStatus: null, quizAnswered: 0, quizTotal: 0 }
-    }
-    const reviewIds = JSON.parse(row.review_ids) as number[]
-    const reviewRows =
-      reviewIds.length > 0
-        ? (d
-            .prepare(`${learnCardSql} AND n.id IN (${reviewIds.map(() => '?').join(',')})`)
-            .all(...reviewIds) as unknown as LearnDailyRow[])
-        : []
-    // 今日已学动态列表（learned_at 本地日期 = 今天；取代原 new_ids 定档列表）
-    const learned = d
-      .prepare(
-        `${learnCardSql} AND n.learned_at IS NOT NULL AND substr(n.learned_at, 1, 10) = ? ORDER BY n.learned_at`
-      )
-      .all(today) as unknown as LearnDailyRow[]
-    const quiz = d.prepare('SELECT status, answers, questions FROM learn_quiz WHERE date = ?').get(today) as
-      | { status: string; answers: string; questions: string }
-      | undefined
-    return {
-      learned,
-      review: reviewRows,
-      goal: row.goal,
-      done: row.done,
-      streak: learnStreak(),
-      quizStatus: (quiz?.status as 'answering' | 'graded' | null) ?? null,
-      quizAnswered: quiz ? (JSON.parse(quiz.answers) as unknown[]).length : 0,
-      quizTotal: quiz ? (JSON.parse(quiz.questions) as unknown[]).length : 0
-    }
-  })
   ipcMain.handle('learn:randomOne', async (_e, jobId: string) => {
     const d = getDb()
     // 已生成的未学卡优先（秒开——泵产即备选池）；无才现场生成（生成中可取消）
@@ -1487,8 +1452,8 @@ export function registerIpc(): void {
         "UPDATE learn_nodes SET state = 'learned', review_stage = 1, next_review_at = ?, learned_at = ? WHERE id = ?"
       ).run(addDaysLocal(1), localNowIso(), id)
       void ensureLearnStock()
-      const completed = completeDailyIfReady()
-      return { ok: true, completed }
+      // done 从此只由面经 interview:mark 联动（面经题库化：知识树自学不再驱动打卡）
+      return { ok: true, completed: false }
     }
     // remember/forget 仅到期卡可用（渲染层双钮也只在到期卡显示）
     if (
@@ -1525,6 +1490,312 @@ export function registerIpc(): void {
   ipcMain.handle('learn:stockCheck', () => {
     void ensureLearnStock()
     return true
+  })
+  // ---------- 学习库·面经题库（260924 面经题库化） ----------
+  const interviewSql =
+    'SELECT q.*, c.name AS category_name FROM interview_questions q JOIN interview_categories c ON q.category_id = c.id WHERE q.deleted_at IS NULL'
+  ipcMain.handle('interview:categories', () =>
+    getDb()
+      .prepare('SELECT id, name, sort FROM interview_categories ORDER BY sort, id')
+      .all()
+  )
+  ipcMain.handle('interview:categoryCreate', (_e, name: string) => {
+    const n = name.trim()
+    if (!n) throw new Error('分类名不能为空')
+    if (getDb().prepare('SELECT id FROM interview_categories WHERE name = ?').get(n)) throw new Error('DUP_CATEGORY')
+    const r = getDb()
+      .prepare(
+        'INSERT INTO interview_categories (name, sort, created_at) VALUES (?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM interview_categories), ?)'
+      )
+      .run(n, nowIso())
+    return getDb()
+      .prepare('SELECT id, name, sort FROM interview_categories WHERE id = ?')
+      .get(Number(r.lastInsertRowid))
+  })
+  ipcMain.handle('interview:categoryRename', (_e, id: number, name: string) => {
+    const n = name.trim()
+    if (!n) throw new Error('分类名不能为空')
+    try {
+      getDb()
+        .prepare('UPDATE interview_categories SET name = ? WHERE id = ?')
+        .run(n, id)
+    } catch (e) {
+      if (String((e as Error).message).includes('UNIQUE')) throw new Error('DUP_CATEGORY')
+      throw e
+    }
+    return true
+  })
+  ipcMain.handle('interview:categoryReorder', (_e, id: number, dir: 'up' | 'down') => {
+    const d = getDb()
+    const cur = d.prepare('SELECT id, sort FROM interview_categories WHERE id = ?').get(id) as
+      | { id: number; sort: number }
+      | undefined
+    if (!cur) return false
+    const neighbor = (
+      dir === 'up'
+        ? d.prepare('SELECT id, sort FROM interview_categories WHERE sort < ? ORDER BY sort DESC LIMIT 1').get(cur.sort)
+        : d.prepare('SELECT id, sort FROM interview_categories WHERE sort > ? ORDER BY sort ASC LIMIT 1').get(cur.sort)
+    ) as { id: number; sort: number } | undefined
+    if (!neighbor) return false
+    d.exec('BEGIN')
+    try {
+      d.prepare('UPDATE interview_categories SET sort = ? WHERE id = ?').run(-1, cur.id)
+      d.prepare('UPDATE interview_categories SET sort = ? WHERE id = ?').run(cur.sort, neighbor.id)
+      d.prepare('UPDATE interview_categories SET sort = ? WHERE id = ?').run(neighbor.sort, cur.id)
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+    return true
+  })
+  ipcMain.handle('interview:categoryDelete', (_e, id: number) => {
+    const d = getDb()
+    const qs = d
+      .prepare('SELECT id FROM interview_questions WHERE category_id = ? AND deleted_at IS NULL')
+      .all(id) as { id: number }[]
+    for (const q of qs) discardToRecycle('interview_q', q.id) // 级联入回收站（渲染层弹窗已明示计数）
+    d.prepare('DELETE FROM interview_categories WHERE id = ?').run(id)
+    return true
+  })
+  ipcMain.handle('interview:questions', (_e, categoryId: number | null) =>
+    categoryId == null
+      ? getDb()
+          .prepare(`${interviewSql} ORDER BY q.id DESC`)
+          .all()
+      : getDb()
+          .prepare(`${interviewSql} AND q.category_id = ? ORDER BY q.id DESC`)
+          .all(categoryId)
+  )
+  ipcMain.handle('interview:randomOne', () => {
+    const rows = getDb()
+      .prepare(`${interviewSql} AND q.state = 'todo' ORDER BY RANDOM() LIMIT 1`)
+      .all()
+    if (rows.length === 0) throw new Error('题库还没有未刷的题目，先「去搜集」一批面经题')
+    return rows[0]
+  })
+  ipcMain.handle('interview:mark', (_e, id: number, action: 'learn' | 'remember' | 'forget' | 'reburn') => {
+    const d = getDb()
+    const q = d
+      .prepare(
+        'SELECT state, review_stage, next_review_at FROM interview_questions WHERE id = ? AND deleted_at IS NULL'
+      )
+      .get(id) as { state: string; review_stage: number; next_review_at: string | null } | undefined
+    if (!q) throw new Error('NOT_FOUND')
+    const today = localDateStr()
+    if (action === 'learn') {
+      if (q.state !== 'todo') return { ok: false, completed: false }
+      d.prepare(
+        "UPDATE interview_questions SET state = 'learned', review_stage = 1, next_review_at = ?, learned_at = ? WHERE id = ?"
+      ).run(addDaysLocal(1), localNowIso(), id)
+      // done 联动 check-and-set：今日刷题数 ≥ goal → done=1（唯一联动点，无小测条件）
+      const row = d.prepare('SELECT goal, done FROM learn_daily WHERE date = ?').get(today) as
+        | { goal: number; done: number }
+        | undefined
+      let completed = false
+      if (row && !row.done && interviewLearnedToday() >= row.goal) {
+        d.prepare('UPDATE learn_daily SET done = 1 WHERE date = ?').run(today)
+        completed = true
+      }
+      return { ok: true, completed }
+    }
+    if (action === 'reburn') {
+      // 回炉重刷（优化建议区 260924）：仅毕业题可回炉——重置回待刷态，重新进入间隔复习轮转
+      if (q.state !== 'learned' || q.review_stage < 5) return { ok: false, completed: false }
+      d.prepare(
+        "UPDATE interview_questions SET state = 'todo', review_stage = 0, next_review_at = NULL, learned_at = NULL WHERE id = ?"
+      ).run(id)
+      return { ok: true, completed: false }
+    }
+    if (
+      q.state !== 'learned' ||
+      q.review_stage < 1 ||
+      q.review_stage > 4 ||
+      q.next_review_at == null ||
+      q.next_review_at > today
+    ) {
+      return { ok: false, completed: false }
+    }
+    if (action === 'forget') {
+      // 忘记了：重置回第 1 档，明天再来
+      d.prepare('UPDATE interview_questions SET review_stage = 1, next_review_at = ? WHERE id = ?').run(
+        addDaysLocal(1),
+        id
+      )
+      return { ok: true, completed: false }
+    }
+    const nextStage = q.review_stage + 1
+    if (nextStage >= 5) {
+      // 走完 15 天档：毕业，不再进复习
+      d.prepare('UPDATE interview_questions SET review_stage = 5, next_review_at = NULL WHERE id = ?').run(id)
+    } else {
+      const gap = nextStage === 2 ? 3 : nextStage === 3 ? 7 : 15
+      d.prepare('UPDATE interview_questions SET review_stage = ?, next_review_at = ? WHERE id = ?').run(
+        nextStage,
+        addDaysLocal(gap),
+        id
+      )
+    }
+    return { ok: true, completed: false }
+  })
+  ipcMain.handle('interview:questionAdd', (_e, categoryId: number, question: string, answer: string) => {
+    const q = question.trim()
+    if (!q) throw new Error('题干不能为空')
+    const d = getDb()
+    const norm = questionNorm(q)
+    if (d.prepare('SELECT id FROM interview_questions WHERE question_norm = ? AND deleted_at IS NULL').get(norm))
+      throw new Error('DUP_QUESTION')
+    const r = d
+      .prepare(
+        "INSERT INTO interview_questions (category_id, question, question_norm, answer_path, source, created_at) VALUES (?, ?, ?, '', 'manual', ?)"
+      )
+      .run(categoryId, q, norm, nowIso())
+    const id = Number(r.lastInsertRowid)
+    const path = `md/learn/interview/${id}.md`
+    mdWrite(path, `# ${q}\n\n${answer.trim() || '（答案生成中…）'}\n`)
+    d.prepare('UPDATE interview_questions SET answer_path = ? WHERE id = ?').run(path, id)
+    if (!answer.trim()) {
+      void supplementInterviewAnswer(id, q).catch((e: unknown) =>
+        console.warn('[interview] 补答案失败（占位保留，可双击手写）:', (e as Error).message)
+      )
+    }
+    return id
+  })
+  ipcMain.handle('interview:questionMove', (_e, id: number, categoryId: number) => {
+    if (!getDb().prepare('SELECT id FROM interview_categories WHERE id = ?').get(categoryId))
+      throw new Error('BAD_CATEGORY')
+    getDb()
+      .prepare('UPDATE interview_questions SET category_id = ? WHERE id = ?')
+      .run(categoryId, id)
+    return true
+  })
+  ipcMain.handle('interview:questionDelete', (_e, id: number) => {
+    discardToRecycle('interview_q', id)
+    return true
+  })
+  ipcMain.handle('interview:intakeList', () =>
+    getDb()
+      .prepare(
+        'SELECT i.*, c.name AS category_name FROM interview_intake i LEFT JOIN interview_categories c ON i.category_id = c.id WHERE i.status = ? ORDER BY i.id DESC'
+      )
+      .all('pending')
+  )
+  ipcMain.handle('interview:intakeAdopt', (_e, id: number, categoryId: number) => {
+    const d = getDb()
+    const row = d.prepare("SELECT * FROM interview_intake WHERE id = ? AND status = 'pending'").get(id) as
+      | { question: string; question_norm: string; answer_path: string; source: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    if (!d.prepare('SELECT id FROM interview_categories WHERE id = ?').get(categoryId)) throw new Error('BAD_CATEGORY')
+    const md = mdRead(row.answer_path)
+    const r = d
+      .prepare(
+        "INSERT INTO interview_questions (category_id, question, question_norm, answer_path, source, created_at) VALUES (?, ?, ?, '', ?, ?)"
+      )
+      .run(categoryId, row.question, row.question_norm, row.source, nowIso())
+    const qid = Number(r.lastInsertRowid)
+    const newPath = `md/learn/interview/${qid}.md`
+    mdWrite(newPath, md)
+    try {
+      mdDelete(row.answer_path)
+    } catch {
+      /* 暂存 md 已不在则忽略 */
+    }
+    d.prepare("UPDATE interview_intake SET status = 'adopted' WHERE id = ?").run(id)
+    return true
+  })
+  ipcMain.handle('interview:intakeDiscard', (_e, id: number) => {
+    const d = getDb()
+    const row = d.prepare("SELECT answer_path FROM interview_intake WHERE id = ? AND status = 'pending'").get(id) as
+      | { answer_path: string }
+      | undefined
+    if (!row) return false
+    try {
+      mdDelete(row.answer_path)
+    } catch {
+      /* 同上 */
+    }
+    d.prepare("UPDATE interview_intake SET status = 'discarded' WHERE id = ?").run(id)
+    return true
+  })
+  ipcMain.handle('interview:intakeBatch', (_e, adopt: boolean) => {
+    const d = getDb()
+    const rows = d.prepare("SELECT id, answer_path FROM interview_intake WHERE status = 'pending'").all() as {
+      id: number
+      answer_path: string
+    }[]
+    if (adopt) {
+      const first = d.prepare('SELECT id FROM interview_categories ORDER BY sort, id LIMIT 1').get() as
+        | { id: number }
+        | undefined
+      if (!first) throw new Error('没有分类，请先建分类')
+      for (const row of rows) {
+        try {
+          const r = d
+            .prepare(
+              "INSERT INTO interview_questions (category_id, question, question_norm, answer_path, source, created_at) SELECT category_id, question, question_norm, '', source, created_at FROM interview_intake WHERE id = ?"
+            )
+            .run(row.id)
+          const qid = Number(r.lastInsertRowid)
+          mdWrite(`md/learn/interview/${qid}.md`, mdRead(row.answer_path))
+          d.prepare("UPDATE interview_intake SET status = 'adopted' WHERE id = ?").run(row.id)
+        } catch {
+          /* 单条失败跳过 */
+        }
+      }
+    } else {
+      for (const row of rows) {
+        try {
+          mdDelete(row.answer_path)
+        } catch {
+          /* 同上 */
+        }
+        d.prepare("UPDATE interview_intake SET status = 'discarded' WHERE id = ?").run(row.id)
+      }
+    }
+    return true
+  })
+  ipcMain.handle('interview:daily', () => {
+    ensureInterviewDaily() // 幂等定档（learn_daily 所有权已迁入面经题库）
+    const d = getDb()
+    const today = localDateStr()
+    const row = d.prepare('SELECT goal, review_ids, done FROM learn_daily WHERE date = ?').get(today) as
+      | { goal: number; review_ids: string; done: number }
+      | undefined
+    const reviewIds = row ? (JSON.parse(row.review_ids) as number[]) : []
+    const review =
+      reviewIds.length > 0
+        ? (d
+            .prepare(`${interviewSql} AND q.id IN (${reviewIds.map(() => '?').join(',')})`)
+            .all(...reviewIds) as unknown[])
+        : []
+    const learned = d
+      .prepare(
+        `${interviewSql} AND q.learned_at IS NOT NULL AND substr(q.learned_at, 1, 10) = ? ORDER BY q.learned_at`
+      )
+      .all(today) as unknown[]
+    const todoTotal = (
+      d
+        .prepare("SELECT COUNT(*) AS c FROM interview_questions WHERE state = 'todo' AND deleted_at IS NULL")
+        .get() as { c: number }
+    ).c
+    return {
+      learned,
+      review,
+      goal: row?.goal ?? 0,
+      done: row?.done ?? 0,
+      streak: learnStreak(),
+      todoTotal
+    }
+  })
+  ipcMain.handle('interview:collect', () => enqueue('interview_collect', { trigger: 'manual' }))
+  ipcMain.handle('interview:stockCheck', () => {
+    ensureInterviewDaily()
+    return (
+      getDb()
+        .prepare("SELECT COUNT(*) AS c FROM interview_questions WHERE state = 'todo' AND deleted_at IS NULL")
+        .get() as { c: number }
+    ).c
   })
   ipcMain.handle('learn:highlights', () =>
     getDb()

@@ -13,8 +13,6 @@ import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { openRelated, relatedIcon } from '../../services/relatedNav'
-import VerifyPanel from './VerifyPanel'
-import QaPanel from './QaPanel'
 import SciencePanel from './SciencePanel'
 
 export interface WikiModuleProps {
@@ -42,8 +40,8 @@ function termExampleOf(sectionName: string): string {
 export default function WikiModule(props: WikiModuleProps) {
   const { toast } = useToast()
   const [view, setView] = useState<View>({ kind: 'overview' })
-  // 四页签 tab（260908 辩真阁并入；260912 知识问答加入；260922 科普线加入；默认百科，选择不持久化——推理角同款）
-  const [tab, setTab] = useState<'wiki' | 'science' | 'verify' | 'qa'>('wiki')
+  // 双页签 tab（260924 问答/辩真拆入答疑店；默认百科，选择不持久化——推理角同款）
+  const [tab, setTab] = useState<'wiki' | 'science'>('wiki')
   const [sections, setSections] = useState<WikiSection[]>([])
   const [entries, setEntries] = useState<WikiEntry[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
@@ -422,19 +420,13 @@ export default function WikiModule(props: WikiModuleProps) {
         )}
       </div>
 
-      {/* 四页签 tab（260908 辩真阁并入万象库）：百科 = 原有内容；科普 = 批次D；辩真/问答照旧 */}
+      {/* 双页签 tab（260924 问答/辩真拆入答疑店）：百科 = 原有内容；科普 = 批次D */}
       <div className="recycle-tabs">
         <button className={`recycle-tab${tab === 'wiki' ? ' active' : ''}`} onClick={() => setTab('wiki')}>
           百科
         </button>
         <button className={`recycle-tab${tab === 'science' ? ' active' : ''}`} onClick={() => setTab('science')}>
           科普
-        </button>
-        <button className={`recycle-tab${tab === 'verify' ? ' active' : ''}`} onClick={() => setTab('verify')}>
-          辩真
-        </button>
-        <button className={`recycle-tab${tab === 'qa' ? ' active' : ''}`} onClick={() => setTab('qa')}>
-          问答
         </button>
       </div>
 
@@ -1204,15 +1196,6 @@ export default function WikiModule(props: WikiModuleProps) {
         />
       </div>
 
-      {/* 辩真板块（原辩真阁整面板迁入，数据层零改动；onOpenAi 包装直连「辩真·核查」频道） */}
-      <div className={tab === 'verify' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'verify'}>
-        <VerifyPanel onOpenAi={(p) => props.onOpenAi(p, { channel: 'verify' })} bumpAi={props.bumpAi} />
-      </div>
-
-      {/* 问答板块（2026-09-12 知识问答标签页：单轮问答存档，安静模式；onOpenAi 走本模块默认「万象·问答」频道） */}
-      <div className={tab === 'qa' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'qa'}>
-        <QaPanel onOpenAi={(p) => props.onOpenAi(p)} />
-      </div>
     </div>
   )
 }

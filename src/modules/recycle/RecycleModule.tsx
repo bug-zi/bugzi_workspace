@@ -11,6 +11,7 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 // 260917 AI 会话归档（优化建议区第47轮）：跨模块块置末位。
 const TABS: { key: string; label: string }[] = [
   { key: 'learn', label: '学习库' },
+  { key: 'interview', label: '面试题库' },
   { key: 'mottos', label: '格言库' },
   { key: 'wiki', label: '万象库' },
   { key: 'inspirations', label: '灵感泉' },
@@ -26,6 +27,7 @@ const TABS: { key: string; label: string }[] = [
 /** 行属于哪个页签（推理角两来源同组；文笔坊两来源同组；记账本三来源同组；辩真并入万象库块；预言家/十二问题并入致知己块） */
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
+  if (source === 'interview_q') return 'interview'
   if (source === 'wenbi_journal' || source === 'wenbi_article' || source === 'wenbi_exp') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   if (source === 'verify') return 'wiki'
@@ -40,6 +42,8 @@ function backToOf(source: RecycleRow['source']): string {
   switch (source) {
     case 'learn':
       return '原主题'
+    case 'interview_q':
+      return '题库原分类'
     case 'mottos':
       return '格言库草稿区'
     case 'wiki':
@@ -84,6 +88,7 @@ function backToOf(source: RecycleRow['source']): string {
 /** 来源板块小字（文笔坊页签内区分两板块；记账本页签内区分流水/账户/分类；辩真并入万象库块后区分词条/记录） */
 function srcTag(source: RecycleRow['source']): string {
   if (source === 'learn') return '知识点 · '
+  if (source === 'interview_q') return '面试题 · '
   if (source === 'wenbi_journal') return '浮生记 · '
   if (source === 'wenbi_article') return '文章 · '
   if (source === 'wenbi_exp') return '经验书 · '
@@ -110,6 +115,7 @@ function summaryOf(row: RecycleRow): string {
   try {
     const p = JSON.parse(row.payload) as Record<string, unknown>
     if (row.source === 'learn') return `${p.title ?? ''}｜${p.summary ?? ''}`
+    if (row.source === 'interview_q') return String(p.question ?? '')
     if (row.source === 'mottos') return String(p.content ?? '')
     if (row.source === 'wiki') return `${p.term ?? ''}｜${p.summary ?? ''}`
     if (row.source === 'inspirations') return String(p.title ?? '')

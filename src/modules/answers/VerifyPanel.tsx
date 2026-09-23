@@ -48,8 +48,8 @@ export default function VerifyPanel(props: VerifyPanelProps) {
     if (aiVersion > 0) props.bumpAi()
   }, [aiVersion, props])
 
-  // keep-alive：切回万象库时刷新记录列表（板块常驻挂载，模块级激活即含辩真板块）
-  useModuleActivated('wiki', () => void load())
+  // keep-alive：切回答疑店时刷新记录列表（板块常驻挂载，模块级激活即含辩真板块）
+  useModuleActivated('answers', () => void load())
 
   const runVerify = async (): Promise<void> => {
     const text = claim.trim()

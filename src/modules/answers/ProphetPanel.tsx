@@ -100,7 +100,7 @@ export default function ProphetPanel(props: ProphetPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useModuleActivated('zhijiji', () => void load())
+  useModuleActivated('answers', () => void load())
 
   const analyze = async (id: number): Promise<void> => {
     const jobId = crypto.randomUUID()

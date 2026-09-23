@@ -46,7 +46,7 @@ const PROFILE_NAV: { id: string; label: string }[] = [
   { id: 'agent', label: '超级工作台' }
 ]
 
-export default function ProfileModule() {
+export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
   const { toast } = useToast()
   const { settings, setSetting, theme, setTheme } = useAppSettings()
   const [name, setName] = useState('')
@@ -136,6 +136,7 @@ export default function ProfileModule() {
   const pageRef = useRef<HTMLDivElement>(null)
   const scrollerRef = useRef<HTMLElement | null>(null)
   const [navActive, setNavActive] = useState(PROFILE_NAV[0].id)
+  const recomputeNavRef = useRef<() => void>(() => {})
   // 向上找最近滚动容器（主栏），其滚动时按「最后一个顶缘越过视口顶 88px 的区」高亮当前项
   useEffect(() => {
     let el: HTMLElement | null = pageRef.current
@@ -148,6 +149,8 @@ export default function ProfileModule() {
     if (!sc) return
     scrollerRef.current = sc
     const onScroll = (): void => {
+      // keep-alive 隐藏态（display:none）本模块各 zone rect 全 0，「0 - base ≤ 88」恒真会误高亮到最后一项——隐藏时跳过
+      if (!pageRef.current || pageRef.current.getBoundingClientRect().width === 0) return
       const base = sc.getBoundingClientRect().top
       let cur = PROFILE_NAV[0].id
       for (const z of PROFILE_NAV) {
@@ -158,10 +161,18 @@ export default function ProfileModule() {
       }
       setNavActive((v) => (v === cur ? v : cur))
     }
+    recomputeNavRef.current = onScroll
     onScroll()
     sc.addEventListener('scroll', onScroll, { passive: true })
-    return () => sc.removeEventListener('scroll', onScroll)
+    return () => {
+      sc.removeEventListener('scroll', onScroll)
+      recomputeNavRef.current = () => {}
+    }
   }, [])
+  // 激活时重算高亮：挂载发生在隐藏态时首算被跳过，展开后靠这里对齐真实滚动位置（激活事件先于渲染，双 rAF 等布局提交）
+  useModuleActivated('profile', () => {
+    requestAnimationFrame(() => requestAnimationFrame(() => recomputeNavRef.current()))
+  })
   const jumpToZone = (id: string): void => {
     // 默认折叠的三个区先展开再定位，直达才有效
     if (id === 'facts') setZoneCollapsed(false)
@@ -1262,8 +1273,21 @@ export default function ProfileModule() {
         </div>
       </section>
 
-      {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6） */}
+      {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6）；260924 左栏工作台入口删除，直达入口迁入此区顶部 */}
       <div id="profile-zone-agent">
+        <section
+          className="zone"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+        >
+          <div>
+            <div style={{ fontWeight: 600 }}>超级工作台 · 任务中心</div>
+            <div className="module-sub">后台错峰巡检海选 · 任务队列 · 负载卫兵 · 预算</div>
+          </div>
+          <button className="btn btn-primary" onClick={props.onOpenWorkspace}>
+            <span className="material-symbols-outlined">smart_toy</span>
+            打开任务中心
+          </button>
+        </section>
         <AgentSettingsSection part="agent" />
       </div>
 

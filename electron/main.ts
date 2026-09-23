@@ -10,6 +10,7 @@ import { ensureReasoningStock } from './services/reasoningStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { ensureWikiQuizStock } from './services/wikiQuizStock'
 import { ensureLearnStock } from './services/learnStock'
+import { ensureInterviewDaily } from './services/interviewBank'
 import { ensureWhoamiDaily } from './services/whoami'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
@@ -120,9 +121,12 @@ if (!app.requestSingleInstanceLock()) {
       void ensureDailyLearn()
       void ensureWikiStock()
     }, 10_000).unref()
-    // 学习库（260911）：每日队列定档（纯 SQL，泵内部先执行）+ 今日新卡预生成泵；
-    // 静默失败，LLM 未配置跳过（队列照常定档，配置后下次触发补齐）
-    setTimeout(() => void ensureLearnStock(), 10_000).unref()
+    // 学习库（260911→260924 面经题库化）：面经每日定档（learn_daily 所有权）+ 知识树备学池泵；
+    // 静默失败，LLM 未配置跳过（定档纯 SQL 照常）
+    setTimeout(() => {
+      ensureInterviewDaily()
+      void ensureLearnStock()
+    }, 10_000).unref()
     // 万象库测一测题库泵（260916 题库制）：错开启动高峰，静默失败
     setTimeout(() => void ensureWikiQuizStock(), 10_000).unref()
     // 我是谁（260921）：每日 3-4 问（settings 幂等）；错开启动高峰，静默失败，LLM 未配置跳过

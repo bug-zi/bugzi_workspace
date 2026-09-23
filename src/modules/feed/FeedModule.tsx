@@ -1,29 +1,17 @@
-// 信息源（信息源 specs §3）：源列表 + 文章列表三段式 + 阅读视图（主栏内切换）
+// 信息源（信息源 specs §3；260924 文献拆出论文库后回归纯订阅）：源列表 + 文章列表三段式 + 阅读视图（主栏内切换）
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArticleSummary, FeedRecord, FeedView } from '../../shared/types'
 import { SettingsKeys } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ArticleView, { relTime } from './ArticleView'
-import LiteraturePanel from './LiteraturePanel'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
-import { useModuleNavigate } from '../../hooks/useModuleNavigate'
-import type { AiChannel } from '../../shared/types'
 import './feed.css'
 
 type FeedWithUnread = FeedRecord & { unread: number }
 
-export default function FeedModule(props: {
-  onNavigateToProfile?: () => void
-  /** 文献追问入口（2.0 批次C）：App.openAiWith，显式指定 literature 场景 */
-  onOpenAi?: (prefill?: string, opts?: { auto?: boolean; channel?: AiChannel }) => void
-}) {
+export default function FeedModule(props: { onNavigateToProfile?: () => void }) {
   const { toast } = useToast()
-  // 主页签（2.0 批次B）：订阅=自读区（原有全部内容）；文献=深读线（发现箱+正式文献区）
-  const [mainTab, setMainTab] = useState<'feed' | 'literature'>('feed')
-  const [litPending, setLitPending] = useState(0)
-  // 批次F 相关内容跳转：待自动打开的文献详情 id（消费后复位）
-  const [litPaperId, setLitPaperId] = useState<number | null>(null)
   const [feeds, setFeeds] = useState<FeedWithUnread[]>([])
   const [activeFeed, setActiveFeed] = useState<number | null>(null)
   const [articles, setArticles] = useState<ArticleSummary[]>([])
@@ -95,22 +83,6 @@ export default function FeedModule(props: {
   useEffect(() => {
     void load()
   }, [load])
-
-  // 总导览/任务中心深链：切到文献页签（2.0 批次B 先行铺好，批次 C 直达用）
-  useModuleNavigate('feed', (target, payload) => {
-    if (target === 'literature') setMainTab('literature')
-    // 批次F 相关内容跳转：切文献页签并打开指定论文详情
-    if (target === 'literature-paper') {
-      const pid = Number(payload?.paperId)
-      if (!Number.isFinite(pid)) return
-      setMainTab('literature')
-      setLitPaperId(pid)
-    }
-  })
-  useEffect(() => {
-    if (mainTab !== 'literature') return
-    void window.api.agent.pendingCounts().then((c) => setLitPending(c.discovered))
-  }, [mainTab])
 
   const totalUnread = feeds.reduce((n, f) => n + f.unread, 0)
   const activeFeedRow = feeds.find((f) => f.id === activeFeed)
@@ -223,23 +195,6 @@ export default function FeedModule(props: {
     <div className="module-page feed-page">
       <div className="module-header">
         <div className="module-title">信息源</div>
-        {/* 主页签（2.0 批次B）：订阅=自读区 / 文献=深读线 */}
-        <div className="recycle-tabs" style={{ marginLeft: 14 }}>
-          <button
-            className={`recycle-tab${mainTab === 'feed' ? ' active' : ''}`}
-            onClick={() => setMainTab('feed')}
-          >
-            订阅
-          </button>
-          <button
-            className={`recycle-tab${mainTab === 'literature' ? ' active' : ''}`}
-            onClick={() => setMainTab('literature')}
-          >
-            文献
-          </button>
-        </div>
-        {mainTab === 'feed' ? (
-          <>
             <div className="recycle-tabs" style={{ marginLeft: 14 }}>
               <button
                 className={`recycle-tab${view === 'unread' ? ' active' : ''}`}
@@ -276,15 +231,8 @@ export default function FeedModule(props: {
                 <span className="material-symbols-outlined">done_all</span>全部标已读
               </button>
             </div>
-          </>
-        ) : (
-          <div className="module-sub">
-            深读线{litPending > 0 ? ` · ${litPending} 条待终选` : ''} · AI 只呈元信息，入库由你决定
-          </div>
-        )}
       </div>
 
-      {mainTab === 'feed' ? (
       <div className="feed-body">
         {/* 左窄栏：源列表 */}
         <aside className="feed-sources">
@@ -406,13 +354,6 @@ export default function FeedModule(props: {
           )}
         </div>
       </div>
-      ) : (
-        <LiteraturePanel
-          onOpenAi={() => props.onOpenAi?.('', { channel: 'literature' })}
-          openPaperId={litPaperId}
-          onOpenPaperConsumed={() => setLitPaperId(null)}
-        />
-      )}
 
       {/* 添加订阅弹窗：URL → 验证显源名 → 订阅 */}
       {addOpen && (

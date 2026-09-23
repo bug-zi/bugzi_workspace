@@ -33,8 +33,8 @@ export default function QaPanel(props: QaPanelProps) {
     void load()
   }, [load])
 
-  // keep-alive：切回万象库时刷新记录列表（照 VerifyPanel）
-  useModuleActivated('wiki', () => void load())
+  // keep-alive：切回答疑店时刷新记录列表（照 VerifyPanel）
+  useModuleActivated('answers', () => void load())
 
   const runQa = async (): Promise<void> => {
     const text = question.trim()

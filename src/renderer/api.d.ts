@@ -1,10 +1,9 @@
-// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：'zangyue'；260912 新增总导览 'zonglan'
+// 渲染层全局 window.api 类型（preload 桥）；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：'zangyue'；260912 新增总导览 'zonglan'；260924 侧边栏新布局：新增 favorites/literature/answers 与四个占位 id（并清理残留 'verify'，与 shared/types 对齐）
 export type ModuleId =
   | 'zonglan'
   | 'learn'
   | 'wiki'
   | 'inspirations'
-  | 'verify'
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
@@ -13,6 +12,13 @@ export type ModuleId =
   | 'ledger'
   | 'recycle'
   | 'profile'
+  | 'favorites'
+  | 'literature'
+  | 'answers'
+  | 'podcast'
+  | 'fuben'
+  | 'fushi'
+  | 'yule'
 
 /** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet，2.0 批次C 新增 literature） */
 export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
@@ -231,17 +237,48 @@ export interface LearnDailyRow extends LearnNode {
   topic_title: string | null
 }
 
-/** 今日要求汇总（learn:daily 返回）：已学列表 + 复习列表 + 目标/完成/连胜/小测状态 */
-export interface LearnDailySummary {
-  learned: LearnDailyRow[]
-  review: LearnDailyRow[]
+// ===== 学习库·面经题库（260924 面经题库化，interview_* 表 DB v52；与 shared/types.ts 同步的渲染层副本）=====
+export interface InterviewCategory {
+  id: number
+  name: string
+  sort: number
+}
+
+export interface InterviewQuestionRow {
+  id: number
+  category_id: number
+  category_name: string
+  question: string
+  answer_path: string
+  source: string
+  state: 'todo' | 'learned'
+  review_stage: number
+  next_review_at: string | null
+  learned_at: string | null
+  created_at: string
+}
+
+export interface InterviewIntakeRow {
+  id: number
+  category_id: number | null
+  category_name: string | null
+  question: string
+  answer_path: string
+  source: string
+  batch_id: number
+  created_at: string
+}
+
+/** 面经每日要求汇总（interview:daily 返回）：行即 InterviewQuestionRow 全列 */
+export interface InterviewDailySummary {
+  learned: InterviewQuestionRow[]
+  review: InterviewQuestionRow[]
   goal: number
-  /** 0=未完成 1=已完成（显式落库，防删卡丢历史） */
+  /** 0=未完成 1=已完成（learn_daily.done，显式落库） */
   done: number
   streak: number
-  quizStatus: 'answering' | 'graded' | null
-  quizAnswered: number
-  quizTotal: number
+  /** 题库 todo 存量（渲染层阈值提醒用） */
+  todoTotal: number
 }
 
 /** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。
@@ -652,6 +689,7 @@ export interface RecycleRow {
     | 'ledger_account'
     | 'ledger_category'
     | 'learn'
+    | 'interview_q'
     | 'prophet'
     | 'twelve_question'
     | 'qa'
@@ -1646,8 +1684,6 @@ export interface Api {
     saveChatCard(topicId: number, title: string, md: string): Promise<number>
     /** 取卡片：content_ready=0 时现场生成（可取消）后返回 */
     getCard(jobId: string, id: number): Promise<LearnCardRow>
-    /** 今日要求汇总（已学动态列表 + 复习 + goal/done/streak/小测状态） */
-    daily(): Promise<LearnDailySummary>
     /** 随机来一条：优先已生成未学卡秒开 */
     randomOne(jobId: string): Promise<LearnCardRow>
     /** 状态机：learn=学会了 | remember=记住了 | forget=忘记了；completed=本次使今日要求达成 */
@@ -1683,6 +1719,37 @@ export interface Api {
     dig(jobId: string, nodeId: number): Promise<{ content: string }>
     /** 深挖结果确认写入：卡片 md 末尾追加「## 深挖（YYMMDD）」小节，返回更新后全文 */
     digApply(nodeId: number, content: string): Promise<{ md: string }>
+  }
+  interview: {
+    categories(): Promise<InterviewCategory[]>
+    categoryCreate(name: string): Promise<InterviewCategory>
+    categoryRename(id: number, name: string): Promise<boolean>
+    categoryReorder(id: number, dir: 'up' | 'down'): Promise<boolean>
+    /** 删分类：其下题目级联入回收站（明示计数，二次确认在渲染层） */
+    categoryDelete(id: number): Promise<boolean>
+    /** 题目列表（categoryId null = 全部；行含 category_name） */
+    questions(categoryId: number | null): Promise<InterviewQuestionRow[]>
+    /** 随机来一条：todo 池随机秒开（零生成） */
+    randomOne(): Promise<InterviewQuestionRow>
+    /** 状态机：learn=会了 | remember=记住了 | forget=忘记了 | reburn=回炉(毕业题重置回待刷)；completed=本次使每日要求达成 */
+    mark(id: number, action: 'learn' | 'remember' | 'forget' | 'reburn'): Promise<{ ok: boolean; completed: boolean }>
+    /** 手动添加题（答案空 → fire-and-forget AI 补全）；重复题抛 DUP_QUESTION */
+    questionAdd(categoryId: number, question: string, answer: string): Promise<number>
+    questionMove(id: number, categoryId: number): Promise<boolean>
+    questionDelete(id: number): Promise<boolean>
+    /** 待审核列表（pending，联建议分类名） */
+    intakeList(): Promise<InterviewIntakeRow[]>
+    /** 采纳（可改分类：暂存 md 移为正式路径） */
+    intakeAdopt(id: number, categoryId: number): Promise<boolean>
+    intakeDiscard(id: number): Promise<boolean>
+    /** 全部采纳（未指定分类归第一个分类）/ 全部丢弃 */
+    intakeBatch(adopt: boolean): Promise<boolean>
+    /** 面经每日要求汇总（触发幂等定档） */
+    daily(): Promise<InterviewDailySummary>
+    /** 触发搜集批次（agent 队列 interview_collect，返回 runId；进度/完成经 agent:status） */
+    collect(): Promise<number>
+    /** 进模块检查：幂等定档 + 返回 todo 存量 */
+    stockCheck(): Promise<number>
   }
   music: {
     list(): Promise<MusicListResult>

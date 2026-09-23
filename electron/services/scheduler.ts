@@ -7,6 +7,7 @@ import { cleanupExpired } from './recycle'
 import { cleanupOldArticles } from './feed'
 import { ensureDailyLearn } from './wikiStock'
 import { ensureLearnStock } from './learnStock'
+import { ensureInterviewDaily } from './interviewBank'
 import { ensureWhoamiDaily } from './whoami'
 
 let mottoTimer: NodeJS.Timeout | null = null
@@ -85,7 +86,8 @@ export function scheduleMidnightCleanup(): void {
     }
     // 万象库每日待学习批次（260910）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
     void ensureDailyLearn()
-    // 学习库每日队列（260911）：App 跨天常驻时零点也定档（内部幂等 + 顺带触发泵）
+    // 学习库（260924 面经题库化）：零点定档面经每日要求 + 顺带触发知识树备学池泵（均幂等静默）
+    ensureInterviewDaily()
     void ensureLearnStock()
     // 我是谁每日问题（260921）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
     void ensureWhoamiDaily()

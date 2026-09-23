@@ -3,15 +3,14 @@
 // 热力图卡（260916）+ 底部格言轮播。纯渲染层并行聚合既有 IPC（零 AI、逐块独立
 // catch；挑战/热力图走专属 challenge/overview 通道）；深链 = 派发 MODULE_NAVIGATE_EVENT，
 // App 集中切模块、目标模块 useModuleNavigate 切内部视图（260915 起单一导航路径）。
-// 双模式（260922）：随 prop 换块——公共=问候/我是谁/挑战/热力图；学习=今日学习/待学习区/
-// 超级工作台/信息源未读/格言轮播；生活=每日一题/续读/本月支出+十二问题。块内逻辑与加载照旧。
+// 双模式（260922，260924 排版修订）：随 prop 换块——公共=问候/挑战/我是谁/热力图/底部格言轮播；
+// 学习=今日学习/待学习区/信息源未读；生活=每日一题/续读/本月支出+十二问题。块内逻辑与加载照旧。
 import { useCallback, useEffect, useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
 import type { ModuleId, ModuleMode, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
-import type { AgentDayStats } from '../../renderer/api'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import HeatmapCard, { heatmapRange } from './HeatmapCard'
 import ChallengeManageDialog from './ChallengeManageDialog'
@@ -40,7 +39,6 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
     goal: number
     done: number
     streak: number
-    quizStatus: 'answering' | 'graded' | null
     learned: number
   } | null>(null)
   const [learnCount, setLearnCount] = useState<number | null>(null)
@@ -61,8 +59,6 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
     pendingCount: number
   } | null>(null)
   const [heat, setHeat] = useState<HeatmapDay[] | null>(null)
-  // 超级工作台聚合块（2.0 批次C）：昨日成果 + 待终选 + 相位
-  const [agentStats, setAgentStats] = useState<AgentDayStats | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
 
   /** 深链：派发导航事件（App 集中切模块，目标模块 useModuleNavigate 切内部视图） */
@@ -82,12 +78,11 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
   }, [])
   const loadDaily = useCallback(async (): Promise<void> => {
     try {
-      const d = await window.api.learn.daily()
+      const d = await window.api.interview.daily()
       setLearnReq({
         goal: d.goal,
         done: d.done,
         streak: d.streak,
-        quizStatus: d.quizStatus,
         learned: d.learned.length
       })
     } catch {
@@ -180,13 +175,6 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       setHeat(null)
     }
   }, [])
-  const loadAgent = useCallback(async (): Promise<void> => {
-    try {
-      setAgentStats(await window.api.agent.dayStats())
-    } catch {
-      setAgentStats(null)
-    }
-  }, [])
 
   const loadAll = useCallback((): void => {
     void loadMottos()
@@ -198,8 +186,7 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
     void loadChallenge()
     void loadWhoami()
     void loadHeat()
-    void loadAgent()
-  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat, loadAgent])
+  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat])
 
   useEffect(() => {
     loadAll()
@@ -251,9 +238,9 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
         <span className="module-sub">{greetLine}</span>
       </div>
 
-      {/* 今日学习（整卡深链「今日学习」tab；260915 起显示每日要求状态行）——学习模式块 */}
+      {/* 今日刷题（整卡深链「今日刷题」tab；260924 面经题库化起显示刷题要求状态行）——学习模式块 */}
       {mode === 'learn' && (
-        <button className="card zl-row" onClick={() => go('learn', 'today')} title="进入学习库·今日学习">
+        <button className="card zl-row" onClick={() => go('learn', 'today')} title="进入学习库·今日刷题">
           <span className="material-symbols-outlined">school</span>
           <div className="zl-row-main">
             <div className="zl-row-line">
@@ -262,13 +249,7 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
                 {learnReq
                   ? learnReq.done
                     ? `今日要求已完成 · 连胜 ${learnReq.streak} 天`
-                    : `新学 ${learnReq.learned}/${learnReq.goal} · 小测${
-                        learnReq.quizStatus === 'graded'
-                          ? '已交卷'
-                          : learnReq.quizStatus === 'answering'
-                            ? '作答中'
-                            : '未出卷'
-                      } · 连胜 ${learnReq.streak} 天`
+                    : `刷题 ${learnReq.learned}/${learnReq.goal} · 连胜 ${learnReq.streak} 天`
                   : '加载失败'}
               </span>
             </div>
@@ -307,31 +288,6 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
                 ? `已完成 · 连胜 ${wallState.streak} 天`
                 : `未打卡 · 连胜 ${wallState.streak} 天`
               : '加载失败'}
-          </span>
-        </button>
-      )}
-
-      {/* 超级工作台（2.0 批次C）：昨日成果 + 待终选 + 相位；点击进任务中心（独立事件，'agent' 非 ModuleId）——学习模式块 */}
-      {mode === 'learn' && (
-        <button
-          className="card zl-row"
-          onClick={() => window.dispatchEvent(new CustomEvent('bugzi:open-agent-center'))}
-          title="打开任务中心"
-        >
-          <span className="material-symbols-outlined">smart_toy</span>
-          <span className="zl-row-title">超级工作台</span>
-          <span className="module-sub">
-            {agentStats == null
-              ? '加载失败'
-              : !agentStats.enabled
-                ? '未启用 · 去个人档开启'
-                : `昨日海选 ${agentStats.yesterday.collect_deep ?? 0} · 解读 ${
-                    (agentStats.yesterday.make_digest ?? 0) +
-                    (agentStats.yesterday.lecture ?? 0) +
-                    (agentStats.yesterday.translate ?? 0)
-                  } · 待终选 ${agentStats.pendingDiscover}${
-                    agentStats.phase === 'paused' ? ' · 已暂停' : agentStats.phase === 'working' ? ' · 工作中' : ''
-                  }`}
           </span>
         </button>
       )}
@@ -454,8 +410,8 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       {/* 热力图（260916 新功能开发区）：近一年三任务完成度四档 */}
       <HeatmapCard days={heat} />
 
-      {/* 底部格言轮播（沉淀区随机 10s 换 + 手动换一条，点击进格言库）——学习模式块 */}
-      {mode === 'learn' && motto && (
+      {/* 底部格言轮播（沉淀区随机 10s 换 + 手动换一条，点击进格言库）——260924 起两模式公共块 */}
+      {motto && (
         <div className="card zl-quote" onClick={() => go('wenbi', 'mottos')} title="进入格言库">
           <span className="zl-quote-text">{motto.content}</span>
           {motto.source && <span className="zl-quote-src module-sub">—— {motto.source}</span>}

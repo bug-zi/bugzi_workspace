@@ -79,7 +79,8 @@ export default function AgentCenterPage() {
   }
 
   const goToDiscover = (): void => {
-    window.dispatchEvent(new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module: 'feed', target: 'literature' } }))
+    // 260924 文献拆出论文库：深链改指新模块（target 由面板自行消费/忽略，激活即为正确落点）
+    window.dispatchEvent(new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module: 'literature', target: 'literature' } }))
   }
 
   const phase = status?.phase ?? stats?.phase ?? 'idle'

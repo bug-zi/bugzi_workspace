@@ -1716,6 +1716,23 @@ ${md}
   return out
 }
 
+/** 手动添加面试题的 AI 补答案（面经题库化 §六）：fire-and-forget 后台补全，完成覆盖占位 md；
+ *  失败由调用方 catch 留痕（占位文案保留，用户可双击手写）。 */
+export async function supplementInterviewAnswer(id: number, question: string): Promise<void> {
+  const r = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content: `你是 Go 后端面试辅导助手。请为下面这道面试题写一份要点式中文参考答案：分点短句、直击考点，300 字内，Markdown 格式（命令/代码用代码块）。只输出答案正文，不要开场白、不要重复题干。\n\n题目：${question}`
+      }
+    ],
+    temperature: 0.3,
+    scene: 'learn:interviewSupplement'
+  })
+  const md = stripMdFence(r.content)
+  mdWrite(`md/learn/interview/${id}.md`, `# ${question}\n\n${md || '（答案生成失败，请双击手写）'}\n`)
+}
+
 /** AI 出题（260912 问题分级）：画像 + 已有问题避重 + 高星特征 → 5 条候选，出题带星一体 */
 export async function suggestZhijiQuestions(
   signal?: AbortSignal

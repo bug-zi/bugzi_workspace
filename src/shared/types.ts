@@ -1,6 +1,8 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
-// 模块标识（260908 辩真阁并入万象库：'verify' 移除，其功能为万象库「辩真」板块；260911 格言库并入文笔坊：'mottos' 移除；260912 收藏夹+藏书架合并：两 id 移除，并为 'zangyue'；260912 新增总导览 'zonglan' 居首）
+// 模块标识（260924 侧边栏新布局：新增 'favorites' 收藏夹 / 'literature' 论文库 / 'answers' 答疑店 三个拆分模块；
+// 另加占位 id 'podcast' 播客台 / 'fuben' 副本库 / 'fushi' 赋诗苑 / 'yule' 娱乐城——仅左栏占位，无对应视图。
+// 历史备注：260908 'verify' 并入万象库；260911 'mottos' 并入文笔坊；260912 合并为 'zangyue'、新增 'zonglan'）
 export type ModuleId =
   | 'zonglan'
   | 'learn'
@@ -14,6 +16,13 @@ export type ModuleId =
   | 'ledger'
   | 'recycle'
   | 'profile'
+  | 'favorites'
+  | 'literature'
+  | 'answers'
+  | 'podcast'
+  | 'fuben'
+  | 'fushi'
+  | 'yule'
 
 // 模块深链导航事件 detail（260912 总导览）：App.tsx MODULE_NAVIGATE_EVENT 的载荷，
 // 目标模块经 useModuleNavigate 监听后按 target 切内部视图
@@ -505,23 +514,55 @@ export interface LearnCardRow extends LearnNode {
   topic_title: string | null
 }
 
-/** 今日队列行（learn:daily 返回） */
+/** 今日队列行（learn:daily 返回；learn:daily 已随面经题库化摘除，行类型保留供删除确认等复用） */
 export interface LearnDailyRow extends LearnNode {
   domain_name: string
   topic_title: string | null
 }
 
-/** 今日要求汇总（learn:daily 返回）：已学列表 + 复习列表 + 目标/完成/连胜/小测状态 */
-export interface LearnDailySummary {
-  learned: LearnDailyRow[]
-  review: LearnDailyRow[]
+// ===== 学习库·面经题库（260924 面经题库化，interview_* 表 DB v52）=====
+export interface InterviewCategory {
+  id: number
+  name: string
+  sort: number
+}
+
+export interface InterviewQuestionRow {
+  id: number
+  category_id: number
+  category_name: string
+  question: string
+  answer_path: string
+  source: string
+  state: 'todo' | 'learned'
+  review_stage: number
+  next_review_at: string | null
+  learned_at: string | null
+  created_at: string
+}
+
+export interface InterviewIntakeRow {
+  id: number
+  category_id: number | null
+  category_name: string | null
+  question: string
+  answer_path: string
+  source: string
+  batch_id: number
+  created_at: string
+}
+
+/** 面经每日要求汇总（interview:daily 返回）：learned/review 行即 InterviewQuestionRow 全列
+ *  （interviewSql 投影 q.*），刷题列表点击直接开弹窗无需二次取行 */
+export interface InterviewDailySummary {
+  learned: InterviewQuestionRow[]
+  review: InterviewQuestionRow[]
   goal: number
-  /** 0=未完成 1=已完成（显式落库，防删卡丢历史） */
+  /** 0=未完成 1=已完成（learn_daily.done，显式落库） */
   done: number
   streak: number
-  quizStatus: 'answering' | 'graded' | null
-  quizAnswered: number
-  quizTotal: number
+  /** 题库 todo 存量（渲染层阈值提醒用） */
+  todoTotal: number
 }
 
 /** 小测题（learn_quiz.questions JSON 数组元素；题型混合由 AI 按卡内容定）。

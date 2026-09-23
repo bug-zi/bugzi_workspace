@@ -21,6 +21,7 @@ export type RecycleSource =
   | 'ledger_category'
   | 'canvases'
   | 'learn'
+  | 'interview_q'
   | 'prophet'
   | 'twelve_question'
   | 'qa'
@@ -43,6 +44,7 @@ const TABLES: Record<RecycleSource, string> = {
   ledger_category: 'ledger_categories',
   canvases: 'canvases',
   learn: 'learn_nodes',
+  interview_q: 'interview_questions',
   prophet: 'prophet_records',
   twelve_question: 'twelve_questions',
   qa: 'qa_records',
@@ -71,6 +73,7 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   // 画布：path 指向 canvas/{id}.excalidraw（mdDelete 对 userData 内任意文件通用）
   canvases: 'path',
   learn: null, // learn 卡片 md 派生为 md/learn/<id>.md（无表列），hardDelete 特判清理
+  interview_q: null, // 面试题答案 md 派生为 md/learn/interview/<id>.md（无表列），hardDelete 特判清理
   prophet: 'analysis_md_path',
   twelve_question: null // 想法为 DB 行，hardDelete 特判清理
 }
@@ -175,6 +178,28 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回知识树原主题：仅清标记（主题存续由「删主题判空含回收站节点」保证）
       d.prepare('UPDATE learn_nodes SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
+    case 'interview_q': {
+      // 面试题回原分类；分类可能已被级联删除——恢复时挂到 sort 最前的分类，保证题目可见
+      {
+        const q = d.prepare('SELECT category_id FROM interview_questions WHERE id = ?').get(rb.item_id) as
+          | { category_id: number }
+          | undefined
+        const catOk = q && d.prepare('SELECT id FROM interview_categories WHERE id = ?').get(q.category_id)
+        if (!catOk) {
+          const first = d.prepare('SELECT id FROM interview_categories ORDER BY sort, id LIMIT 1').get() as
+            | { id: number }
+            | undefined
+          if (!first) throw new Error('没有可用分类，无法恢复')
+          d.prepare('UPDATE interview_questions SET category_id = ?, deleted_at = NULL WHERE id = ?').run(
+            first.id,
+            rb.item_id
+          )
+        } else {
+          d.prepare('UPDATE interview_questions SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+        }
+      }
+      break
+    }
     case 'wenbi_journal':
       // 回浮生记时间线：仅清标记（分节钉在 created_at，无需复位）
       d.prepare('UPDATE wenbi_journals SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
@@ -247,6 +272,10 @@ export function hardDelete(recycleId: number): void {
     // 知识点卡：md 路径派生为 md/learn/<id>.md，连同高光记录一起清理（同 wiki 口径）
     d.prepare('DELETE FROM learn_highlights WHERE node_id = ?').run(rb.item_id)
     mdDelete(`md/learn/${rb.item_id}.md`)
+  }
+  if (rb.source === 'interview_q') {
+    // 面试题：答案 md 派生为 md/learn/interview/<id>.md（无表列），连同软删行一并清理
+    mdDelete(`md/learn/interview/${rb.item_id}.md`)
   }
   if (rb.source === 'ai_session') {
     // 归档会话彻底删除：连全部消息一并删（无 md 附属）

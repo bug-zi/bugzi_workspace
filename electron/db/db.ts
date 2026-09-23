@@ -32,7 +32,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers', 'science']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/learn/interview', 'md/learn/intake', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers', 'science']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -1292,6 +1292,73 @@ function migrate(): void {
       d.exec('ALTER TABLE interpretations_new RENAME TO interpretations')
       d.exec('CREATE INDEX IF NOT EXISTS idx_interpret_owner ON interpretations(owner_type, owner_id)')
       d.exec('PRAGMA user_version = 51')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 52) {
+    // v52：学习库面经题库化（2026-09-24-面经题库化-design.md §三）——分类 / 题目（复习三列与
+    // learn_nodes 同构）/ 搜集待审核三表；出厂 seed 15 分类（传统 Go 后端 12 + AI 应用 3）。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE interview_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+      d.exec(`CREATE TABLE interview_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id INTEGER NOT NULL,
+      question TEXT NOT NULL,
+      question_norm TEXT NOT NULL,
+      answer_path TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT 'todo',
+      review_stage INTEGER NOT NULL DEFAULT 0,
+      next_review_at TEXT,
+      learned_at TEXT,
+      deleted_at TEXT,
+      created_at TEXT NOT NULL
+    )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_iq_category ON interview_questions(category_id, state)')
+      d.exec('CREATE INDEX IF NOT EXISTS idx_iq_review ON interview_questions(next_review_at)')
+      d.exec(`CREATE TABLE interview_intake (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id INTEGER,
+      question TEXT NOT NULL,
+      question_norm TEXT NOT NULL,
+      answer_path TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '',
+      batch_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL
+    )`)
+      const SEED = [
+        'Go 语言基础',
+        'Go 并发',
+        'Go 工程与框架',
+        'MySQL',
+        'Redis',
+        '网络与协议',
+        '操作系统',
+        '分布式与微服务',
+        '消息队列与中间件',
+        '系统设计与场景题',
+        '算法与数据结构',
+        '容器与部署',
+        'AI 应用开发（Go 向）',
+        'RAG 与向量检索',
+        '大模型基础认知'
+      ]
+      const now = nowIso()
+      SEED.forEach((name, i) => {
+        d.prepare('INSERT INTO interview_categories (name, sort, created_at) VALUES (?, ?, ?)').run(name, i, now)
+      })
+      d.exec('PRAGMA user_version = 52')
       d.exec('COMMIT')
     } catch (e) {
       d.exec('ROLLBACK')

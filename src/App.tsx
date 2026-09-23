@@ -12,10 +12,13 @@ import LearnModule from './modules/learn/LearnModule'
 import WikiModule from './modules/wiki/WikiModule'
 import InspirationsModule from './modules/inspirations/InspirationsModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
+import AnswersModule from './modules/answers/AnswersModule'
 import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
 import ZangyueModule from './modules/zangyue/ZangyueModule'
+import FavoritesModule from './modules/favorites/FavoritesModule'
 import FeedModule from './modules/feed/FeedModule'
+import LiteratureModule from './modules/literature/LiteratureModule'
 import LedgerModule from './modules/ledger/LedgerModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
@@ -23,7 +26,6 @@ import WelcomeGuide from './modules/profile/WelcomeGuide'
 import NoisePage from './modules/noise/NoisePage'
 import AgentCenterPage from './modules/agent/AgentCenterPage'
 import AgentColdStartGuide from './modules/agent/AgentColdStartGuide'
-import AgentBreathLight from './components/AgentBreathLight'
 import LlmActivity from './components/LlmActivity'
 import TerminalPanel from './components/terminal/TerminalPanel'
 import { noiseEngine } from './services/noiseEngine'
@@ -35,22 +37,41 @@ import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId, ModuleMode } from './shared/types'
 import './App.css'
 
-// 左栏模块顺序（260908 重排；260911 格言库并入文笔坊 12→11 项；260911 学习库置顶 11→12 项；260912 优化建议区第41轮重排；260912 收藏夹+藏书架合并藏阅阁 12→11 项；260912 总导览置顶 11→12 项；260916 藏阅阁更名图书馆）
-// 260922 双模式：mode 标记归属——学习=工作台(特殊项)/学习库/万象库/文笔坊/信息源；生活=致知己/灵感泉/图书馆/推理角/记账本；
-// 常驻=总导览/音乐吧(特殊项)/回收站/个人档。左栏按当前模式过滤，各组内保持本数组相对顺序；主栏 keep-alive 挂载仍用全量数组不受过滤影响
-const MODULES: { id: ModuleId; label: string; icon: string; mode: 'learn' | 'life' | 'common' }[] = [
-  { id: 'zonglan', label: '总导览', icon: 'space_dashboard', mode: 'common' },
-  { id: 'learn', label: '学习库', icon: 'school', mode: 'learn' },
-  { id: 'wiki', label: '万象库', icon: 'public', mode: 'learn' },
-  { id: 'zhijiji', label: '致知己', icon: 'self_improvement', mode: 'life' },
-  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb', mode: 'life' },
-  { id: 'wenbi', label: '文笔坊', icon: 'history_edu', mode: 'learn' },
-  { id: 'feed', label: '信息源', icon: 'rss_feed', mode: 'learn' },
-  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark', mode: 'life' },
-  { id: 'reasoning', label: '推理角', icon: 'psychology', mode: 'life' },
-  { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', mode: 'life' },
-  { id: 'recycle', label: '回收站', icon: 'delete', mode: 'common' },
-  { id: 'profile', label: '个人档', icon: 'person', mode: 'common' }
+// 左栏模块顺序（260924 侧边栏新布局：三段式——top 上固定 / learn|life 模式区 / bottom 下固定，
+// 渲染顺序 = top → 当前模式区 → bottom，各组内保持数组相对顺序；设计正本 docs/project/全局/2026-09-24-侧边栏新布局-design.md）
+// 拆分新模块：literature 论文库（自信息源）/ answers 答疑店（问答|辩真|预言家）/ favorites 收藏夹（自图书馆）
+// 归属变化：文笔坊升常驻(top)、致知己 life→learn、灵感泉留生活区（顶替已删除的惊喜林规划）
+// pending 占位：播客台/副本库/赋诗苑/娱乐城——置灰展示、点击提示待建，不占 keep-alive 挂载
+const MODULES: {
+  id: ModuleId
+  label: string
+  icon: string
+  seg: 'top' | 'learn' | 'life' | 'bottom'
+  pending?: true
+}[] = [
+  // —— 上固定 ——
+  { id: 'zonglan', label: '总导览', icon: 'space_dashboard', seg: 'top' },
+  { id: 'wenbi', label: '文笔坊', icon: 'history_edu', seg: 'top' },
+  // —— 学习区 ——
+  { id: 'learn', label: '学习库', icon: 'school', seg: 'learn' },
+  { id: 'literature', label: '论文库', icon: 'library_books', seg: 'learn' },
+  { id: 'wiki', label: '万象库', icon: 'public', seg: 'learn' },
+  { id: 'feed', label: '信息源', icon: 'rss_feed', seg: 'learn' },
+  { id: 'podcast', label: '播客台', icon: 'podcasts', seg: 'learn', pending: true },
+  { id: 'answers', label: '答疑店', icon: 'forum', seg: 'learn' },
+  { id: 'zhijiji', label: '致知己', icon: 'self_improvement', seg: 'learn' },
+  // —— 生活区 ——
+  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark', seg: 'life' },
+  { id: 'fuben', label: '副本库', icon: 'sports_esports', seg: 'life', pending: true },
+  { id: 'fushi', label: '赋诗苑', icon: 'auto_awesome', seg: 'life', pending: true },
+  { id: 'reasoning', label: '推理角', icon: 'psychology', seg: 'life' },
+  { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life', pending: true },
+  { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', seg: 'life' },
+  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb', seg: 'life' },
+  // —— 下固定 ——
+  { id: 'favorites', label: '收藏夹', icon: 'bookmarks', seg: 'bottom' },
+  { id: 'recycle', label: '回收站', icon: 'delete', seg: 'bottom' },
+  { id: 'profile', label: '个人档', icon: 'person', seg: 'bottom' }
 ]
 
 /** 模块 → AI 边栏频道映射（频道制，致知己 specs §4）：其余模块默认助手频道；
@@ -205,11 +226,13 @@ function Shell() {
     window.dispatchEvent(new CustomEvent(MODULE_ACTIVATED_EVENT, { detail: id }))
   }, [])
 
-  // 视图所属模式（双模式）：'agent'（任务中心）视为学习专属，'noise'（音乐吧）常驻，其余查 MODULES
+  // 视图所属模式（双模式）：'agent'（任务中心）视为学习专属，'noise'（音乐吧）常驻，
+  // 其余按 MODULES 段位映射（top/bottom=常驻，learn/life 同名）
   const modeOfView = useCallback((id: MainView): 'learn' | 'life' | 'common' => {
     if (id === 'agent') return 'learn'
     if (id === 'noise') return 'common'
-    return MODULES.find((m) => m.id === id)?.mode ?? 'common'
+    const seg = MODULES.find((m) => m.id === id)?.seg
+    return seg === 'learn' ? 'learn' : seg === 'life' ? 'life' : 'common'
   }, [])
 
   // 模式 last 专属模块记录（双模式）：仅专属模块记账，常驻（总导览/音乐吧/回收站/个人档）不记——
@@ -256,16 +279,18 @@ function Shell() {
     return () => window.removeEventListener(MODULE_NAVIGATE_EVENT, onNav)
   }, [activateModule, appMode, switchMode, modeOfView])
 
-  // 任务中心直达（2.0 批次C：呼吸灯/总导览聚合块；'agent' 非 ModuleId，走独立事件不动公共类型）；
-  // 双模式（260922）：'agent' 学习专属——生活模式下直达自动切回学习模式（landTo='agent' 同步落位）
+  // 任务中心直达（2.0 批次C；260924 左栏工作台入口删除，直达逻辑抽为 openAgentCenter——
+  // 总导览聚合块事件与个人档「打开任务中心」入口共用）：'agent' 学习专属，生活模式自动切回
+  const openAgentCenter = useCallback((): void => {
+    if (appMode === 'life') switchMode('learn', 'agent')
+    else activateModule('agent')
+  }, [appMode, activateModule, switchMode])
+
   useEffect(() => {
-    const onOpenAgent = (): void => {
-      if (appMode === 'life') switchMode('learn', 'agent')
-      else activateModule('agent')
-    }
+    const onOpenAgent = (): void => openAgentCenter()
     window.addEventListener('bugzi:open-agent-center', onOpenAgent)
     return () => window.removeEventListener('bugzi:open-agent-center', onOpenAgent)
-  }, [activateModule, appMode, switchMode])
+  }, [openAgentCenter])
 
   // 冷启动向导（2.0 批次C）：升级用户首启弹一次（首装走 WelcomeGuide 不叠加）；完成/跳过后不再弹
   const [coldStartOpen, setColdStartOpen] = useState(false)
@@ -309,47 +334,63 @@ function Shell() {
   const activeKind = noisePlaying ? 'noise' : musicPlaying ? 'music' : activeAudioKind()
   const anyPlaying = noisePlaying || musicPlaying
 
+  // 左栏列表项（三段公用）：占位项置灰仅提示待建；下固定段在回收站位前注入音乐吧
+  const renderNavItem = (m: (typeof MODULES)[number]) => {
+    if (m.pending) {
+      return (
+        <button
+          key={m.id}
+          className="nav-item pending"
+          title={`${m.label} · 待建`}
+          onClick={() => toast(`「${m.label}」待建，敬请期待`)}
+        >
+          <span className="material-symbols-outlined">{m.icon}</span>
+          <span className="nav-label">{m.label}</span>
+        </button>
+      )
+    }
+    return (
+      <Fragment key={m.id}>
+        {m.id === 'recycle' && (
+          <button
+            className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
+            onClick={() => activateModule('noise')}
+            title={
+              noisePlaying
+                ? '白噪音播放中 · 点击打开音乐吧'
+                : musicPlaying
+                  ? '轻音乐播放中 · 点击打开音乐吧'
+                  : '打开音乐吧'
+            }
+          >
+            <span className={`material-symbols-outlined${anyPlaying ? ' noise-playing' : ''}`}>
+              graphic_eq
+            </span>
+            <span className="nav-label">音乐吧</span>
+          </button>
+        )}
+        <button
+          className={`nav-item${module === m.id ? ' active' : ''}`}
+          onClick={() => activateModule(m.id)}
+          title={m.label}
+        >
+          <span className="material-symbols-outlined">{m.icon}</span>
+          <span className="nav-label">{m.label}</span>
+        </button>
+      </Fragment>
+    )
+  }
+
   return (
     <>
       <div className="app-bg" />
       <div className="app-shell">
-        {/* 左侧边栏 */}
+        {/* 左侧边栏（260924 三段式：top 上固定 → 当前模式区 → bottom 下固定；音乐吧为下固定列表项，
+            在回收站位前注入；占位项置灰点击提示；个人档图标挂工作台呼吸灯——入口已迁入个人档页） */}
         <nav className="sidebar">
-          {MODULES.filter((m) => m.mode === 'common' || m.mode === appMode).map((m) => (
-            <Fragment key={m.id}>
-              {/* 超级工作台呼吸灯（2.0 批次C；260922 双模式迁至总导览后第 2 位——随学习库行插位，学习专属故生活模式随行隐藏）：点击进任务中心 */}
-              {m.id === 'learn' && (
-                <AgentBreathLight active={module === 'agent'} onOpen={() => activateModule('agent')} />
-              )}
-              {/* 音乐吧控件列于记账本与回收站之间（260908 进列表；260915 更名音乐吧；260922 双模式起常驻） */}
-              {m.id === 'recycle' && (
-                <button
-                  className={`nav-item noise-control${module === 'noise' ? ' active' : ''}`}
-                  onClick={() => activateModule('noise')}
-                  title={
-                    noisePlaying
-                      ? '白噪音播放中 · 点击打开音乐吧'
-                      : musicPlaying
-                        ? '轻音乐播放中 · 点击打开音乐吧'
-                        : '打开音乐吧'
-                  }
-                >
-                  <span className={`material-symbols-outlined${anyPlaying ? ' noise-playing' : ''}`}>
-                    graphic_eq
-                  </span>
-                  <span className="nav-label">音乐吧</span>
-                </button>
-              )}
-              <button
-                className={`nav-item${module === m.id ? ' active' : ''}`}
-                onClick={() => activateModule(m.id)}
-                title={m.label}
-              >
-                <span className="material-symbols-outlined">{m.icon}</span>
-                <span className="nav-label">{m.label}</span>
-              </button>
-            </Fragment>
-          ))}
+          {MODULES.filter((m) => m.seg === 'top').map(renderNavItem)}
+          {MODULES.filter((m) => m.seg === appMode).map(renderNavItem)}
+          {MODULES.filter((m) => m.seg === 'bottom').map(renderNavItem)}
           <div className="sidebar-spacer" />
         </nav>
 
@@ -358,7 +399,7 @@ function Shell() {
           <div className="app-body-row">
             {/* 中间主栏（keep-alive：模块切换仅隐藏不卸载，AI 生成任务不因切页中断——问题疑惑区万象库#A） */}
             <main className="main-area">
-          {MODULES.map((m) => (
+          {MODULES.filter((m) => !m.pending).map((m) => (
             <div
               key={m.id}
               className={m.id === module ? 'module-live' : 'module-live module-hidden'}
@@ -377,17 +418,24 @@ function Shell() {
                   bumpAi={() => setAiVersion((v) => v + 1)}
                 />
               )}
+              {m.id === 'answers' && (
+                <AnswersModule
+                  onOpenAi={openAiWith}
+                  bumpAi={() => setAiVersion((v) => v + 1)}
+                  onNavigateToProfile={() => activateModule('profile')}
+                />
+              )}
               {m.id === 'reasoning' && <ReasoningModule />}
               {m.id === 'wenbi' && (
                 <WenbiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
               {m.id === 'zangyue' && <ZangyueModule />}
-              {m.id === 'feed' && (
-                <FeedModule onNavigateToProfile={() => activateModule('profile')} onOpenAi={openAiWith} />
-              )}
+              {m.id === 'favorites' && <FavoritesModule />}
+              {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
+              {m.id === 'literature' && <LiteratureModule onOpenAi={openAiWith} />}
               {m.id === 'ledger' && <LedgerModule />}
               {m.id === 'recycle' && <RecycleModule />}
-              {m.id === 'profile' && <ProfileModule />}
+              {m.id === 'profile' && <ProfileModule onOpenWorkspace={openAgentCenter} />}
             </div>
           ))}
           {/* 白噪音混音器页（不 keep-alive：引擎在组件外，页面卸载播放不断；specs §5.1） */}

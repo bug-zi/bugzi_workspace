@@ -12,7 +12,7 @@ export function openRelated(peer: RelatedPeer): void {
     case 'paper':
       window.dispatchEvent(
         new CustomEvent(MODULE_NAVIGATE_EVENT, {
-          detail: { module: 'feed', target: 'literature-paper', payload: { paperId: peer.peer_id } }
+          detail: { module: 'literature', target: 'literature-paper', payload: { paperId: peer.peer_id } }
         })
       )
       break
