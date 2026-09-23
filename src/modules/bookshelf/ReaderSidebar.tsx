@@ -1,6 +1,6 @@
 // 阅读侧栏（书架优化第1轮 §8.4/§8.5 + v2.0 §二/§三 + 书签优化轮 §四）：目录 | 笔记 | 书签 三页签展示组件
 // （引擎无关，跳转/删除经回调上行；笔记总览入口仅 epub）
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { BookMark, BooksNote } from '../../shared/types'
 
 /** 目录树节点（epub href 跳转 / pdf 页码跳转，二选一有值） */
@@ -205,9 +205,48 @@ function MarkItem(props: {
 
 export default function ReaderSidebar(props: ReaderSidebarProps) {
   const { tab, onTabChange, toc, locate, notes, marks, onJumpToc, onJumpNote, onDeleteNote, onJumpMark, onDeleteMark, onUpdateMark, onOverview, onCollapse } = props
-  // pdf 区间判定：当前页落在的目录节点（按 label 匹配标 active）；epub 用 href 精确匹配
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const lastActiveRef = useRef<string | null>(null)
+  // pdf 区间判定：当前页落在的目录节点（按 label 匹配标 active）
   const anchor = locate?.page != null ? tocAnchorAt(toc, locate.page) : null
-  const activeLabel = locate?.href ? (toc.find((t) => t.href === locate.href)?.label ?? null) : anchor?.label ?? null
+  // epub 当前章（优化建议区 260923）：扁平全树三级匹配——锚点级精确（locate.href 系
+  // 锚点解析产物，与目录项 href 同源）→ 剥锚点文件级 → spineIndex 区间判定兜底。
+  // 此前只搜顶层，当前章是嵌套子项时匹配不到、无高亮
+  let activeLabel: string | null = null
+  if (locate?.href) {
+    const flat = flattenToc(toc)
+    const file = locate.href.split('#')[0]
+    const hit =
+      flat.find((t) => t.href != null && t.href === locate.href) ??
+      (file ? flat.find((t) => t.href?.split('#')[0] === file) : undefined)
+    activeLabel = hit?.label ?? null
+  }
+  activeLabel ??= locate?.spineIndex != null ? (epubChapterAt(toc, locate.spineIndex)?.label ?? null) : null
+  activeLabel ??= anchor?.label ?? null
+  // 目录定位（优化建议区 260923）：打开目录（组件挂载）/切到目录页签/当前章变化时，
+  // 把高亮项滚进视野居中（toc 异步到达后也会再触发一次）；同一条目不重复滚动，
+  // 不与用户手动翻找目录对抗。只滚侧栏内部（rect 差值），不惊动外层滚动容器
+  useEffect(() => {
+    if (tab !== 'toc') {
+      lastActiveRef.current = null
+      return
+    }
+    const raf = requestAnimationFrame(() => {
+      const body = bodyRef.current
+      const active = body?.querySelector('.bk-toc-item.active') as HTMLElement | null
+      if (!body || !active) {
+        lastActiveRef.current = null
+        return
+      }
+      const key = active.textContent ?? ''
+      if (key === lastActiveRef.current) return
+      lastActiveRef.current = key
+      const br = body.getBoundingClientRect()
+      const ar = active.getBoundingClientRect()
+      body.scrollTop += ar.top - br.top - br.height / 2 + ar.height / 2
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [tab, toc, locate])
   return (
     <aside className="bk-sidebar">
       <div className="bk-sidebar-head">
@@ -236,7 +275,7 @@ export default function ReaderSidebar(props: ReaderSidebarProps) {
           <span className="material-symbols-outlined">chevron_left</span>
         </button>
       </div>
-      <div className="bk-sidebar-body">
+      <div className="bk-sidebar-body" ref={bodyRef}>
         {tab === 'marks' ? (
           marks.length === 0 ? (
             <div className="bk-sidebar-empty">点阅读条的书签按钮，收藏当前位置</div>

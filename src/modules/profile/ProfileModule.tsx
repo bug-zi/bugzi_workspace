@@ -28,6 +28,24 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+// 提纲导航（优化建议区 260923）：个人档左侧内容导航，顺序与下方 zone 渲染一一对应；
+// id 拼入 DOM（profile-zone-*）供点击跳转定位与滚动高亮
+const PROFILE_NAV: { id: string; label: string }[] = [
+  { id: 'info', label: '个人信息' },
+  { id: 'facts', label: '我的画像' },
+  { id: 'whoami', label: '我是谁' },
+  { id: 'app', label: 'App 设置' },
+  { id: 'terminal', label: '终端' },
+  { id: 'boot', label: '启动与窗口' },
+  { id: 'storage', label: '数据存储' },
+  { id: 'version', label: '版本' },
+  { id: 'llm', label: 'LLM 配置' },
+  { id: 'embedding', label: 'Embedding' },
+  { id: 'usage', label: 'AI 使用' },
+  { id: 'mcp', label: 'MCP 配置' },
+  { id: 'agent', label: '超级工作台' }
+]
+
 export default function ProfileModule() {
   const { toast } = useToast()
   const { settings, setSetting, theme, setTheme } = useAppSettings()
@@ -113,6 +131,53 @@ export default function ProfileModule() {
   const [usageLoading, setUsageLoading] = useState(false)
   // AI 使用 zone 整体折叠（260910 追加）：画像 zone 同范式，默认展开，收起时计数徽标常驻（当前范围调用次数）
   const [usageZoneCollapsed, setUsageZoneCollapsed] = useState(false)
+
+  // ---------- 提纲导航（优化建议区 260923）：左栏提纲点击跳转 + 滚动高亮当前区 ----------
+  const pageRef = useRef<HTMLDivElement>(null)
+  const scrollerRef = useRef<HTMLElement | null>(null)
+  const [navActive, setNavActive] = useState(PROFILE_NAV[0].id)
+  // 向上找最近滚动容器（主栏），其滚动时按「最后一个顶缘越过视口顶 88px 的区」高亮当前项
+  useEffect(() => {
+    let el: HTMLElement | null = pageRef.current
+    while (el) {
+      const ov = getComputedStyle(el).overflowY
+      if (ov === 'auto' || ov === 'scroll' || ov === 'overlay') break
+      el = el.parentElement
+    }
+    const sc = el
+    if (!sc) return
+    scrollerRef.current = sc
+    const onScroll = (): void => {
+      const base = sc.getBoundingClientRect().top
+      let cur = PROFILE_NAV[0].id
+      for (const z of PROFILE_NAV) {
+        const sec = document.getElementById(`profile-zone-${z.id}`)
+        if (!sec) continue
+        if (sec.getBoundingClientRect().top - base <= 88) cur = z.id
+        else break
+      }
+      setNavActive((v) => (v === cur ? v : cur))
+    }
+    onScroll()
+    sc.addEventListener('scroll', onScroll, { passive: true })
+    return () => sc.removeEventListener('scroll', onScroll)
+  }, [])
+  const jumpToZone = (id: string): void => {
+    // 默认折叠的三个区先展开再定位，直达才有效
+    if (id === 'facts') setZoneCollapsed(false)
+    if (id === 'whoami') setWhoamiOpen(true)
+    if (id === 'usage') setUsageZoneCollapsed(false)
+    // 双 rAF：等折叠态提交并完成布局后再量位滚动
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const sec = document.getElementById(`profile-zone-${id}`)
+        const sc = scrollerRef.current
+        if (!sec || !sc) return
+        const top = sec.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 12
+        sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      })
+    )
+  }
   const loadUsage = useCallback(async () => {
     setUsageLoading(true)
     try {
@@ -580,14 +645,27 @@ export default function ProfileModule() {
   const selectedCustom = customFonts.find((c) => customFontCssValue(c.family) === fontFamilySelected) ?? null
 
   return (
-    <div className="profile-page">
+    <div className="profile-page" ref={pageRef}>
+      {/* 提纲导航（优化建议区 260923）：左侧吸顶，点击跳转、滚动高亮当前区 */}
+      <nav className="profile-nav">
+        {PROFILE_NAV.map((z) => (
+          <button
+            key={z.id}
+            className={`profile-nav-item${navActive === z.id ? ' active' : ''}`}
+            onClick={() => jumpToZone(z.id)}
+          >
+            {z.label}
+          </button>
+        ))}
+      </nav>
+      <div className="profile-main">
       <div className="module-header">
         <span className="material-symbols-outlined">person</span>
         <span className="module-title">个人档</span>
       </div>
 
       {/* 个人信息 */}
-      <section className="zone">
+      <section id="profile-zone-info" className="zone">
         <div className="zone-header"><span>个人信息</span></div>
         <div className="zone-body" style={{ padding: 14, display: 'flex', gap: 16, alignItems: 'center' }}>
           <button className="avatar-box" onClick={() => void pickAvatar()} title="更换头像">
@@ -617,7 +695,7 @@ export default function ProfileModule() {
       </section>
 
       {/* 我的画像（致知己 specs §3）：条目式画像，注入全部 AI 上下文 */}
-      <section className="zone">
+      <section id="profile-zone-facts" className="zone">
         <div className="zone-header" onClick={() => setZoneCollapsed((v) => !v)}>
           <span className="material-symbols-outlined">{zoneCollapsed ? 'expand_more' : 'expand_less'}</span>
           <span>我的画像</span>
@@ -681,10 +759,12 @@ export default function ProfileModule() {
       </section>
 
       {/* 我是谁（260921 新功能开发区）：每日问题 + 回答提炼候选入档 */}
-      <WhoamiZone open={whoamiOpen} onOpenChange={setWhoamiOpen} />
+      <div id="profile-zone-whoami">
+        <WhoamiZone open={whoamiOpen} onOpenChange={setWhoamiOpen} />
+      </div>
 
       {/* App 设置 */}
-      <section className="zone">
+      <section id="profile-zone-app" className="zone">
         <div className="zone-header"><span>App 设置</span></div>
         <div className="zone-body" style={{ padding: 0 }}>
           <div className="setting-row">
@@ -755,7 +835,7 @@ export default function ProfileModule() {
       </section>
 
       {/* 终端（260912 新功能开发区） */}
-      <section className="zone">
+      <section id="profile-zone-terminal" className="zone">
         <div className="zone-header"><span>终端</span></div>
         <div className="zone-body" style={{ padding: 0 }}>
           <div className="setting-row">
@@ -788,7 +868,7 @@ export default function ProfileModule() {
       </section>
 
       {/* 启动与窗口 */}
-      <section className="zone">
+      <section id="profile-zone-boot" className="zone">
         <div className="zone-header"><span>启动与窗口</span></div>
         <div className="zone-body" style={{ padding: 0 }}>
           <div className="setting-row">
@@ -815,7 +895,7 @@ export default function ProfileModule() {
       </section>
 
       {/* 数据存储（优化建议区 #2） */}
-      <section className="zone">
+      <section id="profile-zone-storage" className="zone">
         <div className="zone-header"><span>数据存储</span></div>
         <div className="zone-body" style={{ padding: 0 }}>
           <div className="setting-row">
@@ -849,7 +929,7 @@ export default function ProfileModule() {
       </section>
 
       {/* 版本与更新（260913）：GitHub Releases · 启动静默检查 + 手动下载 */}
-      <section className="zone">
+      <section id="profile-zone-version" className="zone">
         <div className="zone-header"><span>版本</span></div>
         <div className="zone-body" style={{ padding: 0 }}>
           <div className="setting-row">
@@ -912,7 +992,7 @@ export default function ProfileModule() {
       </section>
 
       {/* LLM 配置 */}
-      <section className="zone">
+      <section id="profile-zone-llm" className="zone">
         <div className="zone-header">
           <span>LLM 配置</span>
           <span className="zone-count">{llms.length}</span>
@@ -962,10 +1042,12 @@ export default function ProfileModule() {
       </section>
 
       {/* Embedding 配置（2.0 批次A：LLM 配置下方，总纲 §6） */}
-      <AgentSettingsSection part="embedding" />
+      <div id="profile-zone-embedding">
+        <AgentSettingsSection part="embedding" />
+      </div>
 
       {/* AI 使用统计（260910 推理角效率优化；zone 折叠 260910 追加） */}
-      <section className="zone">
+      <section id="profile-zone-usage" className="zone">
         <div className="zone-header" onClick={() => setUsageZoneCollapsed((v) => !v)}>
           <span className="material-symbols-outlined">
             {usageZoneCollapsed ? 'expand_more' : 'expand_less'}
@@ -1124,7 +1206,7 @@ export default function ProfileModule() {
       </section>
 
       {/* MCP 配置 */}
-      <section className="zone">
+      <section id="profile-zone-mcp" className="zone">
         <div className="zone-header">
           <span>MCP 配置</span>
           <span className="zone-count">{mcps.length}</span>
@@ -1181,7 +1263,9 @@ export default function ProfileModule() {
       </section>
 
       {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6） */}
-      <AgentSettingsSection part="agent" />
+      <div id="profile-zone-agent">
+        <AgentSettingsSection part="agent" />
+      </div>
 
       {/* LLM 编辑弹窗 */}
       {llmForm && (
@@ -1545,6 +1629,7 @@ export default function ProfileModule() {
       </ConfirmDialog>
       {/* 背景素材库管理弹窗（优化建议区第36轮） */}
       <BgLibraryDialog open={bgLibOpen} onClose={() => setBgLibOpen(false)} />
+      </div>
     </div>
   )
 }

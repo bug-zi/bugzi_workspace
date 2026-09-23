@@ -1,5 +1,5 @@
 // 主进程入口：窗口创建、协议注册、IPC 注册、定时任务
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, session, shell } from 'electron'
 import { join } from 'node:path'
 import { initDb } from './db/db'
 import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
@@ -98,6 +98,16 @@ if (!app.requestSingleInstanceLock()) {
     initDb()
     registerIpc()
     startSchedulers()
+    // 少数派图片 CDN 空 Referer 防盗链（问题疑惑区第12轮）：cdnfile/cdn.sspai.com 对无 Referer 请求一律 403，
+    // 而 RSSHub 全文 img 自带 referrerpolicy="no-referrer"、打包态页面源 file:// 本就不发 Referer，
+    // 渲染层无法自救 → 网络层对少数派 CDN 请求统一补站点 Referer（dev/prod 双端生效）
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['https://cdnfile.sspai.com/*', 'https://cdn.sspai.com/*'] },
+      (details, callback) => {
+        if (!details.requestHeaders.Referer) details.requestHeaders.Referer = 'https://sspai.com/'
+        callback({ requestHeaders: details.requestHeaders })
+      }
+    )
     // 超级工作台 2.0 引擎（自判 agent_enabled，关闭态零副作用待命）
     startAgent()
     // 存量汤诡计摘要一次性回填（海龟汤质量优化 spec）：错开启动高峰，失败静默（内部自 catch）
