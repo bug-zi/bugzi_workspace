@@ -84,6 +84,6 @@ npm run dist       # 清 release/ → electron-vite build → electron-builder -
 
 ## 阅读源码时的三条心法
 
-1. **注释里有 specs 引用**。几乎每个文件头都写着如 `// 推理角 specs §3.1`，对照 `docs/project/左侧边栏/推理角/designs-specs.md` 就能找到这条代码对应的原始需求条目。需求目录已按左/右侧边栏重组（原「需求（功能模块）」路径已废）。
+1. **注释里有 specs 引用**。几乎每个文件头都写着如 `// 推理角 specs §3.1`，对照 `docs/project/左侧边栏/生活模块/推理角/designs-specs.md` 就能找到这条代码对应的原始需求条目。需求目录已按左/右侧边栏重组（原「需求（功能模块）」路径已废）。
 2. **所有跨进程调用都是字符串通道名**。搜 `ipcMain.handle('模块名:` 和 preload 里的同名前缀，是同一件事的两端；通道名字符串只该出现在 `preload.ts` 和 `ipc.ts` 两处。
 3. **数据只有三类住址**：SQLite（结构化，`bugzi.db`）、数据目录下的内容文件（`md/**` 笔记、`books/` 电子书、`music/` 曲目、`canvas/` 画布、`covers/` 封面、`fonts/` 字体）、`settings` 表的 JSON 字符串（各类状态）。看到任何数据，先问自己"它住在哪"。

@@ -7,7 +7,7 @@ superpowers 工作流（brainstorming / writing-plans）会话产出的**设计�
 | 文档所属 | 存放目录 | 示例 |
 |---|---|---|
 | idea 阶段（未立项、未落地的想法；**落地后必须移出 idea/**） | `docs/project/idea/<模块>/` | `idea/文笔坊/2026-09-07-文笔坊-design.md` |
-| 已立项模块 | `docs/project/左侧边栏/<模块>/` | `左侧边栏/推理角/2026-09-07-reasoning-question-bank-design.md` |
+| 已立项模块 | `docs/project/左侧边栏/{常驻模块,学习模块,生活模块}/<模块>/`（260923 起按左栏三类分组，与 App.tsx `MODULES[].mode` 对应：常驻=总导览/音乐吧/回收站/个人档，学习=工作台/学习库/万象库/文笔坊/信息源，生活=致知己/灵感泉/图书馆/推理角/记账本；旧名目录辩真阁/格言库/收藏夹/书架/藏阅阁/个人中心/白噪音/账本已并入承接模块或归档） | `左侧边栏/生活模块/推理角/2026-09-07-reasoning-question-bank-design.md` |
 | 右侧边栏相关改动（AI 助手、草稿本等右侧栏功能，多跨模块） | `docs/project/右侧边栏/` | `右侧边栏/2026-09-06-ai-name-debugzi-design.md` |
 | 全局功能（非左栏模块的应用级/跨模块功能，如内置终端、AI 生成全局取消） | `docs/project/全局/` | `全局/archive/2026-09-12-内置终端-design.md` |
 
