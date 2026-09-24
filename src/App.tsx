@@ -19,7 +19,11 @@ import ZangyueModule from './modules/zangyue/ZangyueModule'
 import FavoritesModule from './modules/favorites/FavoritesModule'
 import FeedModule from './modules/feed/FeedModule'
 import LiteratureModule from './modules/literature/LiteratureModule'
+import PodcastModule from './modules/podcast/PodcastModule'
+import FushiModule from './modules/fushi/FushiModule'
+import FubenModule from './modules/fuben/FubenModule'
 import LedgerModule from './modules/ledger/LedgerModule'
+import YuleModule from './modules/yule/YuleModule'
 import RecycleModule from './modules/recycle/RecycleModule'
 import ProfileModule from './modules/profile/ProfileModule'
 import WelcomeGuide from './modules/profile/WelcomeGuide'
@@ -41,7 +45,7 @@ import './App.css'
 // 渲染顺序 = top → 当前模式区 → bottom，各组内保持数组相对顺序；设计正本 docs/project/全局/2026-09-24-侧边栏新布局-design.md）
 // 拆分新模块：literature 论文库（自信息源）/ answers 答疑店（问答|辩真|预言家）/ favorites 收藏夹（自图书馆）
 // 归属变化：文笔坊升常驻(top)、致知己 life→learn、灵感泉留生活区（顶替已删除的惊喜林规划）
-// pending 占位：播客台/副本库/赋诗苑/娱乐城——置灰展示、点击提示待建，不占 keep-alive 挂载
+// pending 占位：无（播客台/副本库/赋诗苑/娱乐城 260925 全部转正；新占位出现时在此注记）
 const MODULES: {
   id: ModuleId
   label: string
@@ -57,15 +61,15 @@ const MODULES: {
   { id: 'literature', label: '论文库', icon: 'library_books', seg: 'learn' },
   { id: 'wiki', label: '万象库', icon: 'public', seg: 'learn' },
   { id: 'feed', label: '信息源', icon: 'rss_feed', seg: 'learn' },
-  { id: 'podcast', label: '播客台', icon: 'podcasts', seg: 'learn', pending: true },
+  { id: 'podcast', label: '播客台', icon: 'podcasts', seg: 'learn' },
   { id: 'answers', label: '答疑店', icon: 'forum', seg: 'learn' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement', seg: 'learn' },
   // —— 生活区 ——
   { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark', seg: 'life' },
-  { id: 'fuben', label: '副本库', icon: 'sports_esports', seg: 'life', pending: true },
-  { id: 'fushi', label: '赋诗苑', icon: 'auto_awesome', seg: 'life', pending: true },
+  { id: 'fuben', label: '副本库', icon: 'sports_esports', seg: 'life' },
+  { id: 'fushi', label: '赋诗苑', icon: 'auto_awesome', seg: 'life' },
   { id: 'reasoning', label: '推理角', icon: 'psychology', seg: 'life' },
-  { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life', pending: true },
+  { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', seg: 'life' },
   { id: 'inspirations', label: '灵感泉', icon: 'lightbulb', seg: 'life' },
   // —— 下固定 ——
@@ -80,7 +84,8 @@ const MODULES: {
  *  学习库划词问 AI 直发弹窗拓展坞（'learn' 频道），不再经模块映射走右栏 */
 const CHANNEL_BY_MODULE: Partial<Record<ModuleId, AiChannel>> = {
   wiki: 'wiki',
-  zhijiji: 'zhijiji'
+  zhijiji: 'zhijiji',
+  podcast: 'podcast'
 }
 
 /** 主栏视图：十一模块 + 白噪音混音器页（不进左栏模块列表，入口在左栏底部控件；specs §5.1）
@@ -426,6 +431,7 @@ function Shell() {
                 />
               )}
               {m.id === 'reasoning' && <ReasoningModule />}
+              {m.id === 'fuben' && <FubenModule />}
               {m.id === 'wenbi' && (
                 <WenbiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
@@ -433,7 +439,15 @@ function Shell() {
               {m.id === 'favorites' && <FavoritesModule />}
               {m.id === 'feed' && <FeedModule onNavigateToProfile={() => activateModule('profile')} />}
               {m.id === 'literature' && <LiteratureModule onOpenAi={openAiWith} />}
+              {m.id === 'podcast' && (
+                <PodcastModule
+                  onOpenAi={openAiWith}
+                  onNavigateToProfile={() => activateModule('profile')}
+                />
+              )}
               {m.id === 'ledger' && <LedgerModule />}
+              {m.id === 'yule' && <YuleModule />}
+              {m.id === 'fushi' && <FushiModule />}
               {m.id === 'recycle' && <RecycleModule />}
               {m.id === 'profile' && <ProfileModule onOpenWorkspace={openAgentCenter} />}
             </div>

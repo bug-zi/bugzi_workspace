@@ -954,6 +954,52 @@ const api = {
     stats: (month: string): Promise<import('../src/shared/types').LedgerStats> =>
       ipcRenderer.invoke('ledger:stats', month)
   },
+  yule: {
+    /** 钱包（首次进入惰性建行赠 5,000；reliefAvailable = 余额低于阈值且当日未领） */
+    getWallet: (): Promise<import('../src/shared/types').YuleWalletView> => ipcRenderer.invoke('yule:wallet:get'),
+    /** 破产救济（校验失败抛带 message Error） */
+    claimRelief: (): Promise<import('../src/shared/types').YuleWalletView> => ipcRenderer.invoke('yule:wallet:relief'),
+    /** 塔罗解读存档（主进程写 md 文件） */
+    taroSave: (
+      input: { spread: string; question: string; cards: import('../src/shared/types').TaroCardPick[]; md: string }
+    ): Promise<import('../src/shared/types').TaroRecordView> => ipcRenderer.invoke('yule:taro:save', input),
+    taroList: (): Promise<import('../src/shared/types').TaroRecordView[]> => ipcRenderer.invoke('yule:taro:list'),
+    /** 移入回收站（需前端二次确认） */
+    taroRemove: (id: number): Promise<boolean> => ipcRenderer.invoke('yule:taro:remove', id),
+    /** AI 解读（jobId 取消接线；LLM 未配置抛错由前端引导去配置） */
+    taroInterpret: (
+      jobId: string,
+      input: { spreadName: string; question: string; cards: import('../src/shared/types').TaroCardPick[] }
+    ): Promise<string> => ipcRenderer.invoke('yule:taro:interpret', jobId, input),
+    /** 开局（扣买入 + 建 playing 局； initialState 为引擎快照 JSON） */
+    pokerStart: (initialState: string): Promise<import('../src/shared/types').PokerGameView> =>
+      ipcRenderer.invoke('yule:poker:start', initialState),
+    /** 进行中对局（无则 null，恢复续玩） */
+    pokerState: (): Promise<import('../src/shared/types').PokerGameView | null> => ipcRenderer.invoke('yule:poker:state'),
+    /** 快照回写（节流调用；局已终态则静默丢弃） */
+    pokerSaveState: (id: number, state: string, handsCount: number, handsLog: string): Promise<boolean> =>
+      ipcRenderer.invoke('yule:poker:saveState', id, state, handsCount, handsLog),
+    /** 终局结算（按名次发奖入钱包，事务） */
+    pokerFinish: (id: number, rank: number, handsLog: string, durationMs: number): Promise<import('../src/shared/types').PokerGameView> =>
+      ipcRenderer.invoke('yule:poker:finish', id, rank, handsLog, durationMs),
+    /** 弃赛（记第 4 名无奖励，需前端二次确认） */
+    pokerAbandon: (id: number): Promise<boolean> => ipcRenderer.invoke('yule:poker:abandon', id),
+    pokerList: (): Promise<import('../src/shared/types').PokerGameView[]> => ipcRenderer.invoke('yule:poker:list'),
+    /** 移入回收站（进行中局不可删） */
+    pokerRemove: (id: number): Promise<boolean> => ipcRenderer.invoke('yule:poker:remove', id),
+    /** AI 复盘（写 md 回写指针，返回路径） */
+    pokerReview: (jobId: string, id: number): Promise<{ mdPath: string }> =>
+      ipcRenderer.invoke('yule:poker:review', jobId, id),
+    /** 21 点每手结算（钱包 + 战绩同事务） */
+    blackjackSettle: (
+      bet: number,
+      result: 'win' | 'lose' | 'push' | 'blackjack',
+      net: number
+    ): Promise<{ balance: number; stats: import('../src/shared/types').BlackjackStatsView }> =>
+      ipcRenderer.invoke('yule:blackjack:settle', bet, result, net),
+    blackjackStats: (): Promise<import('../src/shared/types').BlackjackStatsView> =>
+      ipcRenderer.invoke('yule:blackjack:stats')
+  },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
     /** source: manual（手填，默认）| ai（对话中提炼经确认入档） */
@@ -1212,6 +1258,149 @@ const api = {
     test: (): Promise<{ dim: number }> => ipcRenderer.invoke('embedding:test'),
     /** 一键拉起 Ollama（探测 + spawn serve + 轮询就绪） */
     serve: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('embedding:serve')
+  },
+  // ---------- 播客台（260925）：读文字稿学习模块，零音频播放 ----------
+  podcast: {
+    /** 订阅列表 + 各节目未读/未转写数 */
+    feedsList: (): Promise<import('../src/shared/types').PodcastFeed[]> =>
+      ipcRenderer.invoke('podcast:feedsList'),
+    /** iTunes 搜索（主进程代理；feedUrl 缺失项前端置灰不可订） */
+    itunesSearch: (term: string): Promise<import('../src/shared/types').ItunesPodcast[]> =>
+      ipcRenderer.invoke('podcast:itunesSearch', term),
+    /** 订阅（itunes 项或 RSS 直链）+ 首拉最近 10 集（不自动转写） */
+    feedsAdd: (
+      input:
+        | { kind: 'itunes'; name: string; artist: string; artworkUrl: string | null; feedUrl: string }
+        | { kind: 'rss'; url: string },
+      autoTranscribe: boolean
+    ): Promise<import('../src/shared/types').PodcastFeed> =>
+      ipcRenderer.invoke('podcast:feedsAdd', input, autoTranscribe),
+    /** 自动转写开关 / 改显示名 */
+    feedsUpdate: (id: number, patch: { auto_transcribe?: boolean; title?: string }): Promise<boolean> =>
+      ipcRenderer.invoke('podcast:feedsUpdate', id, patch),
+    /** 退订连删该节目全部单集（前端二次确认后调用） */
+    feedsDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:feedsDelete', id),
+    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部，缺省 all） */
+    episodes: (
+      feedId: number | null,
+      view?: 'inbox' | 'archived' | 'all'
+    ): Promise<import('../src/shared/types').PodcastEpisodeSummary[]> =>
+      ipcRenderer.invoke('podcast:episodes', feedId, view),
+    episodeRead: (id: number, read: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('podcast:episodeRead', id, read),
+    /** 删单集（前端二次确认后调用） */
+    episodeDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:episodeDelete', id),
+    /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
+    markAllRead: (feedId: number | null): Promise<number> => ipcRenderer.invoke('podcast:markAllRead', feedId),
+    /** 拉全部源新集，返回总新增 */
+    fetchAll: (): Promise<number> => ipcRenderer.invoke('podcast:fetchAll'),
+    /** 手动转写触发（入队；状态流转经 onTaskChanged 渐进刷新） */
+    transcribe: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:transcribe', id),
+    /** 转写状态机任何变化推送（none→queued→downloading→transcribing→done|failed），返回取消订阅 */
+    onTaskChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('podcast:taskChanged', listener)
+      return () => ipcRenderer.removeListener('podcast:taskChanged', listener)
+    },
+    /** 阅读视图全量 */
+    episodeDetail: (id: number): Promise<import('../src/shared/types').PodcastEpisodeDetail> =>
+      ipcRenderer.invoke('podcast:episodeDetail', id),
+    /** 导读卡生成（缓存复用；jobId 全局取消接线） */
+    generateSummary: (jobId: string, id: number): Promise<string> =>
+      ipcRenderer.invoke('podcast:generateSummary', jobId, id),
+    /** ASR 配置连通性测试（0.5s 静音探测端点/Key/模型；不落库不入队） */
+    testAsr: (cfg: { apiUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; message: string }> =>
+      ipcRenderer.invoke('podcast:testAsr', cfg)
+  },
+  // ---------- 赋诗苑（260925）：飞花令 / 斗诗台 / 诗集 ----------
+  fushi: {
+    /** 每日一令（内部幂等定档）：今日关键字 + 连胜 + 当日局 id */
+    daily: (): Promise<import('../src/shared/types').FushiDailyView> =>
+      ipcRenderer.invoke('fushi:daily'),
+    /** AI 出一句（主进程含字+查重校验重试；giveUp=AI 接不上判我胜；jobId 全局取消接线） */
+    feihuaTurn: (
+      jobId: string,
+      keyword: string,
+      usedLines: string[]
+    ): Promise<import('../src/shared/types').FeihuaTurnResult> =>
+      ipcRenderer.invoke('fushi:feihuaTurn', jobId, keyword, usedLines),
+    /** 终局落库留档（daily 局回写当日打卡）；返回 gameId */
+    feihuaEnd: (
+      keyword: string,
+      daily: boolean,
+      result: import('../src/shared/types').FushiResult,
+      lines: import('../src/shared/types').FeihuaLine[]
+    ): Promise<number> => ipcRenderer.invoke('fushi:feihuaEnd', keyword, daily, result, lines),
+    /** 斗诗出题（主题 + 体裁） */
+    doushiNew: (jobId: string): Promise<{ topic: string; genre: import('../src/shared/types').FushiGenre }> =>
+      ipcRenderer.invoke('fushi:doushiNew', jobId),
+    /** 斗诗提交即终局：AI 作诗 + 四维评审 + 落库留档 */
+    doushiSubmit: (
+      jobId: string,
+      topic: string,
+      genre: import('../src/shared/types').FushiGenre,
+      myPoem: string
+    ): Promise<import('../src/shared/types').DoushiSubmitResult> =>
+      ipcRenderer.invoke('fushi:doushiSubmit', jobId, topic, genre, myPoem),
+    /** 对局历史（type 缺省=全部） */
+    games: (
+      type?: import('../src/shared/types').FushiGameType
+    ): Promise<import('../src/shared/types').FushiGameRow[]> => ipcRenderer.invoke('fushi:games', type),
+    gameDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('fushi:gameDelete', id),
+    /** 诗集列表（genre 缺省=全部） */
+    poems: (genre?: import('../src/shared/types').FushiGenre): Promise<import('../src/shared/types').FushiPoemRow[]> =>
+      ipcRenderer.invoke('fushi:poems', genre),
+    /** 新作（content 缺省写占位）；返回 id */
+    poemAdd: (
+      title: string,
+      genre: import('../src/shared/types').FushiGenre,
+      content?: string
+    ): Promise<number> => ipcRenderer.invoke('fushi:poemAdd', title, genre, content),
+    poemDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('fushi:poemDelete', id),
+    /** 诗词 Copilot 六动作（jobId 全局取消接线） */
+    copilot: (jobId: string, id: number, action: string, selection?: string): Promise<string> =>
+      ipcRenderer.invoke('fushi:copilot', jobId, id, action, selection)
+  },
+  copy: {
+    daily: (): Promise<unknown> => ipcRenderer.invoke('copy:daily'),
+    reshuffleDaily: (): Promise<unknown> => ipcRenderer.invoke('copy:reshuffleDaily'),
+    chooseDaily: (id: number): Promise<unknown> => ipcRenderer.invoke('copy:chooseDaily', id),
+    read: (id: number): Promise<unknown> => ipcRenderer.invoke('copy:read', id),
+    saveProgress: (id: number, progress: { stage: number; ratio: number }): Promise<void> =>
+      ipcRenderer.invoke('copy:saveProgress', id, progress),
+    finish: (id: number, keep: boolean): Promise<unknown> => ipcRenderer.invoke('copy:finish', id, keep),
+    /** 待读区库存列表（v2 泵可视化） */
+    poolList: (): Promise<unknown> => ipcRenderer.invoke('copy:poolList'),
+    list: (filter?: { source?: string; state?: string; tag?: string }): Promise<unknown> =>
+      ipcRenderer.invoke('copy:list', filter),
+    discard: (id: number): Promise<void> => ipcRenderer.invoke('copy:discard', id),
+    diyQuestions: (jobId: string, direction: string): Promise<unknown> =>
+      ipcRenderer.invoke('copy:diyQuestions', jobId, direction),
+    diyGenerate: (jobId: string, direction: string, answers: string[]): Promise<unknown> =>
+      ipcRenderer.invoke('copy:diyGenerate', jobId, direction, answers),
+    /** 补库泵触发（进模块时调，fire-and-forget） */
+    stockCheck: (): Promise<void> => ipcRenderer.invoke('copy:stockCheck'),
+    /** DIY 生成进度推送（大纲/分批撰写） */
+    onDiyProgress: (cb: (p: { step: 'outline' | 'section'; current: number; total: number }) => void): (() => void) => {
+      const listener = (
+        _e: unknown,
+        p: { step: 'outline' | 'section'; current: number; total: number }
+      ): void => {
+        cb(p)
+      }
+      ipcRenderer.on('copy:diyProgress', listener)
+      return () => ipcRenderer.removeListener('copy:diyProgress', listener)
+    },
+    /** 补库泵每补完一条推送：每日候选渐进刷新 */
+    onStockChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => {
+        cb()
+      }
+      ipcRenderer.on('copies:stockChanged', listener)
+      return () => ipcRenderer.removeListener('copies:stockChanged', listener)
+    }
   }
 }
 

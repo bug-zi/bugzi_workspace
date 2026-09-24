@@ -4,6 +4,7 @@ import { app } from 'electron'
 import { mkdirSync, statSync, unlinkSync, renameSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { WALL_BANK_SEED_V22 } from './wallBankSeed'
+import { COPY_OFFICIAL_SEEDS } from './copySeeds'
 
 let db: DatabaseSync | null = null
 
@@ -32,7 +33,7 @@ export function userDataDir(): string {
 export function initDb(): void {
   const userData = userDataDir()
   // 目录：md 各模块子目录 + bg
-  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/learn/interview', 'md/learn/intake', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers', 'science']) {
+  for (const dir of ['md/mottos', 'md/inspirations', 'md/wiki', 'md/verify', 'md/zhijiji', 'md/turtle', 'md/wall', 'md/wall/bank', 'md/drafts', 'md/wenbi/journal', 'md/wenbi/article', 'md/learn', 'md/learn/task', 'md/learn/interview', 'md/learn/intake', 'md/fushi/poems', 'md/fushi/games', 'md/yule/taro', 'md/yule/poker', 'md/copies', 'md/interpretations', 'canvas', 'books', 'covers', 'bg', 'papers', 'science']) {
     mkdirSync(join(userData, dir), { recursive: true })
   }
   db = new DatabaseSync(join(userData, 'bugzi.db'))
@@ -1364,6 +1365,236 @@ function migrate(): void {
       d.exec('ROLLBACK')
       throw e
     }
+  }
+
+  if (version < 53) {
+    // v53：采纳入库的面试题 answer_path 漏回填修复（260925 问题疑惑区）——intakeAdopt /
+    // intakeBatch 曾只写 md/learn/interview/<id>.md 未回填指针，查看参考答案弹窗空白。
+    // 存量按 id 回填规范路径：两入口 md 均固定写该路径，全部命中。
+    d.exec('BEGIN')
+    try {
+      d
+        .prepare(
+          "UPDATE interview_questions SET answer_path = 'md/learn/interview/' || id || '.md' WHERE answer_path = ''"
+        )
+        .run()
+      d.exec('PRAGMA user_version = 53')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 54) {
+    // v54：播客台（2026-09-24-播客台-design.md §三）——播客订阅 / 单集两表；
+    // 文字稿全文落 transcript_text（SQLite TEXT），转写状态机列 transcript_state。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE podcast_feeds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      artist TEXT NOT NULL DEFAULT '',
+      artwork_url TEXT,
+      feed_url TEXT NOT NULL UNIQUE,
+      auto_transcribe INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      last_fetched_at TEXT,
+      fetch_error TEXT
+    )`)
+      d.exec(`CREATE TABLE podcast_episodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feed_id INTEGER NOT NULL REFERENCES podcast_feeds(id),
+      guid TEXT NOT NULL,
+      title TEXT NOT NULL,
+      shownotes TEXT NOT NULL DEFAULT '',
+      published_at TEXT,
+      duration_sec INTEGER,
+      enclosure_url TEXT NOT NULL DEFAULT '',
+      audio_bytes INTEGER,
+      transcript_url TEXT,
+      transcript_text TEXT,
+      transcript_source TEXT,
+      transcript_state TEXT NOT NULL DEFAULT 'none',
+      transcript_error TEXT,
+      summary_md TEXT,
+      summary_at TEXT,
+      read_at TEXT,
+      fetched_at TEXT NOT NULL
+    )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_pe_feed ON podcast_episodes(feed_id, published_at DESC)')
+      d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_pe_guid ON podcast_episodes(feed_id, guid)')
+      d.exec('PRAGMA user_version = 54')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 55) {
+    // v55：赋诗苑（2026-09-25-赋诗苑 design.md，designs-specs §1）——诗集 / 对局留档 /
+    // 每日一令打卡三表（原 specs 规划 v54，被播客台同日占用顺延）。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE fushi_poems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      genre TEXT NOT NULL,
+      md_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+      d.exec(`CREATE TABLE fushi_games (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      genre TEXT,
+      result TEXT NOT NULL,
+      rounds INTEGER NOT NULL DEFAULT 0,
+      daily INTEGER NOT NULL DEFAULT 0,
+      md_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+      d.exec(`CREATE TABLE fushi_daily (
+      date TEXT PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0
+    )`)
+      d.exec('PRAGMA user_version = 55')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 56) {
+    // v56：副本库（docs/project/左侧边栏/生活模块/副本库/designs-specs.md §1）——
+    // copies 单表（state 含待选池 pool，照 wiki_entries 惯例，转正=原地改 state）+
+    // copy_daily 每日选定/打卡表；内置 3 篇官方副本种子入库（正文 md 写 md/copies/）。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE copies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      subtitle TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL,
+      mood TEXT NOT NULL,
+      era TEXT NOT NULL,
+      source TEXT NOT NULL,
+      word_count INTEGER NOT NULL DEFAULT 0,
+      stage_count INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'pool',
+      progress TEXT NOT NULL DEFAULT '',
+      md_path TEXT NOT NULL DEFAULT '',
+      finished_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+      d.exec(`CREATE TABLE copy_daily (
+      date TEXT PRIMARY KEY,
+      candidate_ids TEXT NOT NULL,
+      chosen_id INTEGER,
+      finished_at TEXT
+    )`)
+      const now = nowIso()
+      COPY_OFFICIAL_SEEDS.forEach((seed) => {
+        const stageCount = (seed.body.match(/^## /gm) ?? []).length
+        const wordCount = seed.body.replace(/^##\s*/gm, '').replace(/\s/g, '').length
+        const info = d
+          .prepare(
+            `INSERT INTO copies (title, subtitle, category, mood, era, source, word_count, stage_count, state, md_path, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'official', ?, ?, 'unread', '', ?, ?)`
+          )
+          .run(seed.title, seed.subtitle, seed.category, seed.mood, seed.era, wordCount, stageCount, now, now)
+        const id = Number(info.lastInsertRowid)
+        const mdPath = `md/copies/${id}.md`
+        writeFileSync(join(userDataDir(), mdPath), `# ${seed.title}\n\n> ${seed.subtitle}\n\n${seed.body}\n`, 'utf-8')
+        d.prepare('UPDATE copies SET md_path = ? WHERE id = ?').run(mdPath, id)
+      })
+      d.exec('PRAGMA user_version = 56')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 57) {
+    // v57：娱乐城（docs/project/左侧边栏/生活模块/娱乐城/designs-specs.md §1）——共用钱包 /
+    // 塔罗记录 / 德扑对局（含进行中状态快照与每手流水）/ 21点战绩四表（原 specs 规划 v56，
+    // 被副本库同日占用顺延）。
+    d.exec('BEGIN')
+    try {
+      d.exec(`CREATE TABLE yule_wallet (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      balance INTEGER NOT NULL,
+      relief_date TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+      d.exec(`CREATE TABLE taro_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      spread TEXT NOT NULL,
+      question TEXT NOT NULL DEFAULT '',
+      cards TEXT NOT NULL,
+      md_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+      d.exec(`CREATE TABLE poker_games (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      status TEXT NOT NULL DEFAULT 'playing',
+      my_rank INTEGER,
+      prize INTEGER NOT NULL DEFAULT 0,
+      hands_count INTEGER NOT NULL DEFAULT 0,
+      hand_log TEXT NOT NULL DEFAULT '[]',
+      state TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      duration_ms INTEGER,
+      review_md_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+      d.exec(`CREATE TABLE blackjack_stats (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      hands INTEGER NOT NULL DEFAULT 0,
+      wins INTEGER NOT NULL DEFAULT 0,
+      losses INTEGER NOT NULL DEFAULT 0,
+      pushes INTEGER NOT NULL DEFAULT 0,
+      net INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )`)
+      d.exec('PRAGMA user_version = 57')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  if (version < 58) {
+    // v58：副本库 v2 修订（260925 开发者指令「泵可视化」）——待读区制：
+    // ① state='pool' 语义定为「待读区库存」（用户可见可删，泵维持 10-12 篇）；
+    // ② 内置官方 3 篇从收藏库（unread）划入待读区（pool）；③ 收藏库只收「存档」的副本
+    // （每日读毕二选：存档入库 / 丢弃入回收站）。已发生的选定/读毕记录一律不动。
+    d.prepare("UPDATE copies SET state = 'pool' WHERE source = 'official' AND state = 'unread' AND deleted_at IS NULL").run()
+    d.exec('PRAGMA user_version = 58')
+  }
+
+  if (version < 59) {
+    // v59：副本库 v2.1（260925 开发者指令）——「未读」只属于待读区：收藏库存量中的
+    // unread（含 DIY 测试生成物）全部划入待读区；DIY 生成自此直接落 pool（读毕处置与其他
+    // 库存一致：存档 / 丢弃）。收藏库页签只剩 进行中 + 已读人生 两区。
+    d.prepare("UPDATE copies SET state = 'pool' WHERE state = 'unread' AND deleted_at IS NULL").run()
+    d.exec('PRAGMA user_version = 59')
   }
 }
 

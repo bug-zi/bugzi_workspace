@@ -7,11 +7,14 @@ import { registerIpc, settleTurtleTimers } from './ipc'
 import { startSchedulers } from './services/scheduler'
 import { backfillTrickNotes } from './ai/services'
 import { ensureReasoningStock } from './services/reasoningStock'
+import { ensureCopyStock } from './services/copyStock'
 import { ensureDailyLearn, ensureWikiStock } from './services/wikiStock'
 import { ensureWikiQuizStock } from './services/wikiQuizStock'
 import { ensureLearnStock } from './services/learnStock'
 import { ensureInterviewDaily } from './services/interviewBank'
+import { ensureFushiDaily } from './services/fushi'
 import { ensureWhoamiDaily } from './services/whoami'
+import { resumePodcastTranscribes } from './services/podcast'
 import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
 import './services/agent/bootstrap'
@@ -127,10 +130,16 @@ if (!app.requestSingleInstanceLock()) {
       ensureInterviewDaily()
       void ensureLearnStock()
     }, 10_000).unref()
+    // 赋诗苑（260925）：每日一令关键字定档（零 LLM 幂等纯 SQL）
+    setTimeout(() => ensureFushiDaily(), 10_000).unref()
     // 万象库测一测题库泵（260916 题库制）：错开启动高峰，静默失败
     setTimeout(() => void ensureWikiQuizStock(), 10_000).unref()
     // 我是谁（260921）：每日 3-4 问（settings 幂等）；错开启动高峰，静默失败，LLM 未配置跳过
     setTimeout(() => void ensureWhoamiDaily(), 10_000).unref()
+    // 播客台（260925）：重启转写队列恢复（queued/downloading/transcribing 重置重入队；纯后台无 LLM）
+    setTimeout(() => resumePodcastTranscribes(), 10_000).unref()
+    // 副本库（260925）补库泵：错开启动高峰；存量达标即 no-op，内部自 catch 永不抛错
+    setTimeout(() => void ensureCopyStock(), 10_000).unref()
     createWindow()
     // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
     createTray(appIcon, showMainWindow)

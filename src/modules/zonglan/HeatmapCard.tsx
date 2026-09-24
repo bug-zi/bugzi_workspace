@@ -47,11 +47,11 @@ function cellClass(cell: HeatCell): string {
   return `zl-heat-cell zl-heat-${cell.day?.level ?? 0}`
 }
 
-/** hover 详情文案（无记录日 → 「无记录」） */
+/** hover 详情文案（无记录日 → 「无记录」；260925 五源：学习/一题/挑战/飞花令/副本） */
 function detailText(d: HeatmapDay | null): string {
   if (!d) return '无记录'
   const part = (on: boolean, label: string): string => `${label} ${on ? '已完成' : '未完成'}`
-  return `${d.date} · ${part(d.learn, '学习')} · ${part(d.wall, '一题')} · ${part(d.challenge, '挑战')}`
+  return `${d.date} · ${part(d.learn, '学习')} · ${part(d.wall, '一题')} · ${part(d.challenge, '挑战')} · ${part(d.fushi, '飞花令')} · ${part(d.copies, '副本')}`
 }
 
 export default function HeatmapCard(props: { days: HeatmapDay[] | null }) {
@@ -123,6 +123,8 @@ export default function HeatmapCard(props: { days: HeatmapDay[] | null }) {
             <span className="zl-heat-cell zl-heat-1" />
             <span className="zl-heat-cell zl-heat-2" />
             <span className="zl-heat-cell zl-heat-3" />
+            <span className="zl-heat-cell zl-heat-4" />
+            <span className="zl-heat-cell zl-heat-5" />
             多
           </div>
         </>

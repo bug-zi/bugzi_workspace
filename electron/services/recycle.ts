@@ -22,10 +22,15 @@ export type RecycleSource =
   | 'canvases'
   | 'learn'
   | 'interview_q'
+  | 'fushi_poem'
+  | 'fushi_game'
   | 'prophet'
   | 'twelve_question'
   | 'qa'
   | 'ai_session'
+  | 'yule_taro'
+  | 'yule_poker'
+  | 'fuben'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -45,10 +50,15 @@ const TABLES: Record<RecycleSource, string> = {
   canvases: 'canvases',
   learn: 'learn_nodes',
   interview_q: 'interview_questions',
+  fushi_poem: 'fushi_poems',
+  fushi_game: 'fushi_games',
   prophet: 'prophet_records',
   twelve_question: 'twelve_questions',
   qa: 'qa_records',
-  ai_session: 'ai_sessions'
+  ai_session: 'ai_sessions',
+  yule_taro: 'taro_records',
+  yule_poker: 'poker_games',
+  fuben: 'copies'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -63,6 +73,7 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   zhijiji: null,
   reasoning_soup: null,
   reasoning_game: 'md_path',
+  fuben: 'md_path',
   drafts: 'md_path',
   wenbi_journal: 'md_path',
   wenbi_article: 'md_path',
@@ -74,8 +85,12 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   canvases: 'path',
   learn: null, // learn 卡片 md 派生为 md/learn/<id>.md（无表列），hardDelete 特判清理
   interview_q: null, // 面试题答案 md 派生为 md/learn/interview/<id>.md（无表列），hardDelete 特判清理
+  fushi_poem: 'md_path',
+  fushi_game: 'md_path',
   prophet: 'analysis_md_path',
-  twelve_question: null // 想法为 DB 行，hardDelete 特判清理
+  twelve_question: null, // 想法为 DB 行，hardDelete 特判清理
+  yule_taro: 'md_path',
+  yule_poker: 'review_md_path' // 手牌流水在行内 JSON，不随删（specs §6）
 }
 
 export interface RecycleRow {
@@ -166,6 +181,16 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
       // 回推理角原列表：仅清标记（汤回汤库、对局记录回记录列表；汤状态与局状态不变）
       d.prepare(`UPDATE ${TABLES[rb.source]} SET deleted_at = NULL WHERE id = ?`).run(rb.item_id)
       break
+    case 'fushi_poem':
+    case 'fushi_game':
+      // 回赋诗苑原页签列表：仅清标记（诗作回诗集、对局回历史列表）
+      d.prepare(`UPDATE ${TABLES[rb.source]} SET deleted_at = NULL WHERE id = ?`).run(rb.item_id)
+      break
+    case 'yule_taro':
+    case 'yule_poker':
+      // 回娱乐城记录列表：仅清标记（塔罗解读回记录列表、德扑对局回记录列表；specs §6）
+      d.prepare(`UPDATE ${TABLES[rb.source]} SET deleted_at = NULL WHERE id = ?`).run(rb.item_id)
+      break
     case 'drafts':
       // 回草稿本原频道：仅清标记（channel 保留，恢复后仍在原频道列表）
       d.prepare('UPDATE drafts SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
@@ -242,6 +267,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
            AND id NOT IN (SELECT item_id FROM recycle_bin WHERE source = 'ledger_tx')`
         ).run(rb.item_id)
       }
+      break
+    case 'fuben':
+      // 回收藏库：state 原样保留（副本库 specs §5）
+      d.prepare('UPDATE copies SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)

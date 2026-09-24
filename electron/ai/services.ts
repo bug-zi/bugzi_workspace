@@ -4,8 +4,17 @@ import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { ensureNotCancelled } from './jobs'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
-import { AI_NAME, SettingsKeys } from '../../src/shared/types'
-import type { AiChannel, AiMessage, AiSession, LearnQuizQuestion, LlmConfig } from '../../src/shared/types'
+import { AI_NAME, SettingsKeys, fushiNorm, GENRE_ZH, COPY_CATEGORIES, COPY_MOODS, COPY_ERAS } from '../../src/shared/types'
+import type {
+  AiChannel,
+  AiMessage,
+  AiSession,
+  DoushiScores,
+  FushiGenre,
+  FushiResult,
+  LearnQuizQuestion,
+  LlmConfig
+} from '../../src/shared/types'
 
 // ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
 
@@ -24,7 +33,8 @@ const ACTIVE_SESSION_KEYS: Record<AiChannel, string> = {
   verify: SettingsKeys.AiActiveSessionVerify,
   learn: SettingsKeys.AiActiveSessionLearn,
   prophet: SettingsKeys.AiActiveSessionProphet,
-  literature: SettingsKeys.AiActiveSessionLiterature
+  literature: SettingsKeys.AiActiveSessionLiterature,
+  podcast: SettingsKeys.AiActiveSessionPodcast
 }
 
 /** 会话列表（最近活跃在前，按频道隔离） */
@@ -201,7 +211,9 @@ const MODULE_LABELS: Record<string, string> = {
   verify: '辩真阁',
   zhijiji: '致知己',
   recycle: '回收站',
-  profile: '个人中心'
+  profile: '个人中心',
+  podcast: '播客台',
+  fushi: '赋诗苑'
 }
 
 /** 频道人设（DB v9 频道制，致知己 specs §4） */
@@ -220,7 +232,9 @@ const CHANNEL_PERSONAS: Record<AiChannel, string> = {
   prophet:
     '当前频道是「致知己·预言家」，你是预言分析师：围绕用户的预测/推断，基于检索到的资料给出充分全面的说明与推演（支持与反对的依据都要讲）；欢迎质疑，逐条回应，证据不足时明说；绝不替用户下最终结论，判断由用户自己做。',
   literature:
-    '当前频道是「文献·追问」，你是论文研读助手：围绕会话中注入的文献上下文（导读卡/全文）回答提问——解释概念与术语、评估方法与结论、联系领域背景、指出局限；资料之外的问题明确说明超出该文献范围，不硬答。'
+    '当前频道是「文献·追问」，你是论文研读助手：围绕会话中注入的文献上下文（导读卡/全文）回答提问——解释概念与术语、评估方法与结论、联系领域背景、指出局限；资料之外的问题明确说明超出该文献范围，不硬答。',
+  podcast:
+    '当前频道是「播客·追问」，你是播客学习伴读：基于用户正在读的单集内容（会话中注入的标题/文字稿上下文），帮其吃透观点与论据——解释概念、梳理论证链条、辩证补充不同角度；不代写笔记，材料之外的扩展内容要标明是你的补充。'
 }
 
 /** 画像提炼指令（各频道通用，致知己 specs §3/§4）：识别到稳定新信息时以协议标记提议入档 */
@@ -2969,4 +2983,390 @@ export function wallStreak(): number {
     if (streak > 3650) break // 保险上限
   }
   return streak
+}
+
+// ============ 副本库（docs/project/左侧边栏/生活模块/副本库/designs-specs.md §3）============
+
+export interface CopyOutline {
+  title: string
+  subtitle: string
+  category: string
+  mood: string
+  era: string
+  stages: string[]
+}
+
+/** 副本密度指标与叙事要求（照参照项目「DJ 的一生」密度，写进正文分批生成 prompt） */
+const COPY_DENSITY_RULES = `硬性写作要求：
+1. 第二人称「你」沉浸叙事，禁止上帝视角总结腔，细节落地。
+2. 每个阶段 500-900 字。
+3. 密度指标：每 500 字至少 3 个具体数字、2 个命名地点、1 段对话。
+4. 全文一条贯穿性母题（一个物件或动机从头贯到尾，如「一个两美元的旧 U 盘」）。
+5. 结局必须回归式收束：高潮之后落回平静与自洽，不要强行圆满。`
+
+/** DIY 定制四道个性化问答（specs §3 generateDiyQuestions） */
+export async function generateDiyQuestions(direction: string, signal?: AbortSignal): Promise<string[]> {
+  const prompt = `你是人生定制师。用户想体验一段别样的人生，方向是：「${direction}」。
+
+请出 4 道开放式个性化问题，帮用户把模糊方向变成具体人生。问题要挖这个方向的：
+- 关键分叉点（两种活法选哪条）
+- 代价与恐惧（最怕失去什么、能承受多大代价）
+- 渴望与动机（图的是什么）
+
+要求：每题一句话、不设选项、直击要害，四题合起来能拼出一个人的轮廓。
+只输出 JSON：{"questions": ["问题1", "问题2", "问题3", "问题4"]}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.8,
+    jsonMode: true,
+    scene: 'copy:questions',
+    signal
+  })
+  const parsed = parseJsonObject(res.content)
+  const questions = Array.isArray(parsed.questions)
+    ? (parsed.questions as unknown[]).filter((q): q is string => typeof q === 'string' && q.trim() !== '')
+    : []
+  if (questions.length !== 4) throw new Error('LLM 返回定制问题缺失')
+  return questions
+}
+
+/** 大纲生成 opts：DIY 传 direction+answers；泵传 tags（随机三维标签） */
+export interface CopyOutlineOpts {
+  direction?: string
+  answers?: string[]
+  tags?: { category: string; mood: string; era: string }
+  avoidTitles: string[]
+}
+
+function copyOutlinePrompt(opts: CopyOutlineOpts): string {
+  const avoid = opts.avoidTitles.length ? `\n以下人生已被写过，标题与核心思路都必须明显不同：\n${opts.avoidTitles.map((t) => '- ' + t).join('\n')}\n` : ''
+  const tagLine = opts.tags
+    ? `本副本的三枚标签已定：类别=${opts.tags.category}、情绪=${opts.tags.mood}、时代=${opts.tags.era}，题材与基调须贴合。`
+    : `从这些枚举中各选一枚最贴切的标签——类别（${COPY_CATEGORIES.join('/')}）、情绪（${COPY_MOODS.join('/')}）、时代（${COPY_ERAS.join('/')}）。`
+  const diyPart = opts.direction
+    ? `用户想体验的人生方向：「${opts.direction}」\n用户对四道定制问题的回答：\n${(opts.answers ?? []).map((a, i) => `${i + 1}. ${a}`).join('\n')}\n\n四问答的倾向必须织入人生走向。`
+    : ''
+  return `你是人生副本编剧，擅长写「另一种可能的人生」：第二人称沉浸式、细节密、有挫折有高光、结尾回归平静。
+
+${diyPart ? diyPart + '\n\n' : ''}${tagLine}${avoid}
+
+设计一段人生的完整大纲：
+- title：人生标题，15 字内
+- subtitle：一句话钩子（如「从两美元U盘到八万人主舞台」）
+- stages：8-12 个人生阶段的小标题（参照「卧室DJ：在失去一切之后开始」式命名），阶段弧线须有起伏：起步 → 代价与挫折 → 转机 → 高光 → 回归式收束
+
+只输出 JSON：{"title": "...", "subtitle": "...", "category": "...", "mood": "...", "era": "...", "stages": ["阶段1", "阶段2", ...]}`
+}
+
+/** 人生大纲（specs §3 generateCopyOutline）：撞题由调用方 norm 比对处理 */
+export async function generateCopyOutline(opts: CopyOutlineOpts, signal?: AbortSignal): Promise<CopyOutline> {
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: copyOutlinePrompt(opts) }],
+    temperature: 0.9,
+    jsonMode: true,
+    scene: 'copy:outline',
+    signal
+  })
+  const parsed = parseJsonObject(res.content)
+  const stages = Array.isArray(parsed.stages)
+    ? (parsed.stages as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    : []
+  const normEnum = (v: unknown, list: readonly string[], fallback: string): string =>
+    typeof v === 'string' && (list as readonly string[]).includes(v) ? v : fallback
+  const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
+  if (!title || stages.length < 8 || stages.length > 12) throw new Error('LLM 返回副本大纲缺失')
+  return {
+    title,
+    subtitle: typeof parsed.subtitle === 'string' ? parsed.subtitle.trim() : '',
+    category: normEnum(parsed.category, COPY_CATEGORIES, opts.tags?.category ?? '日常'),
+    mood: normEnum(parsed.mood, COPY_MOODS, opts.tags?.mood ?? '震撼'),
+    era: normEnum(parsed.era, COPY_ERAS, opts.tags?.era ?? '当代'),
+    stages
+  }
+}
+
+/** 正文分批生成（specs §3 generateCopySection）：range = [from, to) 阶段索引区间 */
+export async function generateCopySection(
+  outline: CopyOutline,
+  from: number,
+  to: number,
+  worldMemo: string,
+  isLastBatch: boolean,
+  signal?: AbortSignal
+): Promise<string> {
+  const stageLines = outline.stages
+    .slice(from, to)
+    .map((s) => `## ${s}`)
+    .join('\n\n占位\n\n')
+  const ending = isLastBatch ? '\n这是全文最后一批，最后一个阶段必须完成回归式收束，给整段人生一个平静落点。' : ''
+  const prompt = `你是人生副本编剧，正在为以下大纲撰写正文。
+
+大纲：标题《${outline.title}》——${outline.subtitle}
+${worldMemo ? `已写好的前文各阶段梗概（保持连贯，不要重复其内容）：\n${worldMemo}\n` : ''}
+请撰写第 ${from + 1} 到第 ${to} 个阶段的正文，每个阶段以「## 阶段小标题」开头（小标题与下面给出的完全一致，逐字照抄），阶段之间用空行分隔：
+
+${stageLines}
+${ending}
+
+${COPY_DENSITY_RULES}
+
+只输出正文 md 片段，不要任何解释。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.85,
+    scene: 'copy:section',
+    signal
+  })
+  const text = stripMdFence(res.content)
+  if (!text.includes('## ')) throw new Error('LLM 返回副本正文缺失')
+  return text.trim()
+}
+
+// ---------- 赋诗苑（2026-09-25-赋诗苑 design.md，designs-specs §3） ----------
+
+/** 剥代码围栏（copilotWriting 同款） */
+function stripFence(raw: string): string {
+  return raw
+    .replace(/^[\s\S]*?```(?:json|markdown|md)?\s*\n?/, '')
+    .replace(/\n?```\s*[\s\S]*$/, '')
+    .trim()
+}
+
+/** 飞花令 AI 出句（§3.1）：真实古诗词原句 + 含关键字 + 避开本局已出句；
+ *  校验在主进程 IPC 层做（含字 + 查重），本函数只调 LLM 不判胜负——AI 不当裁判。 */
+export async function feihuaAiTurn(
+  keyword: string,
+  usedLines: string[],
+  signal?: AbortSignal
+): Promise<{ line: string; note: string }> {
+  const used = usedLines.length > 0 ? `本局已出过的句子（禁止重复）：\n${usedLines.map((l) => `- ${l}`).join('\n')}` : '本局还没人出句。'
+  const prompt = `我们在玩飞花令，关键字是「${keyword}」。请出一句**真实存在的古诗词原句**（诗、词、曲均可），要求：
+1. 这句必须包含「${keyword}」这个字；
+2. 必须是真实作品原句，禁止编造、拼凑或改写；
+3. 不得与已出过的句子重复（意思相同的异文也算重复）；
+4. 一句即可（一联中单独的一句，如「床前明月光」而非整首诗）。
+${used}
+
+仅输出 JSON：{"line":"诗句","note":"一句话讲解（含作品名与作者，出处不确定就只讲意境，绝不编造）"}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7,
+    jsonMode: true,
+    scene: 'fushi:feihua',
+    signal
+  })
+  let parsed: { line?: unknown; note?: unknown }
+  try {
+    parsed = JSON.parse(stripFence(res.content)) as { line?: unknown; note?: unknown }
+  } catch {
+    throw new Error('LLM 未返回合法 JSON')
+  }
+  const line = typeof parsed.line === 'string' ? parsed.line.trim() : ''
+  const note = typeof parsed.note === 'string' ? parsed.note.trim() : ''
+  if (!line || !note) throw new Error('LLM 出句字段缺失')
+  return { line, note }
+}
+
+/** 斗诗出题（§2.3/§3.2 前置）：主题 4~8 字 + 体裁四选一 */
+export async function doushiTopic(signal?: AbortSignal): Promise<{ topic: string; genre: FushiGenre }> {
+  const prompt = `为一场「同题斗诗」出题。请定一个有意境、可入诗的主题（4~8 个字，如「秋夜独酌」「故园春雪」），并从 绝句/律诗/词/现代诗 四种体裁中指定一种。
+仅输出 JSON：{"topic":"主题","genre":"jueju|lvshi|ci|modern 之一"}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.9,
+    jsonMode: true,
+    scene: 'fushi:doushi',
+    signal
+  })
+  let parsed: { topic?: unknown; genre?: unknown }
+  try {
+    parsed = JSON.parse(stripFence(res.content)) as { topic?: unknown; genre?: unknown }
+  } catch {
+    throw new Error('LLM 未返回合法 JSON')
+  }
+  const topic = typeof parsed.topic === 'string' ? parsed.topic.trim().slice(0, 12) : ''
+  const genre = typeof parsed.genre === 'string' ? (parsed.genre as FushiGenre) : ('jueju' as FushiGenre)
+  if (!topic) throw new Error('LLM 出题字段缺失')
+  return { topic, genre }
+}
+
+/** 斗诗 AI 作诗（§3.2 compose）：按主题体裁写一首 */
+export async function doushiCompose(topic: string, genre: FushiGenre, signal?: AbortSignal): Promise<string> {
+  const digest = profileDigest()
+  const genreNote: Record<string, string> = {
+    jueju: '四句绝句（五言或七言）',
+    lvshi: '八句律诗（五言或七言，中两联讲究对仗）',
+    ci: '一阕词（自选常见词牌，注明词牌名）',
+    modern: '一首现代诗（可分节，语言凝练）'
+  }
+  const prompt = `${digest}${digest ? '\n\n' : ''}同题斗诗：请以「${topic}」为题，按${genreNote[genre] ?? genre}写一首诗。
+要求：切题、有意象与意境；近体诗避免明显出律；只输出诗的正文（词需含词牌名标题），不要任何解释、前言或代码围栏。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.8,
+    scene: 'fushi:doushi',
+    signal
+  })
+  const md = stripFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
+/** 斗诗评审（§3.2 judge）：四维打分 + 总评 + 胜负（我方视角，允许平局） */
+export async function doushiJudge(
+  topic: string,
+  genre: FushiGenre,
+  myPoem: string,
+  aiPoem: string,
+  signal?: AbortSignal
+): Promise<{ scores: DoushiScores; totalComment: string; verdict: FushiResult }> {
+  const genreZh = GENRE_ZH[genre]
+  const prompt = `同题斗诗评审。题目：「${topic}」，体裁：${genreZh}。
+
+【我的诗】
+${myPoem}
+
+【AI 的诗】
+${aiPoem}
+
+请从四个维度各打 1~10 分：cut=切题、meter=格律（现代诗评节奏与结构）、imagery=意象、mood=意境；并给一段双方对照的总评（先总后分，${genre === 'jueju' || genre === 'lvshi' || genre === 'ci' ? '近体诗/词须点出平仄或对仗硬伤；' : ''}语气客观中带温度）；最后判定胜负（我方视角）：win=我胜、lose=AI 胜、draw=平局。
+仅输出 JSON：{"scores":{"cut":n,"meter":n,"imagery":n,"mood":n},"total_comment":"总评","verdict":"win|lose|draw"}`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+    jsonMode: true,
+    scene: 'fushi:doushi',
+    signal
+  })
+  let parsed: {
+    scores?: Partial<Record<keyof DoushiScores, unknown>>
+    total_comment?: unknown
+    verdict?: unknown
+  }
+  try {
+    parsed = JSON.parse(stripFence(res.content)) as typeof parsed
+  } catch {
+    throw new Error('LLM 未返回合法 JSON')
+  }
+  const s = parsed.scores ?? {}
+  const num = (v: unknown): number => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n))) : 5
+  }
+  const verdict = parsed.verdict === 'win' || parsed.verdict === 'lose' ? parsed.verdict : 'draw'
+  return {
+    scores: { cut: num(s.cut), meter: num(s.meter), imagery: num(s.imagery), mood: num(s.mood) },
+    totalComment: typeof parsed.total_comment === 'string' ? parsed.total_comment.trim() : '（无总评）',
+    verdict
+  }
+}
+
+export type FushiCopilotAction = 'draft' | 'continue' | 'polish' | 'rewrite' | 'duiju' | 'gelo'
+
+/** 诗词 Copilot（§3.3）：六动作只产建议不写库，采纳由渲染层完成；只读 fushi_poems 与画像 */
+export async function fushiCopilot(
+  poemId: number,
+  action: FushiCopilotAction,
+  selection?: string,
+  signal?: AbortSignal
+): Promise<string> {
+  if ((action === 'polish' || action === 'rewrite') && (!selection || !selection.trim())) {
+    throw new Error('NO_SELECTION')
+  }
+  const row = getDb().prepare('SELECT title, genre, md_path FROM fushi_poems WHERE id = ?').get(poemId) as
+    | { title: string; genre: FushiGenre; md_path: string }
+    | undefined
+  if (!row) throw new Error('NOT_FOUND')
+  let body = ''
+  try {
+    body = mdRead(row.md_path).slice(0, 3000)
+  } catch {
+    /* 正文空按未写处理 */
+  }
+  const genreZh = GENRE_ZH[row.genre] ?? row.genre
+  const digest = profileDigest()
+  const head = `${digest}${digest ? '\n\n' : ''}你是我的诗友，懂我的性情与积淀。以下是我正在创作的一首诗：
+标题：${row.title}
+体裁：${genreZh}
+正文：
+${body || '（暂无正文）'}`
+  const near = row.genre === 'jueju' || row.genre === 'lvshi' || row.genre === 'ci'
+  const instructions: Record<FushiCopilotAction, string> = {
+    draft: `请为这首诗起稿：先给 2~3 个立意方向（各一句话），再按其一写出开头（${near ? '一联' : '前几行'}）。合计不超过 200 字。`,
+    continue: '请顺着正文接着往下写（近体诗按下一联、现代诗按下一节）：保持意象与语气连贯，从正文结束处自然续起，不超过 150 字。',
+    polish: `请润色下面这段诗句：保留原意与意象，让字句更准确、更有韵味。只输出润色后的文字，不要任何解释。\n待润色段落：\n${selection}`,
+    rewrite: `请换一种写法重写下面这段诗句：可调整意象与切入角度，主题不变。只输出重写后的文字，不要任何解释。\n待改写段落：\n${selection}`,
+    duiju: `请对句：以「${selection?.trim() || '正文最后一句'}」为上句，给出 3 个下句候选（须真实诗句或严整的对仗句，标注出处；出处不确定就明说不确定，绝不编造）。`,
+    gelo: near
+      ? '请做格律点评：逐句审查平仄（注明所依格律基准）、押韵是否一致、对仗是否工整；指出硬伤并各给出一个修改建议。'
+      : '请做点评：从节奏、分节、意象、意境四个角度审读全诗，指出最弱的一处并给一个修改建议。'
+  }
+  const prompt = `${head}\n\n${instructions[action]}\n\n用简体中文 Markdown 输出，只输出内容本身，不要代码围栏。`
+  const res = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    temperature: action === 'draft' || action === 'continue' || action === 'duiju' ? 0.7 : 0.4,
+    scene: 'fushi:copilot',
+    signal
+  })
+  const md = stripFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
+// ---------- 娱乐城（娱乐城 specs §4）：塔罗解读 / 德扑复盘 ----------
+
+export interface TaroInterpretInput {
+  spreadName: string
+  question: string
+  cards: { position: string; name: string; upright: boolean }[]
+}
+
+/** 塔罗解读（注入我画像——个性化解读类；specs §0 注入口径） */
+export async function taroInterpret(input: TaroInterpretInput, signal?: AbortSignal): Promise<string> {
+  const digest = profileDigest()
+  const lines = input.cards.map((c) => `- ${c.position}位：${c.name}（${c.upright ? '正位' : '逆位'}）`).join('\n')
+  const prompt = `${digest}${digest ? '\n\n' : ''}你是一位熟悉我的塔罗解读师。我抽到了以下牌面，请为我解读。
+
+牌阵：${input.spreadName}
+所问之事：${input.question.trim() || '（未说明，按当下心境解读）'}
+牌面：
+${lines}
+
+要求：
+1. 逐张解读：结合牌位语境与该牌${input.cards.length > 1 ? '在此位置的' : ''}正逆位牌意，勾连我所问之事与我自身的处境、性情（参考画像）。
+2. 整体综合：牌面合起来想对我说什么。
+3. 最后给一句可执行的小建议。
+4. 语气真诚克制、不玄虚不恐吓；逆位不是厄运，是提醒。用简体中文 Markdown 输出，只输出内容本身，不要代码围栏，全文 300~600 字。`
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.8, scene: 'yule:taro', signal })
+  const md = stripFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
+}
+
+export interface PokerReviewInput {
+  rank: number
+  prize: number
+  handsCount: number
+  durationMs: number
+  hands: string // 每手流水 JSON 字符串（调用方截断）
+}
+
+/** 德扑局终复盘（分析类，不注入画像——specs §0 注入口径） */
+export async function pokerReview(input: PokerReviewInput, signal?: AbortSignal): Promise<string> {
+  const rankZh = ['冠军', '亚军', '季军', '第四名'][input.rank - 1] ?? `第${input.rank}名`
+  const prompt = `你是一位细心的德州扑克教练。我刚打完一局 4 人桌 SNG 锦标赛（盲注每 8 手翻倍），请复盘我的表现。
+
+战绩：${rankZh}（奖励 ${input.prize}）｜共 ${input.handsCount} 手｜用时 ${Math.round(input.durationMs / 60000)} 分钟
+每手流水（JSON，net 为我该手净变动）：
+${input.hands}
+
+要求：
+1. 整体表现一段话（结合名次与盈亏曲线）。
+2. 挑 2~3 手关键牌复盘：局面（盲注级/底牌/结果）→ 我的选择的期望值简评 → 更优选项或保持原判的理由。
+3. 给 2~3 条可落地的改进建议。
+4. 用简体中文 Markdown 输出，只输出内容本身，不要代码围栏；若流水过少就按现有信息谨慎点评，不要编造细节。`
+  const res = await chatCompletion({ messages: [{ role: 'user', content: prompt }], temperature: 0.5, scene: 'yule:review', signal })
+  const md = stripFence(res.content)
+  if (!md) throw new Error('LLM 未返回内容')
+  return md
 }

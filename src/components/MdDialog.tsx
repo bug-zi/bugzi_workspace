@@ -81,6 +81,17 @@ export interface MdDialogProps {
   footerBar?: ReactNode
   /** 首次打开即进入编辑态（致知己新建 v1 空文档；版本切换不触发） */
   autoEdit?: boolean
+  /** 通用 Copilot 扩展位（260925 赋诗苑诗集，回调化、模块无关；260908 移除的协笔机制回归）：
+   *  编辑态正文下方工具行（起稿/续写/对句/格律点评常驻，润色/改写仅选中文本时）+ 建议预览卡。
+   *  文本手术（替换选区 / 尾部追加）由本组件完成——调用方只持 LLM 状态；不传零变化。 */
+  copilot?: {
+    busy: boolean
+    suggestion: string | null
+    onRun: (action: 'draft' | 'continue' | 'polish' | 'rewrite' | 'duiju' | 'gelo', selection: string) => void
+    /** 采纳（组件已完成替换/追加文本手术，调用方清 busy/suggestion） */
+    onAdopt: () => void
+    onDismiss: () => void
+  }
   /** 右侧内嵌栏（共享组件 ChannelChatPanel：致知己追问栏第13轮 / 学习库问 AI 拓展坞第42轮）：
    *  传入则弹窗加宽为「md 区 + 侧栏」双栏，交互不出弹窗 */
   sidePanel?: ReactNode
@@ -89,7 +100,7 @@ export interface MdDialogProps {
 }
 
 export default function MdDialog(props: MdDialogProps) {
-  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel, footerBar, onWikiLink } = props
+  const { open, title, subtitle, titleTag, filePath, content: directContent, readOnly, headerAction, onClose, onChanged, selectionActions, onTitleChange, review, learnBar, studyBar, versioned, eventToggle, autoEdit, sidePanel, footerBar, onWikiLink, copilot } = props
   const [content, setContent] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -101,6 +112,21 @@ export default function MdDialog(props: MdDialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
   // autoEdit 仅在 open 的首次加载生效（版本切换换 filePath 不再触发）
   const wasOpenRef = useRef(false)
+  // copilot 扩展位：textarea 选区（state 驱动工具行按钮显隐）+ 本次生成所用选区（采纳手术定位）
+  const [copilotSel, setCopilotSel] = useState('')
+  const copilotRanSelRef = useRef('')
+
+  /** copilot 采纳手术：本次生成基于选区（润色/改写/对句）→ 替换首个选区命中；否则尾部追加 */
+  const adoptCopilot = (): void => {
+    if (!copilot || copilot.suggestion == null) return
+    const ranSel = copilotRanSelRef.current
+    if (ranSel && ranSel.trim() && draft.includes(ranSel)) {
+      setDraft(draft.replace(ranSel, copilot.suggestion))
+    } else {
+      setDraft(`${draft.replace(/\s+$/, '')}\n\n${copilot.suggestion}`)
+    }
+    copilot.onAdopt()
+  }
 
   useEffect(() => {
     setTitleDraft(title)
@@ -398,16 +424,71 @@ export default function MdDialog(props: MdDialogProps) {
             {loading ? (
               <div>加载中…</div>
             ) : editing ? (
-              <textarea
-                className="editor"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') void saveAndExit()
-                }}
-                autoFocus
-                spellCheck={false}
-              />
+              <>
+                <textarea
+                  className="editor"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onSelect={(e) => {
+                    const el = e.currentTarget
+                    setCopilotSel(el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0))
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') void saveAndExit()
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                />
+                {copilot && (
+                  <div className="md-copilot-bar">
+                    {(
+                      [
+                        { action: 'draft', label: '起稿', icon: 'ink_pen', needSel: false },
+                        { action: 'continue', label: '续写', icon: 'redo', needSel: false },
+                        { action: 'polish', label: '润色', icon: 'brush', needSel: true },
+                        { action: 'rewrite', label: '改写', icon: 'published_with_changes', needSel: true },
+                        { action: 'duiju', label: '对句', icon: 'format_quote', needSel: false },
+                        { action: 'gelo', label: '格律点评', icon: 'rule', needSel: false }
+                      ] as const
+                    )
+                      .filter((b) => !b.needSel || copilotSel.trim())
+                      .map((b) => (
+                        <button
+                          key={b.action}
+                          className="btn btn-ghost md-copilot-btn"
+                          disabled={copilot.busy}
+                          onClick={() => {
+                            copilotRanSelRef.current = b.needSel ? copilotSel : ''
+                            copilot.onRun(b.action, copilotSel)
+                          }}
+                        >
+                          <span className="material-symbols-outlined">{b.icon}</span>
+                          {b.label}
+                        </button>
+                      ))}
+                    {copilot.busy && <span className="module-sub md-copilot-busy">AI 生成中…</span>}
+                  </div>
+                )}
+                {copilot && copilot.suggestion != null && (
+                  <div className="md-copilot-card">
+                    <div className="md-copilot-card-head">
+                      <span className="module-sub">AI 建议{copilotRanSelRef.current?.trim() ? '（原文见正文选中段）' : ''}</span>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn btn-ghost" disabled={copilot.busy} onClick={copilot.onDismiss}>
+                          放弃
+                        </button>
+                        <button className="btn btn-ghost" disabled={copilot.busy} onClick={adoptCopilot}>
+                          采纳
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className="md-view md-copilot-suggest"
+                      dangerouslySetInnerHTML={{ __html: renderMd(copilot.suggestion) }}
+                    />
+                  </div>
+                )}
+              </>
             ) : (
               <div className="md-view" ref={bodyRef} />
             )}

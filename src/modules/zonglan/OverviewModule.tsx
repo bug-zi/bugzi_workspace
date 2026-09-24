@@ -9,8 +9,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAppSettings } from '../../theme/ThemeProvider'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
+import ConfirmDialog from '../../components/ConfirmDialog'
 import { SettingsKeys } from '../../shared/types'
-import type { ModuleId, ModuleMode, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult } from '../../shared/types'
+import type { ModuleId, ModuleMode, MottoRecord, ChallengeDailyView, HeatmapDay, WhoamiGetResult, CopyDailyView } from '../../shared/types'
 import { MODULE_NAVIGATE_EVENT } from '../../App'
 import HeatmapCard, { heatmapRange } from './HeatmapCard'
 import ChallengeManageDialog from './ChallengeManageDialog'
@@ -45,6 +46,8 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
   const [wallState, setWallState] = useState<{ done: boolean; streak: number } | null>(null)
   const [reading, setReading] = useState<{ id: number; title: string; percent: number; todayLabel: string } | null>(null)
   const [feedUnread, setFeedUnread] = useState<number | null>(null)
+  // 播客待读（260925 播客台）：未读单集数（学习模式数字条，与信息源未读并列）
+  const [podcastUnread, setPodcastUnread] = useState<number | null>(null)
   const [monthExpense, setMonthExpense] = useState<string | null>(null)
   const [twelve, setTwelve] = useState<string | null>(null)
   const [challengeInfo, setChallengeInfo] = useState<{
@@ -60,6 +63,9 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
   } | null>(null)
   const [heat, setHeat] = useState<HeatmapDay[] | null>(null)
   const [manageOpen, setManageOpen] = useState(false)
+  // 今日副本（260925 副本库，生活模式块）：三态 + 选定二次确认
+  const [copyDaily, setCopyDaily] = useState<CopyDailyView | null>(null)
+  const [copyConfirmId, setCopyConfirmId] = useState<number | null>(null)
 
   /** 深链：派发导航事件（App 集中切模块，目标模块 useModuleNavigate 切内部视图） */
   const go = useCallback((module: ModuleId, target?: string, payload?: Record<string, unknown>) => {
@@ -133,6 +139,12 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       setFeedUnread(null)
     }
     try {
+      const eps = await window.api.podcast.episodes(null)
+      setPodcastUnread(eps.filter((e) => e.read_at == null).length)
+    } catch {
+      setPodcastUnread(null)
+    }
+    try {
       const now = new Date()
       const s = await window.api.ledger.stats(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
       setMonthExpense(`¥${(s.expenseCents / 100).toFixed(2)}`)
@@ -175,6 +187,13 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       setHeat(null)
     }
   }, [])
+  const loadCopyDaily = useCallback(async (): Promise<void> => {
+    try {
+      setCopyDaily(await window.api.copy.daily())
+    } catch {
+      setCopyDaily(null)
+    }
+  }, [])
 
   const loadAll = useCallback((): void => {
     void loadMottos()
@@ -186,7 +205,8 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
     void loadChallenge()
     void loadWhoami()
     void loadHeat()
-  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat])
+    void loadCopyDaily()
+  }, [loadMottos, loadDaily, loadLearnCount, loadWall, loadReading, loadNumbers, loadChallenge, loadWhoami, loadHeat, loadCopyDaily])
 
   useEffect(() => {
     loadAll()
@@ -222,6 +242,29 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       setChallengeInfo((info) => (info ? { ...info, daily: next } : info))
     } catch {
       /* 池 <2 已置灰，静默 */
+    }
+  }
+  /** 选定今日副本（二次确认后）：刷新块与热力图，深链直达阅读 */
+  const chooseCopyDaily = async (): Promise<void> => {
+    if (copyConfirmId == null) return
+    const id = copyConfirmId
+    setCopyConfirmId(null)
+    try {
+      const chosen = await window.api.copy.chooseDaily(id)
+      void loadCopyDaily()
+      void loadHeat()
+      go('fuben', 'reader', { id: chosen.id })
+    } catch {
+      void loadCopyDaily()
+    }
+  }
+  /** 换一批（总导览内直接重抽候选，零 LLM） */
+  const reshuffleCopy = async (): Promise<void> => {
+    try {
+      const candidates = await window.api.copy.reshuffleDaily()
+      setCopyDaily((v) => (v ? { ...v, phase: 'unpicked', candidates } : v))
+    } catch {
+      /* 静默 */
     }
   }
 
@@ -291,6 +334,75 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
           </span>
         </button>
       )}
+
+      {/* 今日副本（260925 副本库）——生活模式块：三态（候选三选一 / 续读 / 读毕），选定二次确认 */}
+      {mode === 'life' &&
+        (copyDaily === null ? (
+          <div className="card zl-row">
+            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="zl-row-title">今日副本</span>
+            <span className="module-sub">加载失败</span>
+          </div>
+        ) : copyDaily.phase === 'reading' && copyDaily.chosen ? (
+          <button
+            className="card zl-row"
+            onClick={() => go('fuben', 'reader', { id: copyDaily.chosen!.id })}
+            title="继续阅读今日副本"
+          >
+            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="zl-row-title">{copyDaily.chosen.title}</span>
+            <span className="module-sub">
+              今日副本 · 第 {(copyDaily.chosen.progress?.stage ?? 0) + 1}/{copyDaily.chosen.stageCount} 章 · 点击续读
+            </span>
+          </button>
+        ) : copyDaily.phase === 'finished' ? (
+          <button
+            className="card zl-row"
+            onClick={() => copyDaily.finishedCopy && go('fuben', 'reader', { id: copyDaily.finishedCopy.id })}
+            title="回看今日副本"
+          >
+            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="zl-row-title">今日副本已读毕</span>
+            <span className="module-sub">{copyDaily.finishedCopy?.title ?? ''} · 明天再来一段</span>
+          </button>
+        ) : (
+          <div className="card zl-row zl-copy-card">
+            <span className="material-symbols-outlined">sports_esports</span>
+            <div className="zl-row-main">
+              <div className="zl-row-line">
+                <span className="zl-row-title">今日副本</span>
+                <span className="module-sub">三选一 · 选定后今日锁定</span>
+                <button
+                  className="icon-btn"
+                  title="换一批"
+                  onClick={() => void reshuffleCopy()}
+                >
+                  <span className="material-symbols-outlined">autorenew</span>
+                </button>
+              </div>
+              <div className="zl-copy-candidates">
+                {(copyDaily.candidates ?? []).map((c) => (
+                  <button key={c.id} className="zl-copy-item" onClick={() => setCopyConfirmId(c.id)}>
+                    <span className="zl-copy-item-title">{c.title}</span>
+                    <span className="module-sub">{c.mood}</span>
+                  </button>
+                ))}
+                {(copyDaily.candidates ?? []).length === 0 && (
+                  <span className="module-sub">候选池备货中，稍候刷新</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      <ConfirmDialog
+        open={copyConfirmId != null}
+        title="选定今日副本"
+        confirmText="就它了"
+        onConfirm={() => void chooseCopyDaily()}
+        onCancel={() => setCopyConfirmId(null)}
+      >
+        选定后今日不可更换，读完这段人生即完成今日打卡。
+      </ConfirmDialog>
 
       {/* 今日挑战（260916 新功能开发区）：日定一条 + 可逆打卡 + 池管理；div 卡（内嵌按钮不可用 button） */}
       <div className="card zl-row zl-challenge-card">
@@ -385,12 +497,23 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
           </button>
         ))}
 
-      {/* 轻数字条（点击直达对应模块；260922 双模式拆源：学习=信息源未读，生活=本月支出+十二问题） */}
+      {/* 轻数字条（点击直达对应模块；260922 双模式拆源：学习=信息源未读+播客待读，生活=本月支出+十二问题） */}
       <div className="zl-numbar">
         {mode === 'learn' && (
           <button className="zl-num" onClick={() => go('feed')} title="进入信息源">
             <span className="zl-num-val">{feedUnread ?? '--'}</span>
             <span className="module-sub">信息源未读</span>
+          </button>
+        )}
+        {mode === 'learn' && (
+          <button
+            className={`zl-num${podcastUnread === 0 ? ' zl-muted' : ''}`}
+            disabled={podcastUnread === 0}
+            onClick={() => go('podcast')}
+            title="进入播客台"
+          >
+            <span className="zl-num-val">{podcastUnread ?? '--'}</span>
+            <span className="module-sub">播客待读</span>
           </button>
         )}
         {mode === 'life' && (

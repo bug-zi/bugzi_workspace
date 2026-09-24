@@ -1,8 +1,9 @@
 // 共享类型与常量（主进程 / 渲染进程共用）
 
 // 模块标识（260924 侧边栏新布局：新增 'favorites' 收藏夹 / 'literature' 论文库 / 'answers' 答疑店 三个拆分模块；
-// 另加占位 id 'podcast' 播客台 / 'fuben' 副本库 / 'fushi' 赋诗苑 / 'yule' 娱乐城——仅左栏占位，无对应视图。
-// 历史备注：260908 'verify' 并入万象库；260911 'mottos' 并入文笔坊；260912 合并为 'zangyue'、新增 'zonglan'）
+// 占位 id 现存 'fuben' 副本库 / 'fushi' 赋诗苑。
+// 历史备注：260908 'verify' 并入万象库；260911 'mottos' 并入文笔坊；260912 合并为 'zangyue'、新增 'zonglan'；
+// 260925 'podcast' 转正（播客台落地）、'yule' 转正（娱乐城落地，本文件尾 YULE_* 常量））。
 export type ModuleId =
   | 'zonglan'
   | 'learn'
@@ -32,8 +33,8 @@ export interface ModuleNavDetail {
   payload?: Record<string, unknown>
 }
 
-// AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant；2.0 批次C 增 literature）
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
+// AI 边栏频道（DB v9：ai_sessions.channel；致知己 specs §4，存量会话归 assistant；2.0 批次C 增 literature；260925 增 podcast 播客台）
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature' | 'podcast'
 
 // 学习/生活双模式（优化建议区 260922）：左栏两套入口视图 + 总导览随模式换块；
 // 模式归属见 App.tsx MODULES[].mode（常驻/学习/生活）
@@ -145,7 +146,11 @@ export const SettingsKeys = {
   /** Embedding 配置 JSON EmbeddingConfig（Ollama bge-m3） */
   EmbeddingConfig: 'embedding_config',
   /** 「文献·追问」场景激活会话（批次 C 消费，键先行占位） */
-  AiActiveSessionLiterature: 'ai_active_session_literature'
+  AiActiveSessionLiterature: 'ai_active_session_literature',
+  /** 播客台「播客·追问」场景激活会话（260925 播客台） */
+  AiActiveSessionPodcast: 'ai_active_session_podcast',
+  /** ASR（语音转写）配置 JSON AsrConfig（个人档「ASR 配置」区，260925 播客台） */
+  AsrConfig: 'asr_config'
 } as const
 
 // 内置终端（260912）：shell 三选 + 默认工作目录 + 面板高度（settings JSON 键 terminal）
@@ -224,6 +229,40 @@ export function parseTerminalSettings(raw: string | null | undefined): TerminalS
     }
   } catch {
     return { ...d }
+  }
+}
+
+// ---------- ASR（语音转写）配置（260925 播客台；个人档「ASR 配置」区读写） ----------
+
+export interface AsrConfig {
+  /** OpenAI 兼容 base（如 https://api.siliconflow.cn/v1，转写打 {apiUrl}/audio/transcriptions） */
+  apiUrl: string
+  apiKey: string
+  model: string
+}
+
+/** 预填建议值（仅 parse 结果三项全空时的首次展示；保存后即用户数据，不做回落默认——用户清空须保持空）。
+ *  模型实测注记（260925）：硅基流动**不托管 whisper**（openai/whisper-large-v3 实测 400 Model does not exist），
+ *  预填其免费档 SenseVoiceSmall（中文强、速度远快于 large-v3） */
+export const ASR_DEFAULTS: AsrConfig = {
+  apiUrl: 'https://api.siliconflow.cn/v1',
+  apiKey: '',
+  model: 'FunAudioLLM/SenseVoiceSmall'
+}
+
+/** 从 settings 原始 JSON 解析 ASR 配置（坏数据/缺字段逐项回落空串；完整性校验由触发转写时做） */
+export function parseAsrConfig(raw: string | null | undefined): AsrConfig {
+  const empty: AsrConfig = { apiUrl: '', apiKey: '', model: '' }
+  if (!raw) return empty
+  try {
+    const o = JSON.parse(raw) as Partial<AsrConfig>
+    return {
+      apiUrl: typeof o.apiUrl === 'string' ? o.apiUrl : '',
+      apiKey: typeof o.apiKey === 'string' ? o.apiKey : '',
+      model: typeof o.model === 'string' ? o.model : ''
+    }
+  } catch {
+    return empty
   }
 }
 
@@ -314,6 +353,14 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'agent:digest': '工作台·导读卡',
   'agent:lecture': '工作台·精讲',
   'agent:translate': '工作台·精译',
+  'fushi:feihua': '赋诗苑·飞花令',
+  'fushi:doushi': '赋诗苑·斗诗台',
+  'fushi:copilot': '赋诗苑·诗友',
+  'copy:questions': '副本库·定制问答',
+  'copy:outline': '副本库·构思大纲',
+  'copy:section': '副本库·撰写正文',
+  'podcast:transcribe': '播客台·转写',
+  'podcast:polish': '播客台·排版',
   other: '其他'
 }
 
@@ -861,6 +908,66 @@ export interface FeedRecord {
   created_at: string
 }
 
+// ---------- 播客台（260925；podcast_feeds / podcast_episodes 表，DB v54） ----------
+
+/** 播客订阅（podcast_feeds 全量 + 节目页签/单集流筛选用的计数） */
+export interface PodcastFeed {
+  id: number
+  title: string
+  artist: string
+  artwork_url: string | null
+  feed_url: string
+  auto_transcribe: boolean
+  created_at: string
+  last_fetched_at: string | null
+  fetch_error: string | null
+  /** 未读单集数（read_at IS NULL） */
+  unread: number
+  /** 待转写且需 ASR 的单集数（none/failed 且无自带文字稿——必须配 ASR 才能读的量） */
+  untranscribed: number
+  /** 自带文字稿单集数（RSS podcast:transcript 直链非空，转写免费直抓不调 ASR） */
+  rss_transcripts: number
+}
+
+/** 单集流视图（260925 收件箱制）：inbox=未读（默认），archived=已读（已读即归档），all=全部 */
+export type PodcastEpisodeView = 'inbox' | 'archived' | 'all'
+
+/** 播客单集列表轻量行（单集流；不含 shownotes/transcript_text/summary_md 大字段） */
+export interface PodcastEpisodeSummary {
+  id: number
+  feed_id: number
+  feed_title: string
+  title: string
+  published_at: string | null
+  duration_sec: number | null
+  /** none | queued | downloading | transcribing | polishing | done | failed（polishing=ASR 已入库，LLM 排版中） */
+  transcript_state: 'none' | 'queued' | 'downloading' | 'transcribing' | 'polishing' | 'done' | 'failed'
+  /** RSS 自带文字稿直抓源（该集有 transcript_url 即 true，转写走直抓免 ASR） */
+  has_rss_transcript: boolean
+  transcript_error: string | null
+  read_at: string | null
+}
+
+/** 播客单集阅读视图全量（podcast:episodeDetail） */
+export interface PodcastEpisodeDetail extends PodcastEpisodeSummary {
+  shownotes: string
+  transcript_text: string | null
+  transcript_source: 'rss' | 'asr' | null
+  summary_md: string | null
+  summary_at: string | null
+  artwork_url: string | null
+}
+
+/** iTunes 搜索 API 归一化结果行（feedUrl 缺失 = 不可订，前端置灰） */
+export interface ItunesPodcast {
+  trackId: number
+  name: string
+  artist: string
+  artworkUrl: string | null
+  trackCount: number | null
+  feedUrl: string | null
+}
+
 /** 导入字体条目（优化建议区第46轮，userData/fonts/ 文件系统为真相源）：
  *  file=落盘唯一名；label=导入时原始文件名去扩展名（sanitize 后），兼作 CSS family 名 */
 export interface CustomFontInfo {
@@ -998,6 +1105,9 @@ export interface RecycleItem {
     | 'ledger_account'
     | 'ledger_category'
     | 'learn'
+    | 'interview_q'
+    | 'fushi_poem'
+    | 'fushi_game'
     | 'prophet'
     | 'twelve_question'
     | 'qa'
@@ -1144,8 +1254,110 @@ export interface HeatmapDay {
   learn: boolean
   wall: boolean
   challenge: boolean
-  /** 完成件数 0-3（四档颜色） */
+  /** 飞花令打卡（260925 赋诗苑，第四源） */
+  fushi: boolean
+  /** 副本读毕打卡（260925 副本库，第五源）：当日已选定且读毕 */
+  copies: boolean
+  /** 完成件数 0-5（六档颜色） */
   level: number
+}
+
+// ---------- 赋诗苑（DB v55；260925 新模块） ----------
+
+/** 诗体裁（斗诗出题限前四种，free 不进题面） */
+export type FushiGenre = 'jueju' | 'lvshi' | 'ci' | 'modern' | 'free'
+export const GENRE_ZH: Record<FushiGenre, string> = {
+  jueju: '绝句',
+  lvshi: '律诗',
+  ci: '词',
+  modern: '现代诗',
+  free: '自由体'
+}
+/** 斗诗可出题体裁（free 除外） */
+export const DOUSHI_GENRES: FushiGenre[] = ['jueju', 'lvshi', 'ci', 'modern']
+
+/** 飞花令关键字池（designs-specs §0）：常用意象、名句覆盖率高；双字词仅限故人/长亭/天涯 */
+export const FEIHUA_KEYWORDS = [
+  '月', '风', '雪', '花', '春', '江', '夜', '酒', '山', '云', '柳', '梦', '秋', '舟', '灯',
+  '霜', '桥', '烟', '雨', '剑', '琴', '归', '眠', '醉', '寒', '玉', '马', '故人', '长亭', '天涯'
+]
+
+/** 对局类型 / 胜负（我方视角；飞花令不产生 draw） */
+export type FushiGameType = 'feihua' | 'doushi'
+export type FushiResult = 'win' | 'lose' | 'draw'
+
+/** 对局留档逐句（feihuaEnd 落库与回看用） */
+export interface FeihuaLine {
+  side: 'me' | 'ai'
+  line: string
+  /** AI 句的逐句讲解 */
+  note?: string
+}
+
+/** 飞花令 AI 出句结果（giveUp=AI 连续三次出句不合格，判我胜） */
+export type FeihuaTurnResult = { line: string; note: string } | { giveUp: true }
+
+/** 斗诗四维评分（各 10 分） */
+export interface DoushiScores {
+  /** 切题 */
+  cut: number
+  /** 格律 */
+  meter: number
+  /** 意象 */
+  imagery: number
+  /** 意境 */
+  mood: number
+}
+
+export interface DoushiSubmitResult {
+  gameId: number
+  aiPoem: string
+  scores: DoushiScores
+  totalComment: string
+  verdict: FushiResult
+}
+
+export interface FushiPoemRow {
+  id: number
+  title: string
+  genre: FushiGenre
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FushiGameRow {
+  id: number
+  type: FushiGameType
+  /** feihua=关键字；doushi=主题 */
+  topic: string
+  genre: FushiGenre | null
+  result: FushiResult
+  rounds: number
+  /** 1=每日一令局（打卡依据） */
+  daily: number
+  /** 留档 md 相对路径（回看读取用） */
+  md_path: string
+  created_at: string
+}
+
+/** 每日一令（fushi:daily 一次取齐） */
+export interface FushiDailyView {
+  date: string
+  keyword: string
+  done: boolean
+  streak: number
+  /** 当日每日局 id（回看用；未开局/未终局为 null） */
+  todayGameId: number | null
+}
+
+/** 飞花令文本归一化（判字与查重共用；主进程/渲染层双端 import） */
+export function fushiNorm(s: string): string {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[，。？！、：；「」『』“”‘’（）()《》【】\[\]{},.?!:;'"`~\-_—…·<>\\|/]/g, '')
 }
 
 // 我是谁（whoami_questions，DB v47；个人档·我的画像之下）
@@ -1361,4 +1573,131 @@ export interface AgentConfigView {
   privacyProfile: boolean
   privacyLearn: boolean
   embedding: EmbeddingConfig
+}
+
+// ---------- 副本库（DB v56；260925 新模块） ----------
+
+/** 副本三标签枚举（生成 prompt 与收藏库筛选共用） */
+export const COPY_CATEGORIES = ['科技', '艺术', '体育', '商业', '冒险', '犯罪', '日常'] as const
+export const COPY_MOODS = ['热血', '治愈', '暗黑', '荒诞', '震撼', '温馨', '讽刺'] as const
+export const COPY_ERAS = ['古代', '近代', '当代', '未来'] as const
+
+/** 副本来源 */
+export type CopySource = 'official' | 'daily' | 'diy'
+/** 副本状态（pool=待选池，不可见储备） */
+export type CopyState = 'pool' | 'unread' | 'in_progress' | 'finished'
+
+/** 副本阅读进度（copies.progress JSON） */
+export interface CopyProgress {
+  stage: number
+  ratio: number
+}
+
+/** 副本卡片（列表/候选/待读区通用，不含正文） */
+export interface CopyCard {
+  id: number
+  title: string
+  subtitle: string
+  category: string
+  mood: string
+  era: string
+  source: CopySource
+  wordCount: number
+  stageCount: number
+  state: CopyState
+  progress: CopyProgress | null
+  finishedAt: string | null
+}
+
+/** 副本详情（阅读视图载荷，含 md 路径） */
+export interface CopyDetail extends CopyCard {
+  mdPath: string
+}
+
+/** copy:daily 返回体（三态：未选 / 进行中 / 已读毕） */
+export interface CopyDailyView {
+  phase: 'unpicked' | 'reading' | 'finished'
+  candidates?: CopyCard[]
+  chosen?: CopyDetail
+  finishedCopy?: CopyCard
+}
+
+/** DIY 生成进度（copy:diyProgress 事件载荷） */
+export interface CopyDiyProgress {
+  step: 'outline' | 'section'
+  current: number
+  total: number
+}
+
+// ---------- 娱乐城（娱乐城 designs-specs §0；主进程/渲染层单一常量源） ----------
+
+export const YULE_SB = 10
+export const YULE_BB = 20
+export const YULE_BUY_IN = 1000
+export const YULE_START_STACK = 1000
+export const YULE_HANDS_PER_LEVEL = 8
+export const YULE_PRIZES = [2000, 1200, 800, 0]
+export const YULE_RELIEF_AMOUNT = 2000
+export const YULE_RELIEF_THRESHOLD = 1000
+
+/** 塔罗解读单张牌（落库 cards JSON 与 AI 入参共用） */
+export interface TaroCardPick {
+  position: string
+  name: string
+  upright: boolean
+}
+
+/** 德扑每手流水（poker_games.hand_log JSON 元素，与引擎 HandLogEntry 同构） */
+export interface PokerHandLogEntry {
+  handNo: number
+  sb: number
+  bb: number
+  hero: string
+  net: number
+  note: string
+}
+
+/** 钱包视图（yule:wallet:get / relief 返回体） */
+export interface YuleWalletView {
+  balance: number
+  reliefAvailable: boolean
+  reliefAmount: number
+  threshold: number
+}
+
+/** 塔罗记录行（taro_records；cards 为 TaroCardPick[] JSON） */
+export interface TaroRecordView {
+  id: number
+  spread: string
+  question: string
+  cards: string
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
+/** 德扑对局行（poker_games；hand_log 为 PokerHandLogEntry[] JSON，state 为引擎快照 JSON） */
+export interface PokerGameView {
+  id: number
+  status: 'playing' | 'finished' | 'abandoned'
+  my_rank: number | null
+  prize: number
+  hands_count: number
+  hand_log: string
+  state: string | null
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
+  review_md_path: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 21 点战绩（blackjack_stats 单行） */
+export interface BlackjackStatsView {
+  hands: number
+  wins: number
+  losses: number
+  pushes: number
+  net: number
 }

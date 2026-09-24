@@ -8,8 +8,8 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { FONT_FAMILIES, withCustomGlobalFonts } from '../../theme/fonts'
 import { customFontCssValue, invalidateCustomFonts, registerCustomFontFaces } from '../../theme/customFonts'
-import { LLM_SCENE_LABELS, PROFILE_CATEGORIES, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
-import type { CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
+import { LLM_SCENE_LABELS, PROFILE_CATEGORIES, SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings, ASR_DEFAULTS, parseAsrConfig } from '../../shared/types'
+import type { AsrConfig, CustomFontInfo, LlmUsageRecord, LlmUsageStats, TerminalSettings, UpdateSnapshot } from '../../shared/types'
 import BgLibraryDialog from './BgLibraryDialog'
 import WhoamiZone from './WhoamiZone'
 import AgentSettingsSection from './AgentSettingsSection'
@@ -43,6 +43,7 @@ const PROFILE_NAV: { id: string; label: string }[] = [
   { id: 'embedding', label: 'Embedding' },
   { id: 'usage', label: 'AI 使用' },
   { id: 'mcp', label: 'MCP 配置' },
+  { id: 'asr', label: 'ASR 配置' },
   { id: 'agent', label: '超级工作台' }
 ]
 
@@ -82,6 +83,8 @@ export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
   const [migrateConfirm, setMigrateConfirm] = useState<{ dir: string } | null>(null)
   // 终端设置（260912）：默认 shell + 默认工作目录（面板高度由面板自身拖拽记忆）
   const [termCfg, setTermCfg] = useState<TerminalSettings>(TERMINAL_DEFAULTS)
+  // ASR 配置（260925 播客台）：parse 三项全空（首次/未配置）时预填建议值，保存后即用户数据
+  const [asrCfg, setAsrCfg] = useState<AsrConfig>(ASR_DEFAULTS)
   const [launchOnBoot, setLaunchOnBoot] = useState(false)
   const [closeAction, setCloseAction] = useState<'tray' | 'exit'>('tray')
   // 版本与更新（260913）：快照唯一数据源为主进程事件推送，本组件仅镜像；keep-alive 下挂载一次订阅常驻
@@ -286,6 +289,8 @@ export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
       setMcps(JSON.parse(settings[SettingsKeys.McpConfigs] ?? '[]'))
     } catch { /* 空值 */ }
     setTermCfg(parseTerminalSettings(settings[SettingsKeys.Terminal]))
+    const asr = parseAsrConfig(settings[SettingsKeys.AsrConfig])
+    setAsrCfg(asr.apiUrl || asr.apiKey || asr.model ? asr : ASR_DEFAULTS)
     setLaunchOnBoot(settings[SettingsKeys.LaunchOnBoot] === '1')
     setCloseAction(settings[SettingsKeys.CloseAction] === 'exit' ? 'exit' : 'tray')
     void window.api.storage.currentDir().then(setDataDir)
@@ -303,6 +308,30 @@ export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
     const next = { ...termCfg, ...patch }
     setTermCfg(next)
     void window.api.settings.set(SettingsKeys.Terminal, JSON.stringify(next))
+  }
+
+  // ---------- ASR 配置（260925 播客台；OpenAI 兼容 /audio/transcriptions，硅基流动 whisper 等） ----------
+  const saveAsrCfg = async (): Promise<void> => {
+    await window.api.settings.set(SettingsKeys.AsrConfig, JSON.stringify(asrCfg))
+    toast('ASR 配置已保存')
+  }
+  // 测试连接（0.5s 静音真实打一次转写端点，探测 端点/Key/模型 三要素；不落库不入队）
+  const [asrTesting, setAsrTesting] = useState(false)
+  const [asrTestResult, setAsrTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const testAsrCfg = async (): Promise<void> => {
+    if (!asrCfg.apiUrl.trim() || !asrCfg.apiKey.trim() || !asrCfg.model.trim()) {
+      toast('请先填全三项配置再测试')
+      return
+    }
+    setAsrTesting(true)
+    setAsrTestResult(null)
+    try {
+      setAsrTestResult(await window.api.podcast.testAsr(asrCfg))
+    } catch (e) {
+      setAsrTestResult({ ok: false, message: (e as Error).message })
+    } finally {
+      setAsrTesting(false)
+    }
   }
   const pickTerminalDir = async (): Promise<void> => {
     const dir = await window.api.storage.pickDir()
@@ -1273,22 +1302,64 @@ export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
         </div>
       </section>
 
-      {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6）；260924 左栏工作台入口删除，直达入口迁入此区顶部 */}
-      <div id="profile-zone-agent">
-        <section
-          className="zone"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
-        >
-          <div>
-            <div style={{ fontWeight: 600 }}>超级工作台 · 任务中心</div>
-            <div className="module-sub">后台错峰巡检海选 · 任务队列 · 负载卫兵 · 预算</div>
+      {/* ASR 配置（260925 播客台）：语音转写服务，OpenAI 兼容 /audio/transcriptions（预填硅基流动 whisper） */}
+      <section id="profile-zone-asr" className="zone">
+        <div className="zone-header">
+          <span>ASR 配置</span>
+        </div>
+        <div className="zone-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <input
+            className="field"
+            placeholder="Base URL（如 https://api.siliconflow.cn/v1）"
+            value={asrCfg.apiUrl}
+            onChange={(e) => setAsrCfg({ ...asrCfg, apiUrl: e.target.value })}
+          />
+          <input
+            className="field"
+            type="password"
+            placeholder="API Key"
+            value={asrCfg.apiKey}
+            onChange={(e) => setAsrCfg({ ...asrCfg, apiKey: e.target.value })}
+          />
+          <input
+            className="field"
+            placeholder="模型名（如 FunAudioLLM/SenseVoiceSmall）"
+            value={asrCfg.model}
+            onChange={(e) => setAsrCfg({ ...asrCfg, model: e.target.value })}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="btn btn-primary" onClick={() => void saveAsrCfg()}>
+              <span className="material-symbols-outlined">save</span>
+              保存
+            </button>
+            <button className="btn" onClick={() => void testAsrCfg()} disabled={asrTesting} title="用 0.5 秒静音音频真实请求一次转写接口，验证端点 / Key / 模型名三要素">
+              <span className="material-symbols-outlined">{asrTesting ? 'progress_activity spin' : 'network_check'}</span>
+              {asrTesting ? '测试中…' : '测试连接'}
+            </button>
+            <span className="module-sub">用于播客台文字稿转写（OpenAI 兼容 /audio/transcriptions）</span>
           </div>
-          <button className="btn btn-primary" onClick={props.onOpenWorkspace}>
-            <span className="material-symbols-outlined">smart_toy</span>
-            打开任务中心
-          </button>
-        </section>
-        <AgentSettingsSection part="agent" />
+          {asrTestResult && (
+            <div
+              style={{
+                fontSize: '0.85em',
+                lineHeight: 1.6,
+                color: asrTestResult.ok ? 'var(--color-primary-deep)' : 'var(--color-danger)',
+                wordBreak: 'break-all'
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 15, verticalAlign: '-2px' }}>
+                {asrTestResult.ok ? 'check_circle' : 'error'}
+              </span>{' '}
+              {asrTestResult.message}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* 超级工作台（2.0 批次A：MCP 配置区后，总纲 §6）；260924 左栏工作台入口删除；260925 排版优化：
+          原顶部悬浮条（标题+机制串+按钮）与本区区头两段重叠，合并进 AgentSettingsSection 单一 zone */}
+      <div id="profile-zone-agent">
+        <AgentSettingsSection part="agent" onOpenWorkspace={props.onOpenWorkspace} />
       </div>
 
       {/* LLM 编辑弹窗 */}

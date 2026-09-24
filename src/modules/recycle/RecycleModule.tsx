@@ -17,10 +17,13 @@ const TABS: { key: string; label: string }[] = [
   { key: 'inspirations', label: '灵感泉' },
   { key: 'zhijiji', label: '致知己' },
   { key: 'reasoning', label: '推理角' },
+  { key: 'fuben', label: '副本库' },
+  { key: 'yule', label: '娱乐城' },
   { key: 'drafts', label: '草稿本' },
   { key: 'canvases', label: '画布' },
   { key: 'wenbi', label: '文笔坊' },
   { key: 'ledger', label: '记账本' },
+  { key: 'fushi', label: '赋诗苑' },
   { key: 'ai', label: 'AI 会话' }
 ]
 
@@ -28,6 +31,8 @@ const TABS: { key: string; label: string }[] = [
 function tabOf(source: RecycleRow['source']): string {
   if (source === 'reasoning_soup' || source === 'reasoning_game') return 'reasoning'
   if (source === 'interview_q') return 'interview'
+  if (source === 'fushi_poem' || source === 'fushi_game') return 'fushi'
+  if (source === 'yule_taro' || source === 'yule_poker') return 'yule'
   if (source === 'wenbi_journal' || source === 'wenbi_article' || source === 'wenbi_exp') return 'wenbi'
   if (source === 'ledger_tx' || source === 'ledger_account' || source === 'ledger_category') return 'ledger'
   if (source === 'verify') return 'wiki'
@@ -64,6 +69,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '致知己·十二问题列表'
     case 'reasoning_soup':
       return '推理角汤库'
+    case 'fuben':
+      return '副本库收藏库'
     case 'drafts':
       return '草稿本原频道'
     case 'canvases':
@@ -80,6 +87,14 @@ function backToOf(source: RecycleRow['source']): string {
       return '记账本账户列表'
     case 'ledger_category':
       return '记账本分类列表'
+    case 'fushi_poem':
+      return '赋诗苑诗集'
+    case 'fushi_game':
+      return '赋诗苑对局历史'
+    case 'yule_taro':
+      return '娱乐城塔罗记录列表'
+    case 'yule_poker':
+      return '娱乐城对局记录列表'
     default:
       return '推理角对局记录列表'
   }
@@ -100,6 +115,10 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'prophet') return '预言 · '
   if (source === 'twelve_question') return '十二问题 · '
   if (source === 'ai_session') return 'AI 会话 · '
+  if (source === 'fushi_poem') return '诗作 · '
+  if (source === 'fushi_game') return '对局 · '
+  if (source === 'yule_taro') return '塔罗解读 · '
+  if (source === 'yule_poker') return '德扑对局 · '
   return ''
 }
 
@@ -139,6 +158,16 @@ function summaryOf(row: RecycleRow): string {
     }
     if (row.source === 'reasoning_soup') return `《${p.title ?? ''}》（汤）`
     if (row.source === 'reasoning_game') return `《${p.title ?? ''}》· 对局记录`
+    if (row.source === 'fushi_poem') return String(p.title ?? '')
+    if (row.source === 'fushi_game') return `「${p.topic ?? ''}」${p.type === 'doushi' ? '斗诗' : '飞花令'}记录`
+    if (row.source === 'yule_taro') {
+      const q = String(p.question ?? '')
+      return q || `${p.spread === 'three' ? '三张 · 过去现在未来' : '单张 · 每日指引'} · ${String(p.created_at ?? '').slice(0, 10)}`
+    }
+    if (row.source === 'yule_poker') {
+      const rank = ['冠军', '亚军', '季军', '第四名'][Number(p.my_rank ?? 4) - 1] ?? '第四名'
+      return `${rank} · 奖励 ${Number(p.prize ?? 0)} · ${Number(p.hands_count ?? 0)} 手`
+    }
     if (row.source === 'drafts') return String(p.title ?? '')
     if (row.source === 'canvases') return String(p.title ?? '')
     if (row.source === 'wenbi_journal') {

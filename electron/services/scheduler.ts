@@ -8,6 +8,7 @@ import { cleanupOldArticles } from './feed'
 import { ensureDailyLearn } from './wikiStock'
 import { ensureLearnStock } from './learnStock'
 import { ensureInterviewDaily } from './interviewBank'
+import { ensureFushiDaily } from './fushi'
 import { ensureWhoamiDaily } from './whoami'
 
 let mottoTimer: NodeJS.Timeout | null = null
@@ -89,6 +90,8 @@ export function scheduleMidnightCleanup(): void {
     // 学习库（260924 面经题库化）：零点定档面经每日要求 + 顺带触发知识树备学池泵（均幂等静默）
     ensureInterviewDaily()
     void ensureLearnStock()
+    // 赋诗苑每日一令（260925）：零点定档关键字（零 LLM 幂等，打卡不依赖任何生成）
+    ensureFushiDaily()
     // 我是谁每日问题（260921）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
     void ensureWhoamiDaily()
     scheduleMidnightCleanup()

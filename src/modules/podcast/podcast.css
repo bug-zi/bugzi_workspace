@@ -1,0 +1,308 @@
+/* ===== 播客台（播客台 specs §4.4）：单集流 + 节目卡 + 添加订阅弹窗；色系随主题禁彩亮 ===== */
+
+/* 工具条：刷新 / 添加订阅 / 节目筛选 chips */
+.pc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+/* 收件箱视图行：收件箱 / 已归档 / 全部 chips + 清空收件箱 */
+.pc-viewbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.pc-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.pc-filter-chip {
+  padding: 4px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-filter-chip:hover {
+  border-color: var(--color-primary);
+}
+.pc-filter-chip.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+:root[data-theme='dark'] .pc-filter-chip.active {
+  color: #fff;
+}
+
+/* 未读点 */
+.pc-read-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  flex-shrink: 0;
+}
+.pc-read-dot.read {
+  background: var(--color-border);
+}
+
+/* 转写状态徽章（done 无徽章 = 就绪可读） */
+.pc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.72em;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+.pc-badge .material-symbols-outlined {
+  font-size: 13px;
+}
+.pc-badge-busy {
+  color: var(--color-primary-deep);
+  border-color: var(--color-primary);
+}
+:root[data-theme='dark'] .pc-badge-busy {
+  color: #fff;
+}
+.pc-badge-err {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  cursor: help;
+}
+.pc-badge-idle {
+  opacity: 0.85;
+}
+
+/* 单集流列表 */
+.pc-ep-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.pc-ep-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.pc-ep-row:hover {
+  border-color: var(--color-border);
+}
+.pc-ep-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pc-ep-title {
+  font-size: 0.95em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-ep-row.unread .pc-ep-title {
+  font-weight: 600;
+}
+.pc-ep-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.75em;
+  color: var(--color-text-secondary);
+}
+.pc-ep-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* 节目（订阅卡）列表 */
+.pc-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.pc-feed-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.pc-feed-card:hover {
+  border-color: var(--color-border);
+}
+.pc-feed-cover {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.pc-feed-cover-empty,
+.pc-add-cover-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+}
+.pc-feed-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pc-feed-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-feed-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.78em;
+  color: var(--color-text-secondary);
+}
+.pc-feed-err {
+  font-size: 0.75em;
+  color: var(--color-danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阅读视图：正文为文字稿（md），行高稍松利于长文阅读 */
+.pc-transcript {
+  font-size: 1.02em;
+}
+.pc-article .md-view {
+  line-height: 1.9;
+  word-break: break-word;
+}
+.pc-article .md-view p {
+  margin: 0.6em 0;
+}
+.pc-no-transcript {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.88em;
+}
+
+/* 添加订阅弹窗：双入口 tab + 结果列表 */
+.pc-add-tabs {
+  display: flex;
+  gap: 6px;
+}
+.pc-add-tab {
+  padding: 5px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.pc-add-tab.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+:root[data-theme='dark'] .pc-add-tab.active {
+  color: #fff;
+}
+.pc-add-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.pc-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid transparent;
+}
+.pc-add-row:hover {
+  border-color: var(--color-border);
+}
+.pc-add-cover {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.pc-add-cover-empty {
+  font-size: 22px;
+}
+.pc-add-main {
+  flex: 1;
+  min-width: 0;
+}
+.pc-add-title {
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-add-sub {
+  font-size: 0.76em;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-add-empty {
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  padding: 18px 0;
+}

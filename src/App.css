@@ -1996,3 +1996,684 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* ---------- MdDialog 通用 copilot 扩展位（260925 赋诗苑诗集；主题色系，禁彩亮） ---------- */
+.md-copilot-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.md-copilot-btn {
+  font-size: 0.85em;
+  padding: 3px 10px;
+}
+.md-copilot-busy {
+  margin-left: auto;
+}
+.md-copilot-card {
+  margin-top: 8px;
+  border: 1px solid var(--color-primary);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--color-primary-soft);
+}
+.md-copilot-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.md-copilot-suggest {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.92em;
+}
+
+/* ---------- 赋诗苑（260925）：飞花令 / 斗诗台 / 诗集 ---------- */
+.fushi-daily {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fushi-daily-kw {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.fushi-kw-char {
+  font-size: 2em;
+  font-weight: 700;
+  color: var(--color-primary-deep);
+  line-height: 1;
+}
+.fushi-row-title {
+  font-weight: 600;
+}
+.fushi-free-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.fushi-free-kw {
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.fushi-game-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fushi-result-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.fushi-kw-pill {
+  font-size: 0.9em;
+  font-weight: 600;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  border: 1px solid var(--color-primary);
+}
+.fushi-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.fushi-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 85%;
+  border-radius: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--color-primary-soft);
+}
+.fushi-msg.me {
+  align-self: flex-end;
+  background: var(--color-primary-soft);
+}
+.fushi-msg.ai {
+  align-self: flex-start;
+  background: var(--color-surface-strong);
+}
+.fushi-msg-side {
+  font-size: 0.75em;
+  opacity: 0.65;
+}
+.fushi-msg-line {
+  font-size: 1.05em;
+  line-height: 1.6;
+}
+.fushi-msg-note {
+  font-size: 0.78em;
+  opacity: 0.7;
+}
+.fushi-error {
+  font-size: 0.85em;
+  color: var(--color-danger, #b05a5a);
+}
+.fushi-input-row {
+  display: flex;
+  gap: 8px;
+}
+.fushi-verdict {
+  font-size: 0.85em;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-primary);
+}
+.fushi-verdict.win {
+  background: var(--color-primary);
+  color: var(--color-on-primary, #fff);
+}
+.fushi-verdict.lose {
+  background: transparent;
+  color: var(--color-primary-deep);
+}
+.fushi-verdict.draw {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+}
+.fushi-game-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.fushi-genre-chip {
+  font-size: 0.75em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  border: 1px solid var(--color-primary);
+  flex-shrink: 0;
+}
+.fushi-duoshi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .fushi-duoshi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.fushi-duoshi-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fushi-col-label {
+  font-weight: 600;
+}
+.fushi-poem-input {
+  resize: vertical;
+  min-height: 160px;
+  line-height: 1.8;
+}
+.fushi-poem-view {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  padding: 10px 12px;
+  border: 1px solid var(--color-primary-soft);
+  border-radius: 10px;
+  min-height: 120px;
+  overflow-y: auto;
+}
+.fushi-poem-wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+}
+.fushi-judge {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed var(--color-primary-soft);
+  padding-top: 10px;
+}
+.fushi-score-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fushi-score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fushi-score-label {
+  width: 3em;
+  flex-shrink: 0;
+}
+.fushi-score-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-surface-strong);
+  overflow: hidden;
+}
+.fushi-score-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-primary);
+  transition: width 0.4s;
+}
+.fushi-score-num {
+  width: 3.5em;
+  text-align: right;
+  flex-shrink: 0;
+}
+.fushi-comment {
+  line-height: 1.7;
+  font-size: 0.92em;
+}
+
+/* ===== 副本库（260925，docs/project/左侧边栏/生活模块/副本库/designs-specs.md §2） ===== */
+/* 阅读态顶层：定高占满（照 bk-reader-page 惯例），头部隐藏满栏阅读 */
+.fuben-reader-page {
+  height: calc(100vh - 36px);
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fuben-reader {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fuben-reader-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.fuben-reader-headline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fuben-reader-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fuben-reader-sub {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fuben-reader-progress {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  flex-shrink: 0;
+}
+.fuben-reader-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+.fuben-toc {
+  width: 200px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fuben-toc-item {
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.82em;
+  cursor: pointer;
+}
+.fuben-toc-item:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+.fuben-toc-item.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  font-weight: 500;
+}
+.fuben-reader-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 26px 34px;
+}
+.fuben-doc-title {
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.fuben-doc-sub {
+  color: var(--color-text-secondary);
+  margin-bottom: 18px;
+}
+.fuben-stage {
+  margin-bottom: 26px;
+}
+.fuben-stage h2 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--color-primary-deep);
+}
+.fuben-stage p {
+  line-height: 1.9;
+  margin: 0;
+  white-space: pre-wrap;
+  text-align: justify;
+}
+.fuben-finish-btn {
+  position: fixed;
+  right: 46px;
+  bottom: 40px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.9em;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+.fuben-finish-btn:hover {
+  background: var(--color-primary-deep);
+}
+
+/* 每日副本 */
+.fuben-daily {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fuben-daily-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fuben-daily-title {
+  font-weight: 500;
+}
+.fuben-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.fuben-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.fuben-card-wide {
+  max-width: 560px;
+}
+.fuben-card-done {
+  opacity: 0.85;
+}
+.fuben-card-title {
+  font-weight: 500;
+}
+.fuben-card-sub {
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+}
+.fuben-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fuben-card-words {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+}
+.fuben-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-text-secondary);
+  font-size: 0.75em;
+}
+.fuben-btn {
+  align-self: flex-start;
+  padding: 7px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+}
+.fuben-btn:hover {
+  background: var(--color-primary-deep);
+}
+.fuben-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fuben-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.fuben-btn-ghost:hover {
+  background: var(--color-primary-soft);
+}
+.fuben-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fuben-empty {
+  color: var(--color-text-secondary);
+  padding: 30px 0;
+  text-align: center;
+}
+
+/* DIY 定制 */
+.fuben-diy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+}
+.fuben-diy-label {
+  font-weight: 500;
+}
+.fuben-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: inherit;
+}
+.fuben-q-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fuben-q-text {
+  font-size: 0.9em;
+}
+.fuben-diy-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fuben-diy-hint {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+}
+.fuben-diy-generating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 0;
+}
+.fuben-spin {
+  font-size: 30px;
+  color: var(--color-primary);
+  animation: fuben-rotate 1.2s linear infinite;
+}
+@keyframes fuben-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.fuben-diy-progress-text {
+  font-weight: 500;
+}
+.fuben-fail {
+  color: var(--color-primary-deep);
+  font-size: 0.85em;
+}
+
+/* 收藏库 */
+.fuben-library {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fuben-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fuben-filter-label {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  width: 34px;
+}
+.fuben-chip-btn {
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.fuben-chip-btn:hover {
+  background: var(--color-primary-soft);
+}
+.fuben-chip-btn.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+  border-color: var(--color-primary);
+}
+.fuben-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fuben-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.fuben-row:hover {
+  background: var(--color-primary-soft);
+}
+.fuben-row-icon {
+  color: var(--color-text-secondary);
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.fuben-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.fuben-row-title {
+  font-weight: 500;
+}
+.fuben-row-sub {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fuben-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fuben-row-info {
+  color: var(--color-text-secondary);
+  font-size: 0.75em;
+}
+.fuben-row-del {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.fuben-row-del:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
+}
+.fuben-row-del .material-symbols-outlined {
+  font-size: 17px;
+}
+
+/* 副本库 v2（260925 泵可视化 + 已读归档） */
+.fuben-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.fuben-finished-zone {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fuben-finished-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.fuben-finished-toggle:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+.fuben-discard-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+.fuben-filter-gap {
+  margin-left: 14px;
+}

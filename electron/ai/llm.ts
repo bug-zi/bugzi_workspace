@@ -5,7 +5,7 @@
 import { BrowserWindow, net } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import { getJsonSetting, getSetting } from '../db/settings'
-import type { LlmConfig } from '../../src/shared/types'
+import type { LlmActivityItem, LlmConfig } from '../../src/shared/types'
 import { SettingsKeys } from '../../src/shared/types'
 import { ensureNotCancelled, findJobIdBySignal } from './jobs'
 
@@ -42,15 +42,32 @@ function countInflight(configId: string): number {
 }
 
 /** 在途快照广播（活动指示，设计 §5；260912 AI 面板扩展）：调用起止各发一次，
- *  payload 含 scene/配置名/起始时刻/jobId（无 signal 或未包 job 的调用 jobId 为 null = 面板不可取消） */
+ *  payload 含 scene/配置名/起始时刻/jobId（无 signal 或未包 job 的调用 jobId 为 null = 面板不可取消）。
+ *  260925 增外部活动源注册点：非 LLM 的长任务（播客 ASR 转写）把在途快照并进同一广播，面板零改动复用 */
+type ExternalActivityProvider = () => LlmActivityItem[]
+const externalActivityProviders = new Set<ExternalActivityProvider>()
+
+/** 注册外部活动源（模块加载时调用一次；provider 返回当前在途项快照） */
+export function registerLlmActivityProvider(p: ExternalActivityProvider): void {
+  externalActivityProviders.add(p)
+}
+
+/** 外部活动源在途项增删后调用，触发重广播 */
+export function notifyActivityChanged(): void {
+  broadcastActivity()
+}
+
 function broadcastActivity(): void {
-  const items = [...activeCalls.entries()].map(([seq, v]) => ({
-    seq,
-    scene: v.scene,
-    configName: v.configName,
-    startedAt: v.startedAt,
-    jobId: v.signal ? findJobIdBySignal(v.signal) : null
-  }))
+  const items: LlmActivityItem[] = [
+    ...[...activeCalls.entries()].map(([seq, v]) => ({
+      seq,
+      scene: v.scene,
+      configName: v.configName,
+      startedAt: v.startedAt,
+      jobId: v.signal ? findJobIdBySignal(v.signal) : null
+    })),
+    ...[...externalActivityProviders].flatMap((p) => p())
+  ]
   BrowserWindow.getAllWindows()[0]?.webContents.send('llm:activity', { items })
 }
 

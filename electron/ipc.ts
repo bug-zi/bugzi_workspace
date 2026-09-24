@@ -121,8 +121,36 @@ import {
   wallStreak,
   localDateStr,
   supplementInterviewAnswer,
-  WALL_TYPE_LIST
+  WALL_TYPE_LIST,
+  feihuaAiTurn,
+  doushiTopic,
+  doushiCompose,
+  doushiJudge,
+  fushiCopilot,
+  taroInterpret,
+  pokerReview
 } from './ai/services'
+import type { FushiCopilotAction } from './ai/services'
+import { fushiDailyView, saveFeihuaGame, saveDoushiGame, lineMatchesKeyword } from './services/fushi'
+import {
+  getWallet,
+  claimRelief,
+  taroSave,
+  taroList,
+  taroRemove,
+  pokerStart,
+  pokerPlayingState,
+  pokerSaveState,
+  pokerFinish,
+  pokerAbandon,
+  pokerList,
+  pokerRemove,
+  pokerSaveReview,
+  blackjackSettle,
+  blackjackGetStats
+} from './services/yule'
+import { fushiNorm, GENRE_ZH } from '../src/shared/types'
+import type { FeihuaLine, FushiGenre, FushiResult } from '../src/shared/types'
 import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
 import { chatCompletion, testLlmConnection, listUpstreamModels } from './ai/llm'
 import { beginJob, endJob, cancelJob } from './ai/jobs'
@@ -168,6 +196,23 @@ import {
   summarizeArticle
 } from './services/feed'
 import {
+  listPodcastFeeds,
+  itunesSearch,
+  addPodcastFeed,
+  updatePodcastFeed,
+  deletePodcastFeed,
+  listPodcastEpisodes,
+  setEpisodeRead,
+  deleteEpisode,
+  markAllEpisodesRead,
+  fetchAllPodcastFeeds,
+  enqueueTranscribe,
+  getEpisodeDetail,
+  generateEpisodeSummary,
+  testAsrConfig,
+  type PodcastAddInput
+} from './services/podcast'
+import {
   listFavorites,
   addFavoriteItem,
   updateFavoriteItem,
@@ -193,8 +238,23 @@ import {
 } from './services/ledger'
 import type { LedgerTxInput } from './services/ledger'
 import { SettingsKeys } from '../src/shared/types'
+import {
+  daily as copyDaily,
+  reshuffleDaily as copyReshuffleDaily,
+  chooseDaily as copyChooseDaily,
+  readCopy,
+  saveProgress as copySaveProgress,
+  finishCopy as copyFinish,
+  listCopies as copyList,
+  poolList as copyPoolList,
+  discardCopy as copyDiscard,
+  diyQuestions as copyDiyQuestions,
+  diyGenerate as copyDiyGenerate,
+  type ComposeProgress
+} from './services/copy'
+import { ensureCopyStock } from './services/copyStock'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo, CopyProgress } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -1696,6 +1756,7 @@ export function registerIpc(): void {
     const qid = Number(r.lastInsertRowid)
     const newPath = `md/learn/interview/${qid}.md`
     mdWrite(newPath, md)
+    d.prepare('UPDATE interview_questions SET answer_path = ? WHERE id = ?').run(newPath, qid)
     try {
       mdDelete(row.answer_path)
     } catch {
@@ -1737,7 +1798,9 @@ export function registerIpc(): void {
             )
             .run(row.id)
           const qid = Number(r.lastInsertRowid)
-          mdWrite(`md/learn/interview/${qid}.md`, mdRead(row.answer_path))
+          const newPath = `md/learn/interview/${qid}.md`
+          mdWrite(newPath, mdRead(row.answer_path))
+          d.prepare('UPDATE interview_questions SET answer_path = ? WHERE id = ?').run(newPath, qid)
           d.prepare("UPDATE interview_intake SET status = 'adopted' WHERE id = ?").run(row.id)
         } catch {
           /* 单条失败跳过 */
@@ -2363,6 +2426,55 @@ export function registerIpc(): void {
     }
   })
 
+  // ---------- 播客台（DB v54，播客台 specs §2-§3）：读文字稿学习模块，零音频播放 ----------
+  /** 订阅列表 + 各节目未读/未转写数 */
+  ipcMain.handle('podcast:feedsList', () => listPodcastFeeds())
+  /** iTunes 搜索（主进程代理 + feedUrl 缺失 lookup 补全） */
+  ipcMain.handle('podcast:itunesSearch', (_e, term: string) => itunesSearch(term))
+  /** 订阅（itunes 项或 RSS 直链）+ 首拉最近 10 集（不自动转写） */
+  ipcMain.handle('podcast:feedsAdd', (_e, input: PodcastAddInput, autoTranscribe: boolean) =>
+    addPodcastFeed(input, autoTranscribe)
+  )
+  ipcMain.handle('podcast:feedsUpdate', (_e, id: number, patch: { auto_transcribe?: boolean; title?: string }) => {
+    updatePodcastFeed(id, patch)
+    return true
+  })
+  /** 退订连删单集（前端二次确认后调用；不入回收站） */
+  ipcMain.handle('podcast:feedsDelete', (_e, id: number) => {
+    deletePodcastFeed(id)
+    return true
+  })
+  /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部） */
+  ipcMain.handle('podcast:episodes', (_e, feedId: number | null, view?: 'inbox' | 'archived' | 'all') =>
+    listPodcastEpisodes(feedId, view ?? 'all')
+  )
+  /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
+  ipcMain.handle('podcast:markAllRead', (_e, feedId: number | null) => markAllEpisodesRead(feedId))
+  ipcMain.handle('podcast:episodeRead', (_e, id: number, read: boolean) => {
+    setEpisodeRead(id, read)
+    return true
+  })
+  /** 删单集（前端二次确认后调用；不入回收站） */
+  ipcMain.handle('podcast:episodeDelete', (_e, id: number) => {
+    deleteEpisode(id)
+    return true
+  })
+  /** 拉全部源新集（进模块/手动；auto_transcribe=1 的新集自动入转写队列） */
+  ipcMain.handle('podcast:fetchAll', () => fetchAllPodcastFeeds())
+  /** 手动转写触发（入队；none|failed 外幂等跳过） */
+  ipcMain.handle('podcast:transcribe', (_e, id: number) => {
+    enqueueTranscribe(id)
+    return true
+  })
+  /** 阅读视图全量（文字稿 + shownotes + summary_md + 封面） */
+  ipcMain.handle('podcast:episodeDetail', (_e, id: number) => getEpisodeDetail(id))
+  /** 导读卡生成（缓存复用；jobId 全局取消接线） */
+  ipcMain.handle('podcast:generateSummary', (_e, jobId: string, id: number) => generateEpisodeSummary(id, jobId))
+  /** ASR 配置连通性测试（个人档「测试连接」；0.5s 静音探测，不落库不入队） */
+  ipcMain.handle('podcast:testAsr', (_e, cfg: { apiUrl: string; apiKey: string; model: string }) =>
+    testAsrConfig(cfg)
+  )
+
   // ---------- 收藏夹（DB v28，收藏夹 specs §2-§4）：纯链接收藏，纯本地零 AI ----------
   /** 全量列表（幂等 seed「未分类」）：categories 按序 + items 置顶优先/时间倒序 */
   ipcMain.handle('favorites:list', async () => listFavorites())
@@ -2445,6 +2557,73 @@ export function registerIpc(): void {
   })
   /** 月度统计：收支合计 + 支出分类排行 */
   ipcMain.handle('ledger:stats', (_e, month: string) => stats(month))
+
+  // ---------- 娱乐城（娱乐城 specs §5） ----------
+  ipcMain.handle('yule:wallet:get', () => getWallet())
+  ipcMain.handle('yule:wallet:relief', () => claimRelief())
+  ipcMain.handle('yule:taro:save', (_e, input: { spread: string; question: string; cards: { name: string; upright: boolean; position: string }[]; md: string }) =>
+    taroSave(input)
+  )
+  ipcMain.handle('yule:taro:list', () => taroList())
+  ipcMain.handle('yule:taro:remove', (_e, id: number) => {
+    taroRemove(id)
+    return true
+  })
+  ipcMain.handle('yule:taro:interpret', async (_e, jobId: string, input: { spreadName: string; question: string; cards: { position: string; name: string; upright: boolean }[] }) => {
+    const ac = beginJob(jobId)
+    try {
+      return await taroInterpret(input, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('yule:poker:start', (_e, initialState: string) => pokerStart(initialState))
+  ipcMain.handle('yule:poker:state', () => pokerPlayingState())
+  ipcMain.handle('yule:poker:saveState', (_e, id: number, state: string, handsCount: number, handsLog: string) => {
+    pokerSaveState(id, state, handsCount, handsLog)
+    return true
+  })
+  ipcMain.handle('yule:poker:finish', (_e, id: number, rank: number, handsLog: string, durationMs: number) =>
+    pokerFinish(id, rank, handsLog, durationMs)
+  )
+  ipcMain.handle('yule:poker:abandon', (_e, id: number) => {
+    pokerAbandon(id)
+    return true
+  })
+  ipcMain.handle('yule:poker:list', () => pokerList())
+  ipcMain.handle('yule:poker:remove', (_e, id: number) => {
+    pokerRemove(id)
+    return true
+  })
+  ipcMain.handle('yule:poker:review', async (_e, jobId: string, id: number) => {
+    const ac = beginJob(jobId)
+    try {
+      const row = getDb()
+        .prepare('SELECT my_rank, prize, hands_count, duration_ms, hand_log FROM poker_games WHERE id = ? AND deleted_at IS NULL')
+        .get(id) as { my_rank: number | null; prize: number; hands_count: number; duration_ms: number | null; hand_log: string } | undefined
+      if (!row || row.my_rank == null) throw new Error('NOT_FOUND')
+      let hands = row.hand_log
+      try {
+        const arr = JSON.parse(hands) as unknown[]
+        if (arr.length > 40) hands = JSON.stringify(arr.slice(-40))
+      } catch {
+        /* 坏流水按原样传 */
+      }
+      const rankZh = ['冠军', '亚军', '季军', '第四名'][row.my_rank - 1] ?? `第${row.my_rank}名`
+      const md = await pokerReview(
+        { rank: row.my_rank, prize: row.prize, handsCount: row.hands_count, durationMs: row.duration_ms ?? 0, hands },
+        ac.signal
+      )
+      const mdPath = pokerSaveReview(id, `# 德扑复盘 · 第 ${id} 局\n\n> ${rankZh} · 奖励 ${row.prize}\n\n${md}`)
+      return { mdPath }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('yule:blackjack:settle', (_e, bet: number, result: 'win' | 'lose' | 'push' | 'blackjack', net: number) =>
+    blackjackSettle(bet, result, net)
+  )
+  ipcMain.handle('yule:blackjack:stats', () => blackjackGetStats())
 
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
@@ -3893,6 +4072,139 @@ export function registerIpc(): void {
   ipcMain.handle('agent:bookDigestRun', (_e, bookId: number, force?: boolean) =>
     runBookDigest(bookId, force ?? false)
   )
+
+  // ---------- 赋诗苑（2026-09-25-赋诗苑 design.md，designs-specs §4） ----------
+  ipcMain.handle('fushi:daily', () => fushiDailyView())
+  // 飞花令 AI 出句：主进程校验（含字 + 查重）重试 ≤2，三次不合格 giveUp（渲染层判我胜——AI 不当裁判）
+  ipcMain.handle('fushi:feihuaTurn', (_e, jobId: string, keyword: string, usedLines: string[]) => {
+    const ac = beginJob(jobId)
+    return (async (): Promise<{ line: string; note: string } | { giveUp: true }> => {
+      const used = new Set(usedLines.map((l) => fushiNorm(l)))
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await feihuaAiTurn(keyword, usedLines, ac.signal)
+          if (lineMatchesKeyword(r.line, keyword) && !used.has(fushiNorm(r.line))) return r
+        } catch (e) {
+          // 取消原样上抛；生成类错误（JSON 解析/字段缺失）计入次数继续重试
+          if (ac.signal.aborted || String((e as Error).message) === '已取消') throw e
+        }
+      }
+      return { giveUp: true }
+    })().finally(() => endJob(jobId))
+  })
+  ipcMain.handle(
+    'fushi:feihuaEnd',
+    (_e, keyword: string, daily: boolean, result: FushiResult, lines: FeihuaLine[]) => {
+      if (!keyword.trim()) throw new Error('BAD_KEYWORD')
+      return saveFeihuaGame({ keyword: keyword.trim(), daily, result, lines })
+    }
+  )
+  ipcMain.handle('fushi:doushiNew', (_e, jobId: string) => {
+    const ac = beginJob(jobId)
+    return doushiTopic(ac.signal).finally(() => endJob(jobId))
+  })
+  ipcMain.handle('fushi:doushiSubmit', async (_e, jobId: string, topic: string, genre: FushiGenre, myPoem: string) => {
+    const ac = beginJob(jobId)
+    try {
+      if (!myPoem.trim() || !topic.trim()) throw new Error('BAD_INPUT')
+      if (!(genre in GENRE_ZH) || genre === 'free') throw new Error('BAD_GENRE')
+      const aiPoem = await doushiCompose(topic, genre, ac.signal)
+      const judged = await doushiJudge(topic, genre, myPoem, aiPoem, ac.signal)
+      const gameId = saveDoushiGame({
+        topic: topic.trim(),
+        genre,
+        result: judged.verdict,
+        myPoem,
+        aiPoem,
+        scores: judged.scores,
+        totalComment: judged.totalComment
+      })
+      return { gameId, aiPoem, scores: judged.scores, totalComment: judged.totalComment, verdict: judged.verdict }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('fushi:games', (_e, type?: 'feihua' | 'doushi') =>
+    type
+      ? getDb()
+          .prepare('SELECT id, type, topic, genre, result, rounds, daily, md_path, created_at FROM fushi_games WHERE type = ? AND deleted_at IS NULL ORDER BY id DESC')
+          .all(type)
+      : getDb()
+          .prepare('SELECT id, type, topic, genre, result, rounds, daily, md_path, created_at FROM fushi_games WHERE deleted_at IS NULL ORDER BY id DESC')
+          .all()
+  )
+  ipcMain.handle('fushi:gameDelete', (_e, id: number) => {
+    discardToRecycle('fushi_game', id)
+    return true
+  })
+  ipcMain.handle('fushi:poems', (_e, genre?: FushiGenre) => {
+    const rows = (
+      genre
+        ? getDb()
+            .prepare('SELECT id, title, genre, md_path, created_at, updated_at FROM fushi_poems WHERE genre = ? AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC')
+            .all(genre)
+        : getDb()
+            .prepare('SELECT id, title, genre, md_path, created_at, updated_at FROM fushi_poems WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC')
+            .all()
+    ) as unknown[]
+    return rows
+  })
+  ipcMain.handle('fushi:poemAdd', (_e, title: string, genre: FushiGenre, content?: string) => {
+    const t = title.trim()
+    if (!t) throw new Error('标题不能为空')
+    if (!(genre in GENRE_ZH)) throw new Error('BAD_GENRE')
+    const d = getDb()
+    const r = d
+      .prepare(
+        "INSERT INTO fushi_poems (title, genre, md_path, created_at, updated_at) VALUES (?, ?, '', ?, ?)"
+      )
+      .run(t, genre, localNowIso(), localNowIso())
+    const id = Number(r.lastInsertRowid)
+    const path = `md/fushi/poems/${id}.md`
+    mdWrite(path, `# ${t}\n\n${(content ?? '').trim() || '（双击编辑开始创作）'}\n`)
+    d.prepare('UPDATE fushi_poems SET md_path = ? WHERE id = ?').run(path, id)
+    return id
+  })
+  ipcMain.handle('fushi:poemDelete', (_e, id: number) => {
+    discardToRecycle('fushi_poem', id)
+    return true
+  })
+  ipcMain.handle('fushi:copilot', (_e, jobId: string, id: number, action: string, selection?: string) => {
+    const ac = beginJob(jobId)
+    return fushiCopilot(id, action as FushiCopilotAction, selection, ac.signal).finally(() => endJob(jobId))
+  })
+
+  // ---------- 副本库（copy:*，docs/project/左侧边栏/生活模块/副本库/designs-specs.md §4） ----------
+  ipcMain.handle('copy:daily', () => copyDaily())
+  ipcMain.handle('copy:reshuffleDaily', () => copyReshuffleDaily())
+  ipcMain.handle('copy:chooseDaily', (_e, id: number) => copyChooseDaily(id))
+  ipcMain.handle('copy:read', (_e, id: number) => readCopy(id))
+  ipcMain.handle('copy:saveProgress', (_e, id: number, progress: CopyProgress) => copySaveProgress(id, progress))
+  ipcMain.handle('copy:finish', (_e, id: number, keep: boolean) => copyFinish(id, keep))
+  ipcMain.handle('copy:poolList', () => copyPoolList())
+  ipcMain.handle('copy:list', (_e, filter?: { source?: string; state?: string; tag?: string }) => copyList(filter))
+  ipcMain.handle('copy:discard', (_e, id: number) => copyDiscard(id))
+  ipcMain.handle('copy:diyQuestions', async (_e, jobId: string, direction: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return { questions: await copyDiyQuestions(direction, ac.signal), jobId }
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('copy:diyGenerate', async (e, jobId: string, direction: string, answers: string[]) => {
+    const ac = beginJob(jobId)
+    try {
+      const win = BrowserWindow.fromWebContents(e.sender)
+      const onProgress: (p: ComposeProgress) => void = (p) => win?.webContents.send('copy:diyProgress', p)
+      return await copyDiyGenerate(direction, answers, onProgress, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  ipcMain.handle('copy:stockCheck', () => {
+    void ensureCopyStock()
+  })
 }
 
 // ---------- 推理角辅助（turtle:* / wall:* 共用，specs §4） ----------

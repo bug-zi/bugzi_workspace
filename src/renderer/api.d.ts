@@ -20,8 +20,8 @@ export type ModuleId =
   | 'fushi'
   | 'yule'
 
-/** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet，2.0 批次C 新增 literature） */
-export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature'
+/** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet，2.0 批次C 新增 literature，260925 新增 podcast） */
+export type AiChannel = 'assistant' | 'motto' | 'wiki' | 'zhijiji' | 'verify' | 'learn' | 'prophet' | 'literature' | 'podcast'
 
 /** 草稿本频道（DB v14）：固定两频道起步 */
 export type DraftChannel = 'general' | 'turtle'
@@ -690,10 +690,15 @@ export interface RecycleRow {
     | 'ledger_category'
     | 'learn'
     | 'interview_q'
+    | 'fushi_poem'
+    | 'fushi_game'
     | 'prophet'
     | 'twelve_question'
     | 'qa'
     | 'ai_session'
+    | 'yule_taro'
+    | 'yule_poker'
+    | 'fuben'
   item_id: number
   payload: string
   created_at: string
@@ -1584,6 +1589,40 @@ export interface Api {
     /** 月度统计：收支合计 + 支出分类排行 */
     stats(month: string): Promise<LedgerStats>
   }
+  yule: {
+    /** 钱包（首次进入惰性建行赠 5,000） */
+    getWallet(): Promise<YuleWalletView>
+    /** 破产救济（校验失败抛带 message Error） */
+    claimRelief(): Promise<YuleWalletView>
+    /** 塔罗解读存档（主进程写 md） */
+    taroSave(input: { spread: string; question: string; cards: TaroCardPick[]; md: string }): Promise<TaroRecordView>
+    taroList(): Promise<TaroRecordView[]>
+    /** 移入回收站（需前端二次确认） */
+    taroRemove(id: number): Promise<boolean>
+    /** AI 解读（jobId 取消接线） */
+    taroInterpret(jobId: string, input: { spreadName: string; question: string; cards: TaroCardPick[] }): Promise<string>
+    /** 开局（扣买入 + 建 playing 局；initialState 引擎快照 JSON） */
+    pokerStart(initialState: string): Promise<PokerGameView>
+    /** 进行中对局（无则 null） */
+    pokerState(): Promise<PokerGameView | null>
+    /** 快照回写（节流；局已终态静默丢弃） */
+    pokerSaveState(id: number, state: string, handsCount: number, handsLog: string): Promise<boolean>
+    /** 终局结算（名次发奖入钱包，事务） */
+    pokerFinish(id: number, rank: number, handsLog: string, durationMs: number): Promise<PokerGameView>
+    /** 弃赛（第 4 名无奖励，需前端二次确认） */
+    pokerAbandon(id: number): Promise<boolean>
+    pokerList(): Promise<PokerGameView[]>
+    pokerRemove(id: number): Promise<boolean>
+    /** AI 复盘（写 md 回写指针） */
+    pokerReview(jobId: string, id: number): Promise<{ mdPath: string }>
+    /** 21 点每手结算（钱包 + 战绩同事务） */
+    blackjackSettle(
+      bet: number,
+      result: 'win' | 'lose' | 'push' | 'blackjack',
+      net: number
+    ): Promise<{ balance: number; stats: BlackjackStatsView }>
+    blackjackStats(): Promise<BlackjackStatsView>
+  }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
     create(content: string, source: string, status: string, tags?: string[]): Promise<number>
@@ -1960,6 +1999,166 @@ export interface Api {
     /** 一键拉起 Ollama（探测 + spawn serve + 轮询就绪） */
     serve(): Promise<{ ok: boolean }>
   }
+  /** 播客台（260925）：读文字稿学习模块，零音频播放 */
+  podcast: {
+    /** 订阅列表 + 各节目未读/未转写数 */
+    feedsList(): Promise<import('../shared/types').PodcastFeed[]>
+    /** iTunes 搜索（主进程代理；feedUrl 缺失项置灰不可订） */
+    itunesSearch(term: string): Promise<import('../shared/types').ItunesPodcast[]>
+    /** 订阅（itunes 项或 RSS 直链）+ 首拉最近 10 集（不自动转写） */
+    feedsAdd(
+      input:
+        | { kind: 'itunes'; name: string; artist: string; artworkUrl: string | null; feedUrl: string }
+        | { kind: 'rss'; url: string },
+      autoTranscribe: boolean
+    ): Promise<import('../shared/types').PodcastFeed>
+    /** 自动转写开关 / 改显示名 */
+    feedsUpdate(id: number, patch: { auto_transcribe?: boolean; title?: string }): Promise<boolean>
+    /** 退订连删该节目全部单集（前端二次确认后调用） */
+    feedsDelete(id: number): Promise<boolean>
+    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部，缺省 all） */
+    episodes(feedId: number | null, view?: 'inbox' | 'archived' | 'all'): Promise<import('../shared/types').PodcastEpisodeSummary[]>
+    /** 标已读/未读切换 */
+    episodeRead(id: number, read: boolean): Promise<boolean>
+    /** 删单集（前端二次确认后调用） */
+    episodeDelete(id: number): Promise<boolean>
+    /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
+    markAllRead(feedId: number | null): Promise<number>
+    /** 拉全部源新集，返回总新增 */
+    fetchAll(): Promise<number>
+    /** 手动转写触发（入队；状态流转经 onTaskChanged 渐进刷新） */
+    transcribe(id: number): Promise<boolean>
+    /** 转写状态机任何变化推送，返回取消订阅 */
+    onTaskChanged(cb: () => void): () => void
+    /** 阅读视图全量 */
+    episodeDetail(id: number): Promise<import('../shared/types').PodcastEpisodeDetail>
+    /** 导读卡生成（缓存复用；jobId 全局取消接线） */
+    generateSummary(jobId: string, id: number): Promise<string>
+    /** ASR 配置连通性测试（0.5s 静音探测端点/Key/模型；不落库不入队） */
+    testAsr(cfg: { apiUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; message: string }>
+  }
+
+  // ---------- 赋诗苑（260925）：飞花令 / 斗诗台 / 诗集 ----------
+  fushi: {
+    /** 每日一令（内部幂等定档）：今日关键字 + 连胜 + 当日局 id */
+    daily(): Promise<import('../shared/types').FushiDailyView>
+    /** AI 出一句（主进程含字+查重校验重试；giveUp=AI 接不上判我胜） */
+    feihuaTurn(
+      jobId: string,
+      keyword: string,
+      usedLines: string[]
+    ): Promise<import('../shared/types').FeihuaTurnResult>
+    /** 终局落库留档（daily 局回写当日打卡）；返回 gameId */
+    feihuaEnd(
+      keyword: string,
+      daily: boolean,
+      result: import('../shared/types').FushiResult,
+      lines: import('../shared/types').FeihuaLine[]
+    ): Promise<number>
+    /** 斗诗出题（主题 + 体裁） */
+    doushiNew(jobId: string): Promise<{ topic: string; genre: import('../shared/types').FushiGenre }>
+    /** 斗诗提交即终局：AI 作诗 + 四维评审 + 落库留档 */
+    doushiSubmit(
+      jobId: string,
+      topic: string,
+      genre: import('../shared/types').FushiGenre,
+      myPoem: string
+    ): Promise<import('../shared/types').DoushiSubmitResult>
+    /** 对局历史（type 缺省=全部） */
+    games(type?: import('../shared/types').FushiGameType): Promise<import('../shared/types').FushiGameRow[]>
+    gameDelete(id: number): Promise<boolean>
+    /** 诗集列表（genre 缺省=全部） */
+    poems(genre?: import('../shared/types').FushiGenre): Promise<import('../shared/types').FushiPoemRow[]>
+    /** 新作（content 缺省写占位）；返回 id */
+    poemAdd(title: string, genre: import('../shared/types').FushiGenre, content?: string): Promise<number>
+    poemDelete(id: number): Promise<boolean>
+    /** 诗词 Copilot 六动作（jobId 全局取消接线） */
+    copilot(jobId: string, id: number, action: string, selection?: string): Promise<string>
+  }
+  copy: {
+    /** 每日三态：unpicked（candidates）/ reading（chosen）/ finished（finishedCopy） */
+    daily(): Promise<import('../shared/types').CopyDailyView>
+    /** 换一批（仅未选定时可用；排除当前 3 个，不足放宽） */
+    reshuffleDaily(): Promise<import('../shared/types').CopyCard[]>
+    /** 选定当日副本（二次确认后调；pool/unread 转正 in_progress + 写 chosen + 触发补库泵） */
+    chooseDaily(id: number): Promise<import('../shared/types').CopyDetail>
+    /** 打开阅读：unread → in_progress；返回详情与正文全文 */
+    read(id: number): Promise<{ detail: import('../shared/types').CopyDetail; md: string }>
+    /** 进度落库（渲染层 3 秒节流调用） */
+    saveProgress(id: number, progress: import('../shared/types').CopyProgress): Promise<void>
+    /** 读毕二选处置（v2）：keep=true 存档入库（收藏库已读区）；keep=false 丢弃（软删入回收站）；两者均完成当日打卡（若为选定副本，幂等） */
+    finish(id: number, keep: boolean): Promise<{ finishedAt: string }>
+    /** 待读区库存列表（v2 泵可视化：state=pool 未软删，created_at 倒序） */
+    poolList(): Promise<import('../shared/types').CopyCard[]>
+    /** 收藏库列表（非 pool 未软删，updated_at 倒序；filter 任一可选） */
+    list(filter?: { source?: string; state?: string; tag?: string }): Promise<import('../shared/types').CopyCard[]>
+    /** 删除（二次确认后调；软删入回收站「副本库」块；当日未读毕的选定副本清 chosen_id 可重选） */
+    discard(id: number): Promise<void>
+    /** DIY 步骤一：方向 → 4 道个性化问答（LLM 未配置抛 LLM_NOT_CONFIGURED） */
+    diyQuestions(jobId: string, direction: string): Promise<{ questions: string[]; jobId: string }>
+    /** DIY 步骤二：分段生成专属副本（进度经 onDiyProgress；进行中再入抛 COPY_DIY_BUSY；取消不落库） */
+    diyGenerate(jobId: string, direction: string, answers: string[]): Promise<import('../shared/types').CopyDetail>
+    /** 补库泵触发（进模块时调，fire-and-forget） */
+    stockCheck(): Promise<void>
+    /** DIY 生成进度推送 */
+    onDiyProgress(cb: (p: import('../shared/types').CopyDiyProgress) => void): () => void
+    /** 补库泵每补完一条推送：每日候选渐进刷新 */
+    onStockChanged(cb: () => void): () => void
+  }
+}
+
+// ---------- 娱乐城（娱乐城 designs-specs §1；与 shared/types 同名类型同构） ----------
+
+/** 钱包视图 */
+export interface YuleWalletView {
+  balance: number
+  reliefAvailable: boolean
+  reliefAmount: number
+  threshold: number
+}
+
+/** 塔罗解读单张牌 */
+export interface TaroCardPick {
+  position: string
+  name: string
+  upright: boolean
+}
+
+/** 塔罗记录行（cards 为 TaroCardPick[] JSON） */
+export interface TaroRecordView {
+  id: number
+  spread: string
+  question: string
+  cards: string
+  md_path: string
+  created_at: string
+  updated_at: string
+}
+
+/** 德扑对局行（hand_log 为每手流水 JSON；state 为引擎快照 JSON） */
+export interface PokerGameView {
+  id: number
+  status: 'playing' | 'finished' | 'abandoned'
+  my_rank: number | null
+  prize: number
+  hands_count: number
+  hand_log: string
+  state: string | null
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
+  review_md_path: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 21 点战绩 */
+export interface BlackjackStatsView {
+  hands: number
+  wins: number
+  losses: number
+  pushes: number
+  net: number
 }
 
 declare global {

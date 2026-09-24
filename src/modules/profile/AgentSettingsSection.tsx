@@ -1,6 +1,8 @@
 // 超级工作台 2.0 设置区（idea/超级工作台2.0/designs-specs-批次A §5）：
 // part="embedding" = Embedding 配置块（LLM 配置区下方）；
-// part="agent" = 超级工作台区（MCP 配置区后：引擎开关/领域管理/负载阈值/额度预算/隐私白名单）。
+// part="agent" = 超级工作台整区（MCP 配置区后：区头〔运行状态 + 任务中心直达〕/引擎开关/
+// 领域管理/负载阈值/额度预算/隐私白名单）。260925 排版优化：原 ProfileModule 顶部悬浮条
+// 与本区区头两段重叠，合并为单一 zone，机制名列表改徽章行，领域组改分组卡。
 // 自包含：挂载拉 agent:configGet，变更即落库（引擎键走 agent:configSet 带副作用，
 // embedding_config 走 settings:set 通用通道）。
 import { useCallback, useEffect, useState } from 'react'
@@ -24,7 +26,13 @@ const TRACK_META: { track: AgentTrack; label: string; hint: string }[] = [
   { track: 'science', label: '科普领域（文章）', hint: '法学/经济学等兴趣拓展，只收科普文章（二期管道）' }
 ]
 
-export default function AgentSettingsSection({ part }: { part: 'embedding' | 'agent' }) {
+export default function AgentSettingsSection({
+  part,
+  onOpenWorkspace
+}: {
+  part: 'embedding' | 'agent'
+  onOpenWorkspace?: () => void
+}) {
   const { toast } = useToast()
   const [cfg, setCfg] = useState<AgentConfigView | null>(null)
   const [ec, setEc] = useState<EmbeddingConfig | null>(null)
@@ -255,6 +263,14 @@ export default function AgentSettingsSection({ part }: { part: 'embedding' | 'ag
       <div className="zone-header">
         <span>超级工作台</span>
         {cfg && <span className="zone-count">{cfg.enabled ? '运行中' : '已关闭'}</span>}
+        {onOpenWorkspace && (
+          <div className="zone-actions">
+            <button className="btn btn-primary" onClick={onOpenWorkspace}>
+              <span className="material-symbols-outlined">smart_toy</span>
+              打开任务中心
+            </button>
+          </div>
+        )}
       </div>
       <div className="zone-body">
         <div className="setting-row">
@@ -269,16 +285,31 @@ export default function AgentSettingsSection({ part }: { part: 'embedding' | 'ag
             后台持续搜集 / 整理 / 汇报知识资源
           </label>
         </div>
+        <div className="setting-row">
+          <span className="setting-label">运行机制</span>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <span className="badge">后台错峰巡检海选</span>
+            <span className="badge">任务队列</span>
+            <span className="badge">负载卫兵</span>
+            <span className="badge">额度预算</span>
+          </div>
+        </div>
 
         {TRACK_META.map(({ track, label, hint }) => {
           const list = domains.filter((d) => d.track === track)
           return (
-            <div key={track} style={{ marginTop: 6 }}>
-              <div className="setting-label" style={{ marginBottom: 4 }}>
-                {label}
-                <span className="module-sub" style={{ marginLeft: 8 }}>
-                  {hint}
-                </span>
+            <div
+              key={track}
+              style={{
+                margin: '8px 4px 0',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 10px 8px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', padding: '6px 2px 2px' }}>
+                <span style={{ fontWeight: 600 }}>{label}</span>
+                <span className="module-sub">{hint}</span>
               </div>
               {list.length === 0 && (
                 <div className="module-sub" style={{ padding: '2px 2px 6px' }}>
@@ -286,7 +317,7 @@ export default function AgentSettingsSection({ part }: { part: 'embedding' | 'ag
                 </div>
               )}
               {list.map((d) => (
-                <div className="setting-row" key={d.id}>
+                <div className="setting-row" key={d.id} style={{ padding: '7px 2px' }}>
                   <span className="setting-label">{d.name}</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     {d.keywords.map((k) => (

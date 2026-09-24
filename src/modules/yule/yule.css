@@ -1,0 +1,663 @@
+/* 娱乐城（娱乐城 specs §2）：全部走主题色 CSS 变量（浅樱粉/深宝蓝），禁彩亮饱和色、禁 emoji 图标 */
+
+/* ---------- 钱包角标（模块头常驻） ---------- */
+.yule-wallet-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 4px 12px;
+  font-size: 14px;
+}
+.yule-wallet-badge .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-primary);
+}
+.yule-wallet-num {
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.yule-relief-btn {
+  border: 1px solid var(--color-primary);
+  background: transparent;
+  color: var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.yule-relief-btn:hover {
+  background: var(--color-selection);
+}
+
+/* ---------- 通用 ---------- */
+.yule-pane {
+  padding: 10px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.yule-section-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.yule-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.yule-fail {
+  color: var(--color-primary-deep);
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+.yule-btn {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.yule-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+.yule-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.yule-btn.primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.yule-btn.primary:hover:not(:disabled) {
+  background: var(--color-primary-deep);
+}
+.yule-btn.big {
+  padding: 10px 24px;
+  font-size: 15px;
+}
+.yule-mini-btn {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.yule-mini-btn:hover:not(:disabled) {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.yule-mini-btn.danger:hover:not(:disabled) {
+  color: var(--color-primary-deep);
+  border-color: var(--color-primary-deep);
+}
+.yule-action-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.yule-action-spacer {
+  flex: 1;
+}
+.yule-lobby-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ---------- 玩法说明弹窗 ---------- */
+.yule-help-mask {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-text) 35%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.yule-help-card {
+  width: min(640px, 92vw);
+  max-height: 82vh;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--color-text) 18%, transparent);
+}
+.yule-help-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.yule-help-head .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-primary);
+}
+.yule-help-head button {
+  margin-left: auto;
+}
+.yule-help-body {
+  padding: 4px 18px 14px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+/* ---------- 记录列表（塔罗/德扑共用） ---------- */
+.yule-records {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 10px;
+}
+.yule-record-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+}
+.yule-record-date {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.yule-record-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+.yule-record-sub {
+  display: block;
+  font-style: normal;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+/* ---------- 塔罗 ---------- */
+.yule-spread-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.yule-spread-card {
+  flex: 1;
+  min-width: 180px;
+  text-align: left;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.yule-spread-card:hover {
+  border-color: var(--color-primary);
+}
+.yule-spread-card.active {
+  border-color: var(--color-primary);
+  background: var(--color-selection);
+}
+.yule-spread-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.yule-spread-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.yule-question-input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+.yule-question-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.yule-taro-table {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 0;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+.yule-taro-row {
+  display: flex;
+  gap: 26px;
+  justify-content: center;
+}
+.yule-taro-card {
+  width: 116px;
+  height: 178px;
+  perspective: 800px;
+  cursor: pointer;
+}
+.yule-taro-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.5s;
+}
+.yule-taro-card.flipped .yule-taro-card-inner {
+  transform: rotateY(180deg);
+}
+.yule-taro-card-back,
+.yule-taro-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.yule-taro-card-back {
+  background: var(--color-selection);
+}
+.yule-taro-card-back .material-symbols-outlined {
+  font-size: 40px;
+  color: var(--color-primary);
+  opacity: 0.75;
+}
+.yule-taro-card-face {
+  transform: rotateY(180deg);
+  background: var(--color-surface-strong);
+  gap: 6px;
+  padding: 10px;
+  text-align: center;
+}
+.yule-taro-card.reversed .yule-taro-card-face {
+  transform: rotateY(180deg) rotate(180deg);
+}
+.yule-taro-card.reversed .yule-taro-card-pos,
+.yule-taro-card.reversed .yule-taro-card-ori {
+  /* 逆位时牌面整体旋转，正逆位标注翻回可读方向 */
+  transform: rotate(180deg);
+}
+.yule-taro-card-pos {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.yule-taro-card-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.yule-taro-card-ori {
+  font-size: 12px;
+  color: var(--color-primary);
+}
+.yule-taro-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.yule-interpret-md {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 4px 16px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+/* ---------- 扑克牌面（德扑/21点共用） ---------- */
+.yule-pcard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 42px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.yule-pcard.red-true {
+  color: var(--color-primary-deep);
+}
+.yule-pcard.back {
+  color: var(--color-primary);
+  background: var(--color-selection);
+}
+.yule-pcard.big {
+  min-width: 44px;
+  height: 60px;
+  font-size: 19px;
+}
+.yule-pcard.hidden {
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 德扑 ---------- */
+.yule-poker-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.yule-poker-meta {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.yule-poker-table {
+  position: relative;
+  border: 1px solid var(--color-primary);
+  border-radius: 24px;
+  background: var(--color-surface);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.yule-poker-seats-top {
+  display: flex;
+  justify-content: space-around;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.yule-seat {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-strong);
+  padding: 8px 12px;
+  min-width: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.yule-seat.folded {
+  opacity: 0.45;
+}
+.yule-seat.out {
+  opacity: 0.3;
+}
+.yule-seat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.yule-seat-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text);
+}
+.yule-dealer-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.yule-allin-badge {
+  font-size: 11px;
+  color: var(--color-primary-deep);
+  border: 1px solid var(--color-primary-deep);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.yule-seat-stack {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.yule-seat-cards {
+  display: flex;
+  gap: 4px;
+  min-height: 42px;
+}
+.yule-poker-board {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+.yule-board-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 56px;
+  border: 1px dashed var(--color-border);
+  border-radius: 4px;
+}
+.yule-board-slot.filled {
+  border-style: solid;
+}
+.yule-poker-hero {
+  display: flex;
+  justify-content: center;
+}
+.yule-hero-cards {
+  display: flex;
+  gap: 8px;
+  min-height: 60px;
+}
+.yule-handover {
+  text-align: center;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.yule-handover p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+.yule-handover ul {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+.yule-handover.gameover h3 {
+  margin: 0;
+  color: var(--color-primary);
+}
+.yule-poker-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.yule-raise-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 280px;
+  flex-wrap: wrap;
+}
+.yule-raise-quick {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.yule-raise-val {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+}
+.yule-raise-box input[type='range'] {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--color-primary);
+}
+.yule-poker-wait {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.yule-poker-lobby {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.yule-lobby-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.yule-lobby-info {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+}
+.yule-resume-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--color-primary-deep);
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+/* ---------- 21 点 ---------- */
+.yule-bj-stats {
+  display: flex;
+  gap: 18px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.yule-bj-stats .up {
+  color: var(--color-primary);
+}
+.yule-bj-stats .down {
+  color: var(--color-primary-deep);
+}
+.yule-bj-table {
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 240px;
+}
+.yule-bj-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.yule-bj-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.yule-bj-cards {
+  display: flex;
+  gap: 8px;
+  min-height: 60px;
+}
+.yule-bj-divider {
+  border-top: 1px dashed var(--color-border);
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding-top: 4px;
+}
+.yule-bj-result {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 10px;
+}
+.yule-bj-result p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.yule-bj-net {
+  font-weight: 600;
+  color: var(--color-primary) !important;
+}
+.yule-bj-bet,
+.yule-bj-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.yule-chip {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px dashed var(--color-primary);
+  background: var(--color-surface-strong);
+  color: var(--color-primary-deep);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.yule-chip:hover {
+  background: var(--color-selection);
+}
+.yule-chip.ghost {
+  border-style: solid;
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+  width: auto;
+  border-radius: 26px;
+  padding: 0 14px;
+}
