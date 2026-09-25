@@ -23,6 +23,15 @@ function fmtDate(iso: string): string {
   return iso.slice(0, 10)
 }
 
+/** 旧版本快照缺新字段（lastAction/actionLog/notice），恢复时补默认值 */
+function normalizeState(raw: string): PokerState {
+  const st = JSON.parse(raw) as PokerState
+  st.actionLog ??= []
+  st.notice ??= null
+  for (const p of st.players) p.lastAction ??= null
+  return st
+}
+
 export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => void }) {
   const { toast } = useToast()
   const [gameId, setGameId] = useState<number | null>(null)
@@ -56,7 +65,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
       try {
         const playing = await window.api.yule.pokerState()
         if (playing?.state) {
-          const restored = JSON.parse(playing.state) as PokerState
+          const restored = normalizeState(playing.state)
           gameIdRef.current = playing.id
           finishedRef.current = false
           setGameId(playing.id)
@@ -134,6 +143,11 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
 
   const act = (a: PokerAction): void => {
     if (!st || st.awaiting !== 'human') return
+    if (a.type === 'raise') {
+      // 滑条值可能是上一手/上一街遗留或初始 0，提交前钳制进本街合法区间
+      const legal = engine.legalActions(st)
+      a = { type: 'raise', amount: Math.min(Math.max(a.amount ?? legal.minRaiseTo, legal.minRaiseTo), legal.maxRaiseTo) }
+    }
     const next = engine.humanAct(st, a)
     setSt(next)
     persist(next, next.awaiting === 'handover' || next.awaiting === 'gameover')
@@ -175,7 +189,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
     gameIdRef.current = resumeRow.id
     finishedRef.current = false
     setGameId(resumeRow.id)
-    setSt(JSON.parse(resumeRow.state) as PokerState)
+    setSt(normalizeState(resumeRow.state))
     setResumeRow(null)
   }
 
@@ -220,6 +234,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
     const hero = st.players[0]
     const pot = st.players.reduce((n, p) => n + p.bet, 0)
     const heroTurn = st.awaiting === 'human'
+    const actingId = st.toAct >= 0 ? st.players[st.toAct].id : -1
     const legal = heroTurn ? engine.legalActions(st) : null
     const showdownReveal = st.handOver != null && st.handOver.rows.length > 0
 
@@ -227,7 +242,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
       <div className="yule-pane">
         <div className="yule-poker-topbar">
           <span className="yule-poker-meta">
-            第 {st.handNo} 手 · 盲注 {st.sb}/{st.bb}
+            第 {st.handNo} 手 · {engine.STREET_ZH[st.street]} · 盲注 {st.sb}/{st.bb}
           </span>
           <span className="yule-poker-meta">底池 {pot}</span>
           <span className="yule-action-spacer" />
@@ -242,7 +257,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
         <div className="yule-poker-table">
           <div className="yule-poker-seats-top">
             {st.players.slice(1).map((p) => (
-              <div key={p.id} className={`yule-seat${p.folded ? ' folded' : ''}${p.out ? ' out' : ''}`}>
+              <div key={p.id} className={`yule-seat${p.folded ? ' folded' : ''}${p.out ? ' out' : ''}${p.id === actingId ? ' acting' : ''}`}>
                 <div className="yule-seat-head">
                   <span className="yule-seat-name">{p.name}</span>
                   {st.dealerId === p.id && <span className="yule-dealer-btn">D</span>}
@@ -252,6 +267,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
                   {p.out ? '出局' : `${p.stack}`}
                   {!p.out && p.bet > 0 ? ` · 注 ${p.bet}` : ''}
                 </div>
+                {p.lastAction && !p.out ? <div className="yule-seat-act">{p.lastAction}</div> : null}
                 <div className="yule-seat-cards">
                   {showdownReveal && !p.folded && !p.out
                     ? p.cards.map((c, i) => (
@@ -284,8 +300,10 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
             ))}
           </div>
 
+          {st.notice && st.awaiting !== 'gameover' && <p className="yule-poker-notice">{st.notice}</p>}
+
           <div className="yule-poker-hero">
-            <div className={`yule-seat${hero.folded ? ' folded' : ''}`}>
+            <div className={`yule-seat${hero.folded ? ' folded' : ''}${hero.id === actingId ? ' acting' : ''}`}>
               <div className="yule-seat-head">
                 <span className="yule-seat-name">我</span>
                 {st.dealerId === hero.id && <span className="yule-dealer-btn">D</span>}
@@ -295,6 +313,7 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
                 筹码 {hero.stack}
                 {hero.bet > 0 ? ` · 注 ${hero.bet}` : ''}
               </div>
+              {hero.lastAction && <div className="yule-seat-act">{hero.lastAction}</div>}
               <div className="yule-hero-cards">
                 {hero.cards.map((c, i) => (
                   <span key={i} className={`yule-pcard big red-${c.s === 1 || c.s === 2}`}>
@@ -304,6 +323,16 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
               </div>
             </div>
           </div>
+
+          {st.actionLog.length > 0 && (
+            <div className="yule-poker-feed">
+              {[...st.actionLog].reverse().map((line, i) => (
+                <div key={i} className={`yule-feed-line${line.startsWith('——') ? ' mark' : ''}`}>
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
 
           {st.handOver && st.awaiting === 'handover' && (
             <div className="yule-handover">
@@ -409,7 +438,12 @@ export default function PokerPane({ onWalletChanged }: { onWalletChanged: () => 
             </div>
           </div>
         )}
-        {!heroTurn && st.awaiting === 'ai' && <p className="yule-poker-wait">对手思考中…</p>}
+        {!heroTurn && st.awaiting === 'ai' && <p className="yule-poker-wait">等待 {st.players[st.toAct]?.name ?? '对手'} 行动…</p>}
+        {heroTurn && (
+          <p className="yule-poker-wait turn">
+            轮到你行动 · 底池 {pot} · 需跟注 {legal?.callAmount ?? 0}
+          </p>
+        )}
         {failMsg && <p className="yule-fail">{failMsg}</p>}
 
         <ConfirmDialog open={abandonOpen} title="弃赛确认" confirmText="弃赛" danger onConfirm={() => void doAbandon()} onCancel={() => setAbandonOpen(false)}>

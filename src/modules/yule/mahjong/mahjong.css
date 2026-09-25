@@ -1,0 +1,260 @@
+/* 麻将房（娱乐城 specs §12）：全部走主题色 CSS 变量，禁彩亮饱和色、禁 emoji 图标 */
+
+/* ---------- 牌面 ---------- */
+.mj-tile {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 54px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  box-sizing: border-box;
+  user-select: none;
+  flex: none;
+}
+.mj-tile.small {
+  width: 26px;
+  height: 37px;
+}
+.mj-tile.clickable {
+  cursor: pointer;
+}
+.mj-tile.clickable:hover {
+  border-color: var(--color-primary);
+}
+.mj-tile.selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+  transform: translateY(-8px);
+}
+.mj-tile.joker {
+  border-color: var(--color-primary);
+  background: var(--color-selection);
+}
+.mj-tile-joker-tag {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  font-style: normal;
+  color: var(--color-primary-deep);
+}
+.mj-tile-suit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+.mj-tile-suit b {
+  font-size: 17px;
+  font-weight: 600;
+}
+.mj-tile-suit i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--color-primary-deep);
+}
+.mj-tile.small .mj-tile-suit b {
+  font-size: 12px;
+}
+.mj-tile.small .mj-tile-suit i {
+  font-size: 9px;
+}
+.mj-tile-hanzi {
+  font-size: 17px;
+  font-weight: 600;
+}
+.mj-tile.small .mj-tile-hanzi {
+  font-size: 12px;
+}
+.mj-back {
+  background: var(--color-selection);
+  color: var(--color-primary);
+}
+.mj-back .material-symbols-outlined {
+  font-size: 18px;
+  opacity: 0.65;
+}
+.mj-back.small .material-symbols-outlined {
+  font-size: 13px;
+}
+
+/* ---------- 布局 ---------- */
+.mj-table {
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mj-infobar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.mj-infobar .mj-joker-show {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mj-seat {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+}
+.mj-seat.acting {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.mj-seat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.mj-seat-persona {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+.mj-dealer-tag {
+  font-size: 10px;
+  color: #fff;
+  background: var(--color-primary);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.mj-seat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 38px;
+  align-items: center;
+}
+.mj-seat-row-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  min-width: 30px;
+}
+.mj-mid-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+.mj-river {
+  flex: 1;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mj-river-title {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.mj-river-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mj-claim-mark {
+  font-size: 11px;
+  color: var(--color-primary-deep);
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  align-self: center;
+}
+.mj-hero {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mj-hero-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 56px;
+  align-items: flex-end;
+}
+.mj-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.mj-chi-opts {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.mj-waiting {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.mj-waiting.turn {
+  color: var(--color-primary-deep);
+  font-weight: 600;
+}
+.mj-result {
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--color-selection);
+}
+.mj-result-text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.mj-feed {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 8px;
+  max-height: 128px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mj-feed-line {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 18px;
+}
+.mj-feed-line.mark {
+  color: var(--color-primary-deep);
+  margin-top: 4px;
+}
+.mj-lobby {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}

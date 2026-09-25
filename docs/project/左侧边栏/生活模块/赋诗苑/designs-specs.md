@@ -8,7 +8,7 @@
 
 ## 0. 命名与常量
 
-- 模块 id：`fushi`（App.tsx MODULES 已有占位行）；侧边栏名「赋诗苑」；图标 Material Symbols `auto_awesome`；位置：生活模式区第 5 位（副本库与推理角之间），占位转正后排序不变。
+- 模块 id：`fushi`（App.tsx MODULES 已有占位行）；侧边栏名「赋诗苑」；图标 Material Symbols `brush`（260926 开发者指令由占位 `auto_awesome` 改为毛笔图标）；位置：生活模式区第 5 位（副本库与推理角之间），占位转正后排序不变。
 - 模块内三页签：「飞花令｜斗诗台｜诗集」，默认飞花令；页签切换用 `recycle-tabs` 样式（InterviewBankPanel 同款），选择不持久化；切页签不丢进行中对局（keep-alive 天然满足，对局态存渲染层组件 state）。
 - md 目录：`md/fushi/poems/<id>.md`（诗作）、`md/fushi/games/<id>.md`（对局留档）。
 - 体裁枚举：**`jueju | lvshi | ci | modern | free`**（绝句 / 律诗 / 词 / 现代诗 / 自由体），中文名映射 `GENRE_ZH` 常量（不用 ü 避免编码坑）；斗诗出题体裁限前四种（free 不进斗诗题面）。

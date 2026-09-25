@@ -2,7 +2,6 @@
 // 三入口共用：每日选定 / 收藏库点行 / DIY 完成。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ConfirmDialog from '../../components/ConfirmDialog'
-import MdDialog from '../../components/MdDialog'
 import { useToast } from '../../components/Toast'
 import type { CopyDetail } from '../../shared/types'
 
@@ -42,9 +41,11 @@ export default function CopyReader(props: { id: number; onBack: () => void }) {
   const [curStage, setCurStage] = useState(0)
   const [showFinish, setShowFinish] = useState(false)
   const [confirmFinish, setConfirmFinish] = useState(false)
-  const [docOpen, setDocOpen] = useState(false)
+  const [tocOpen, setTocOpen] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stageRefs = useRef<(HTMLDivElement | null)[]>([])
+  const tocListRef = useRef<HTMLDivElement>(null)
+  const lastActiveTocRef = useRef<string | null>(null)
   const lastSaveRef = useRef(0)
 
   const parsed = useMemo(() => parseStages(md), [md])
@@ -94,6 +95,25 @@ export default function CopyReader(props: { id: number; onBack: () => void }) {
     stageRefs.current[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
 
+  // 当前章变化时把高亮项滚进目录视野居中（照图书馆目录定位：只滚目录内部，不惊动正文滚动；同一条目不重复滚）
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const body = tocListRef.current
+      const active = body?.querySelector('.fuben-toc-item.active') as HTMLElement | null
+      if (!body || !active) {
+        lastActiveTocRef.current = null
+        return
+      }
+      const key = active.textContent ?? ''
+      if (key === lastActiveTocRef.current) return
+      lastActiveTocRef.current = key
+      const br = body.getBoundingClientRect()
+      const ar = active.getBoundingClientRect()
+      body.scrollTop += ar.top - br.top - br.height / 2 + ar.height / 2
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [curStage, tocOpen])
+
   const finish = async (keep: boolean): Promise<void> => {
     try {
       await window.api.copy.finish(id, keep)
@@ -134,19 +154,33 @@ export default function CopyReader(props: { id: number; onBack: () => void }) {
         <span className="fuben-reader-progress">
           第 {curStage + 1}/{stages.length || detail?.stageCount || '?'} 章
         </span>
-        <button className="fuben-btn-ghost" title="在弹窗中打开" onClick={() => setDocOpen(true)}>
-          <span className="material-symbols-outlined">description</span>
-        </button>
+        {stages.length > 0 && (
+          <button
+            className={`fuben-btn-ghost fuben-toc-toggle${tocOpen ? ' active' : ''}`}
+            title={tocOpen ? '收起目录' : '展开目录'}
+            onClick={() => setTocOpen((v) => !v)}
+          >
+            <span className="material-symbols-outlined">toc</span>
+          </button>
+        )}
       </div>
 
       <div className="fuben-reader-body">
-        {stages.length > 0 && (
+        {tocOpen && stages.length > 0 && (
           <aside className="fuben-toc">
-            {stages.map((s, i) => (
-              <button key={i} className={`fuben-toc-item${i === curStage ? ' active' : ''}`} onClick={() => jumpTo(i)}>
-                {s.title}
+            <div className="fuben-toc-head">
+              <span className="fuben-toc-title">目录</span>
+              <button className="fuben-btn-ghost" title="收起目录" onClick={() => setTocOpen(false)}>
+                <span className="material-symbols-outlined">chevron_left</span>
               </button>
-            ))}
+            </div>
+            <div className="fuben-toc-list" ref={tocListRef}>
+              {stages.map((s, i) => (
+                <button key={i} className={`fuben-toc-item${i === curStage ? ' active' : ''}`} onClick={() => jumpTo(i)}>
+                  {s.title}
+                </button>
+              ))}
+            </div>
           </aside>
         )}
         <div className="fuben-reader-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -184,15 +218,6 @@ export default function CopyReader(props: { id: number; onBack: () => void }) {
           </button>
         </div>
       </ConfirmDialog>
-
-      <MdDialog
-        key={detail?.mdPath ?? 'none'}
-        open={docOpen}
-        title={detail?.title ?? ''}
-        subtitle={detail?.subtitle}
-        filePath={detail?.mdPath ?? ''}
-        onClose={() => setDocOpen(false)}
-      />
     </div>
   )
 }

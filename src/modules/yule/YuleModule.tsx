@@ -1,5 +1,5 @@
-// 娱乐城模块（娱乐城 specs §2）：三页签 塔罗|德扑|21点（板块 keep-alive，切页签不打断对局），
-// 模块头钱包角标常驻三页签共用；破产救济按钮按 wallet.reliefAvailable 显隐。
+// 娱乐城模块（娱乐城 specs §2/§9）：四页签 塔罗|德扑|21点|麻将房（板块 keep-alive，切页签不打断对局），
+// 模块头钱包角标常驻四页签共用；破产救济按钮按 wallet.reliefAvailable 显隐。
 import { useCallback, useState } from 'react'
 import type { YuleWalletView } from '../../renderer/api'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
@@ -7,9 +7,10 @@ import { useToast } from '../../components/Toast'
 import TaroPane from './TaroPane'
 import PokerPane from './PokerPane'
 import BlackjackPane from './BlackjackPane'
+import MahjongPane from './mahjong/MahjongPane'
 import './yule.css'
 
-type Tab = 'taro' | 'poker' | 'blackjack'
+type Tab = 'taro' | 'poker' | 'blackjack' | 'mahjong'
 
 export default function YuleModule() {
   const { toast } = useToast()
@@ -40,7 +41,7 @@ export default function YuleModule() {
       <div className="module-header">
         <span className="material-symbols-outlined">casino</span>
         <span className="module-title">娱乐城</span>
-        <span className="module-sub">轻娱乐三馆 · 筹码共用</span>
+        <span className="module-sub">轻娱乐四馆 · 筹码共用</span>
         <span className="yule-wallet-badge" title="全娱乐城共用筹码钱包">
           <span className="material-symbols-outlined">toll</span>
           <span className="yule-wallet-num">{wallet?.balance ?? '…'}</span>
@@ -62,6 +63,9 @@ export default function YuleModule() {
         <button className={`recycle-tab${tab === 'blackjack' ? ' active' : ''}`} onClick={() => setTab('blackjack')}>
           21点
         </button>
+        <button className={`recycle-tab${tab === 'mahjong' ? ' active' : ''}`} onClick={() => setTab('mahjong')}>
+          麻将房
+        </button>
       </div>
 
       {/* 三页签 keep-alive（照 ReasoningModule 板块容器模式）：常驻挂载 + display 隐藏，
@@ -74,6 +78,9 @@ export default function YuleModule() {
       </div>
       <div className={tab === 'blackjack' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'blackjack'}>
         <BlackjackPane onWalletChanged={() => void loadWallet()} />
+      </div>
+      <div className={tab === 'mahjong' ? 'module-live' : 'module-live module-hidden'} aria-hidden={tab !== 'mahjong'}>
+        <MahjongPane />
       </div>
     </div>
   )

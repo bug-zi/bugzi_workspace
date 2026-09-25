@@ -3,8 +3,9 @@
 // → 阅读视图导读卡 + 「播客·追问」频道。删除/退订二次确认；不入回收站（信息源先例）
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsKeys, parseAsrConfig } from '../../shared/types'
-import type { PodcastEpisodeSummary, PodcastFeed } from '../../shared/types'
+import type { PodcastEpisodeSummary, PodcastEpisodeView, PodcastFeed } from '../../shared/types'
 import ConfirmDialog from '../../components/ConfirmDialog'
+import ActionMenu from '../../components/ActionMenu'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
@@ -73,8 +74,8 @@ export default function PodcastModule(props: Props) {
   const [episodes, setEpisodes] = useState<PodcastEpisodeSummary[]>([])
   // 节目筛选（全部=null；节目页签点卡落到本视图带过滤）
   const [feedFilter, setFeedFilter] = useState<number | null>(null)
-  // 收件箱视图（260925 归档制）：inbox=未读（默认）/ archived=已读归档 / all=全部；标已读即归档出流
-  const [view, setView] = useState<'inbox' | 'archived' | 'all'>('inbox')
+  // 收件箱视图（260925 归档制；260926 增收藏）：inbox=未读未收藏（默认）/ archived=已读未收藏 / all=全部 / starred=收藏
+  const [view, setView] = useState<PodcastEpisodeView>('inbox')
   // 阅读视图（主栏整体切换，信息源同款）
   const [readingId, setReadingId] = useState<number | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -84,6 +85,8 @@ export default function PodcastModule(props: Props) {
   const [delFeedTarget, setDelFeedTarget] = useState<PodcastFeed | null>(null)
   // ASR 未配置引导（手动触发转写且该集无 RSS 自带文字稿时入队前校验，design §五）
   const [asrConfigOpen, setAsrConfigOpen] = useState(false)
+  // 订阅筛选下拉锚定（ActionMenu anchorEl；点项时 ActionMenu 先 onClose 再 onClick，自动收起）
+  const [filterMenuAnchor, setFilterMenuAnchor] = useState<HTMLElement | null>(null)
 
   /** 需 ASR 的转写触发前校验：配置齐备返回 true，否则弹「去配置」返回 false（不入队空跑） */
   const ensureAsrOrDialog = async (): Promise<boolean> => {
@@ -102,7 +105,7 @@ export default function PodcastModule(props: Props) {
   }, [])
 
   const loadEpisodes = useCallback(
-    async (filter: number | null, v: 'inbox' | 'archived' | 'all'): Promise<void> => {
+    async (filter: number | null, v: PodcastEpisodeView): Promise<void> => {
       try {
         setEpisodes(await window.api.podcast.episodes(filter, v))
       } catch {
@@ -167,6 +170,29 @@ export default function PodcastModule(props: Props) {
       // 按当前视图重取：收件箱里标已读 = 归档出流（行消失），已归档里「再看看」= 回收件箱
       await loadEpisodes(feedFilter, view)
       void loadFeeds()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
+  const toggleStar = async (ep: PodcastEpisodeSummary): Promise<void> => {
+    try {
+      await window.api.podcast.episodeStar(ep.id, ep.starred_at == null)
+      // 收藏出流：按当前视图重取（inbox 收藏 = 出流消失；starred 取消收藏 = 行消失）
+      await loadEpisodes(feedFilter, view)
+      void loadFeeds()
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
+  const cancelTranscribe = async (ep: PodcastEpisodeSummary): Promise<void> => {
+    try {
+      await window.api.podcast.transcribeCancel(ep.id)
+      setEpisodes((arr) =>
+        arr.map((e) => (e.id === ep.id ? { ...e, transcript_state: 'none' as const, transcript_error: null } : e))
+      )
+      toast('已取消转写，可重新触发')
     } catch (e) {
       toast(`操作失败：${(e as Error).message}`)
     }
@@ -250,6 +276,7 @@ export default function PodcastModule(props: Props) {
 
       {tab === 'episodes' ? (
         <>
+          {/* 单行工具栏：操作按钮 + 视图 chips（钉位零位移）+ 清空收件箱 + 订阅筛选下拉（右对齐收束） */}
           <div className="pc-toolbar">
             <button className="btn" onClick={() => void refresh()} disabled={refreshing} title="拉取全部订阅的新集">
               <span className="material-symbols-outlined">{refreshing ? 'progress_activity spin' : 'refresh'}</span>
@@ -258,28 +285,7 @@ export default function PodcastModule(props: Props) {
             <button className="btn" onClick={() => setAddOpen(true)}>
               <span className="material-symbols-outlined">add</span>添加订阅
             </button>
-            <div className="pc-filter">
-              <button
-                className={`pc-filter-chip${feedFilter == null ? ' active' : ''}`}
-                onClick={() => setFeedFilter(null)}
-              >
-                全部
-              </button>
-              {feeds.map((f) => (
-                <button
-                  key={f.id}
-                  className={`pc-filter-chip${feedFilter === f.id ? ' active' : ''}`}
-                  onClick={() => setFeedFilter(f.id)}
-                >
-                  {f.title}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 收件箱视图行：收件箱（未读，默认）/ 已归档 / 全部 + 收件箱清空 */}
-          <div className="pc-viewbar">
-            <div className="pc-filter">
+            <div className="pc-views">
               <button
                 className={`pc-filter-chip${view === 'inbox' ? ' active' : ''}`}
                 onClick={() => setView('inbox')}
@@ -296,19 +302,57 @@ export default function PodcastModule(props: Props) {
               <button className={`pc-filter-chip${view === 'all' ? ' active' : ''}`} onClick={() => setView('all')}>
                 全部
               </button>
-            </div>
-            {view === 'inbox' && inboxTotal > 0 && (
               <button
-                className="btn"
-                style={{ marginLeft: 'auto' }}
-                onClick={() => void doMarkAllRead()}
-                title="全部标已读（归档到「已归档」，可随时「再看看」恢复）"
+                className={`pc-filter-chip${view === 'starred' ? ' active' : ''}`}
+                onClick={() => setView('starred')}
+                title="收藏的单集（收件箱不再显示，未读计数不计）"
               >
-                <span className="material-symbols-outlined">done_all</span>
-                清空收件箱
+                收藏
               </button>
-            )}
+              {view === 'inbox' && inboxTotal > 0 && (
+                <button
+                  className="btn"
+                  onClick={() => void doMarkAllRead()}
+                  title="全部标已读（归档到「已归档」，可随时「再看看」恢复）"
+                >
+                  <span className="material-symbols-outlined">done_all</span>
+                  清空收件箱
+                </button>
+              )}
+            </div>
+            <button
+              className={`pc-filter-chip pc-feed-select${feedFilter != null ? ' active' : ''}`}
+              onClick={(e) => setFilterMenuAnchor(e.currentTarget)}
+              title="按节目筛选单集流"
+            >
+              <span className="material-symbols-outlined">filter_list</span>
+              <span className="pc-feed-select-label">
+                {feedFilter == null ? '全部节目' : (filterFeed?.title ?? '全部节目')}
+              </span>
+              <span className="material-symbols-outlined">expand_more</span>
+            </button>
           </div>
+
+          {filterMenuAnchor && (
+            <ActionMenu
+              anchorEl={filterMenuAnchor}
+              onClose={() => setFilterMenuAnchor(null)}
+              items={[
+                {
+                  key: 'all',
+                  icon: feedFilter == null ? 'check' : undefined,
+                  label: '全部节目',
+                  onClick: () => setFeedFilter(null)
+                },
+                ...feeds.map((f) => ({
+                  key: String(f.id),
+                  icon: feedFilter === f.id ? 'check' : undefined,
+                  label: f.unread > 0 ? `${f.title}（${f.unread} 未读）` : f.title,
+                  onClick: () => setFeedFilter(f.id)
+                }))
+              ]}
+            />
+          )}
 
           <div className="pc-ep-list">
             {episodes.length === 0 && (
@@ -320,9 +364,11 @@ export default function PodcastModule(props: Props) {
                     ? '收件箱已清空——新到的单集会自动进这里'
                     : view === 'archived'
                       ? '还没有归档的单集（标已读即归档）'
-                      : feedFilter == null
-                        ? '暂无单集'
-                        : `「${filterFeed?.title ?? ''}」暂无单集`}
+                      : view === 'starred'
+                        ? '还没有收藏的单集——点单集行内的星标收藏'
+                        : feedFilter == null
+                          ? '暂无单集'
+                          : `「${filterFeed?.title ?? ''}」暂无单集`}
               </div>
             )}
             {episodes.map((ep) => (
@@ -340,6 +386,22 @@ export default function PodcastModule(props: Props) {
                 <div className="pc-ep-actions" onClick={(e) => e.stopPropagation()}>
                   <button
                     className="icon-btn"
+                    title={ep.starred_at ? '取消收藏（按已读状态回流）' : '收藏（移入收藏页签，收件箱不再显示）'}
+                    onClick={() => void toggleStar(ep)}
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={
+                        ep.starred_at
+                          ? { color: 'var(--color-primary)', fontVariationSettings: "'FILL' 1" }
+                          : undefined
+                      }
+                    >
+                      star
+                    </span>
+                  </button>
+                  <button
+                    className="icon-btn"
                     title={ep.read_at ? '标未读' : '标已读'}
                     onClick={() => void toggleRead(ep)}
                   >
@@ -348,6 +410,17 @@ export default function PodcastModule(props: Props) {
                   {(ep.transcript_state === 'none' || ep.transcript_state === 'failed') && (
                     <button className="icon-btn" title="转写本集" onClick={() => void openEpisode(ep)}>
                       <span className="material-symbols-outlined">speech_to_text</span>
+                    </button>
+                  )}
+                  {(ep.transcript_state === 'queued' ||
+                    ep.transcript_state === 'downloading' ||
+                    ep.transcript_state === 'transcribing') && (
+                    <button
+                      className="icon-btn"
+                      title="取消转写（回到待转写，可重新触发）"
+                      onClick={() => void cancelTranscribe(ep)}
+                    >
+                      <span className="material-symbols-outlined">stop_circle</span>
                     </button>
                   )}
                   <button className="icon-btn danger" title="删除单集" onClick={() => setDelEpTarget(ep)}>

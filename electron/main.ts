@@ -138,8 +138,8 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(() => void ensureWhoamiDaily(), 10_000).unref()
     // 播客台（260925）：重启转写队列恢复（queued/downloading/transcribing 重置重入队；纯后台无 LLM）
     setTimeout(() => resumePodcastTranscribes(), 10_000).unref()
-    // 副本库（260925）补库泵：错开启动高峰；存量达标即 no-op，内部自 catch 永不抛错
-    setTimeout(() => void ensureCopyStock(), 10_000).unref()
+    // 副本库（260925）补库泵：启动即检测补库（260926 开发者指令：不再延迟 10s 错峰）；存量达标即 no-op，内部自 catch 永不抛错
+    void ensureCopyStock()
     createWindow()
     // 托盘常驻：图标复用 appIcon；启动时按 settings 应用开机自启（键缺省 = 关）
     createTray(appIcon, showMainWindow)

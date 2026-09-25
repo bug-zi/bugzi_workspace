@@ -2016,8 +2016,8 @@ export interface Api {
     feedsUpdate(id: number, patch: { auto_transcribe?: boolean; title?: string }): Promise<boolean>
     /** 退订连删该节目全部单集（前端二次确认后调用） */
     feedsDelete(id: number): Promise<boolean>
-    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部，缺省 all） */
-    episodes(feedId: number | null, view?: 'inbox' | 'archived' | 'all'): Promise<import('../shared/types').PodcastEpisodeSummary[]>
+    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部 / starred 收藏，缺省 all） */
+    episodes(feedId: number | null, view?: import('../shared/types').PodcastEpisodeView): Promise<import('../shared/types').PodcastEpisodeSummary[]>
     /** 标已读/未读切换 */
     episodeRead(id: number, read: boolean): Promise<boolean>
     /** 删单集（前端二次确认后调用） */
@@ -2028,6 +2028,10 @@ export interface Api {
     fetchAll(): Promise<number>
     /** 手动转写触发（入队；状态流转经 onTaskChanged 渐进刷新） */
     transcribe(id: number): Promise<boolean>
+    /** 收藏/取消收藏（收藏出流） */
+    episodeStar(id: number, starred: boolean): Promise<boolean>
+    /** 取消转写（排队摘队/在跑 abort，回 none 可重试） */
+    transcribeCancel(id: number): Promise<boolean>
     /** 转写状态机任何变化推送，返回取消订阅 */
     onTaskChanged(cb: () => void): () => void
     /** 阅读视图全量 */

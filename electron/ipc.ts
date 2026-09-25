@@ -203,6 +203,8 @@ import {
   deletePodcastFeed,
   listPodcastEpisodes,
   setEpisodeRead,
+  setEpisodeStarred,
+  cancelTranscribe,
   deleteEpisode,
   markAllEpisodesRead,
   fetchAllPodcastFeeds,
@@ -254,7 +256,7 @@ import {
 } from './services/copy'
 import { ensureCopyStock } from './services/copyStock'
 import { refreshTrayMenu } from './services/tray'
-import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo, CopyProgress } from '../src/shared/types'
+import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo, CopyProgress, PodcastEpisodeView } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
@@ -2444,8 +2446,8 @@ export function registerIpc(): void {
     deletePodcastFeed(id)
     return true
   })
-  /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部） */
-  ipcMain.handle('podcast:episodes', (_e, feedId: number | null, view?: 'inbox' | 'archived' | 'all') =>
+  /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部 / starred 收藏） */
+  ipcMain.handle('podcast:episodes', (_e, feedId: number | null, view?: PodcastEpisodeView) =>
     listPodcastEpisodes(feedId, view ?? 'all')
   )
   /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
@@ -2464,6 +2466,16 @@ export function registerIpc(): void {
   /** 手动转写触发（入队；none|failed 外幂等跳过） */
   ipcMain.handle('podcast:transcribe', (_e, id: number) => {
     enqueueTranscribe(id)
+    return true
+  })
+  /** 收藏/取消收藏（收藏出流：收件箱不含、未读计数不计） */
+  ipcMain.handle('podcast:episodeStar', (_e, id: number, starred: boolean) => {
+    setEpisodeStarred(id, starred)
+    return true
+  })
+  /** 取消转写（排队摘队/在跑 abort，回 none 可重试） */
+  ipcMain.handle('podcast:transcribeCancel', (_e, id: number) => {
+    cancelTranscribe(id)
     return true
   })
   /** 阅读视图全量（文字稿 + shownotes + summary_md + 封面） */

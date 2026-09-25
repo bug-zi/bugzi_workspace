@@ -339,7 +339,7 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
       {mode === 'life' &&
         (copyDaily === null ? (
           <div className="card zl-row">
-            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="material-symbols-outlined">collections_bookmark</span>
             <span className="zl-row-title">今日副本</span>
             <span className="module-sub">加载失败</span>
           </div>
@@ -349,7 +349,7 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
             onClick={() => go('fuben', 'reader', { id: copyDaily.chosen!.id })}
             title="继续阅读今日副本"
           >
-            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="material-symbols-outlined">collections_bookmark</span>
             <span className="zl-row-title">{copyDaily.chosen.title}</span>
             <span className="module-sub">
               今日副本 · 第 {(copyDaily.chosen.progress?.stage ?? 0) + 1}/{copyDaily.chosen.stageCount} 章 · 点击续读
@@ -361,13 +361,13 @@ export default function OverviewModule({ mode }: { mode: ModuleMode }) {
             onClick={() => copyDaily.finishedCopy && go('fuben', 'reader', { id: copyDaily.finishedCopy.id })}
             title="回看今日副本"
           >
-            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="material-symbols-outlined">collections_bookmark</span>
             <span className="zl-row-title">今日副本已读毕</span>
             <span className="module-sub">{copyDaily.finishedCopy?.title ?? ''} · 明天再来一段</span>
           </button>
         ) : (
           <div className="card zl-row zl-copy-card">
-            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="material-symbols-outlined">collections_bookmark</span>
             <div className="zl-row-main">
               <div className="zl-row-line">
                 <span className="zl-row-title">今日副本</span>

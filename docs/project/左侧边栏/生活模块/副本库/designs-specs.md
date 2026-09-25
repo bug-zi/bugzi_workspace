@@ -20,7 +20,7 @@
 
 ## 0. 命名与常量
 
-- 模块 id：`fuben`（ModuleId 已存在，本次去 pending 转正）；侧边栏名「副本库」；图标 Material Symbols `sports_esports`（沿用占位图标）；位置：生活区图书馆下方（现有占位位置不变）。
+- 模块 id：`fuben`（ModuleId 已存在，本次去 pending 转正）；侧边栏名「副本库」；图标 Material Symbols `collections_bookmark`（260926 开发者指令：由占位 `sports_esports` 改本子图标后，再与图书馆对调，终得书签书图标）；位置：生活区图书馆下方（现有占位位置不变）。
 - 模块内三页签切换（照 WikiModule 板块切换 chips 惯例）：**每日副本**（默认）/ **DIY 定制** / **收藏库**，板块选择不持久化。
 - md 目录：`md/copies/`（正文 `{id}.md`，照 files.ts 统一管理；initDb 目录清单追加）。
 - 三维标签枚举（`src/shared/types.ts` 导出常量，prompt 与筛选 chips 共用）：
@@ -73,7 +73,7 @@ CREATE TABLE copy_daily (
 
 **FubenModule.tsx：**
 
-- 标题区（icon `sports_esports` + 副本库 + 副标题「每天抽一段别样人生，或定制一段属于自己的」）+ 三板块 chips；子组件 DailyPanel / DiyPanel / LibraryPanel / CopyReader。
+- 标题区（icon `collections_bookmark` + 副本库 + 副标题「每天抽一段别样人生，或定制一段属于自己的」）+ 三板块 chips；子组件 DailyPanel / DiyPanel / LibraryPanel / CopyReader。
 - 视图二态（照图书馆进书模式）：**列表态**（标题区 + chips + 当前面板）/ **阅读态**（隐藏标题区与 chips，满栏渲染 CopyReader，模块内返回）。切换用模块内 state（`readingId`），不持久化。
 - 照 keep-alive 惯例接 App.tsx；监听 `MODULE_ACTIVATED_EVENT` 刷新列表与每日状态；模块激活时调 `copy:stockCheck` 触发补库泵。
 - 深链：`useModuleNavigate('fuben', ...)`——`target:'reader'` + `payload.id` → 切阅读态开指定副本；`target:'daily'` → 切每日页签（总导览块跳转用）。
@@ -108,8 +108,8 @@ CREATE TABLE copy_daily (
 
 **CopyReader · 阅读视图（三入口共用：每日选定 / 收藏库点行 / DIY 完成）：**
 
-- 顶栏：返回（回列表态，保留原页签）+ 标题/副标题 + 「弹窗打开」图标按钮（MdDialog 打开 md_path，渲染态/双击编辑照全局弹窗默认）+ 章节进度「第 X/Y 章」。
-- 左侧阶段导航（窄窗 <768px 隐藏）：`## 阶段小标题` 列表，当前章高亮，点击平滑滚动到对应章。
+- 顶栏：返回（回列表态，保留原页签）+ 标题/副标题 + 目录开合按钮（260926）+ 章节进度「第 X/Y 章」。（原「弹窗打开」MdDialog 按钮已删，260926 开发者指令：阅读器内不再提供弹窗打开入口）
+- 左侧阶段导航（窄窗 <768px 隐藏）：`## 阶段小标题` 列表，当前章高亮，点击平滑滚动到对应章。**260926 起可展开收起**（照图书馆目录侧栏模式：顶栏 `toc` 图标按钮开合〔开态主题色高亮〕+ 目录头 `chevron_left` 收起钮；当前章变化时高亮项自动滚进目录视野居中，只滚目录内部不惊动正文）。
 - 正文：MdView 渲染 md 全文；滚动监听更新当前章高亮 + `{stage, ratio}` **节流 3 秒** `copy:saveProgress`（照图书馆节流惯例）；重开时 `copy:read` 返回 progress，恢复到对应章位置。
 - 读毕：滚动到末尾（最后章 ratio > 0.95）右下浮出「读毕」按钮 → ConfirmDialog「读完《title》了？」→ `copy:finish` → toast（当日选定副本：「已读毕，今日打卡完成」；其余：「已读毕」）→ 自动退回列表态。
 - 已读副本可重读：重读不改 finished_at、不重复打卡。
@@ -117,7 +117,7 @@ CREATE TABLE copy_daily (
 
 ## 3. AI 服务（electron/ai/services.ts 新增三函数）
 
-统一 scene `copy`；`generateDiyQuestions` / `generateCopyOutline` 注入 `profileDigest()` 画像摘要（取向贴身）；`generateCopySection` 不注入（大纲已定取向，省上下文）。
+统一 scene `copy`；`generateDiyQuestions` / `generateCopyOutline` 注入 `profileDigest()` 画像摘要（取向贴身）；`generateCopySection` 不注入（大纲已定取向，省上下文）。**三调用均 `thinking: 'disabled'`（260926 开发者指令：单篇压到 2-3 分钟——智谱 glm 端默认开推理，实测隐藏 token 占补全量六七成，关闭后可见 token 占比归一、单调用快 3 倍以上；性能口径 outline ~25s + 最长批 ~110s 并行 ≈ 单篇 2-2.5 分钟）。**
 
 **generateDiyQuestions(direction)**（jsonMode，temperature 0.8）：
 
@@ -126,13 +126,13 @@ CREATE TABLE copy_daily (
 **generateCopyOutline(opts: { direction?, answers?, tags?, avoidTitles })**（jsonMode，temperature 0.9）：
 
 - 入参三模式：DIY 传 `direction + answers`（方向与四问答原文）；泵传 `tags`（随机三维标签组合）；`avoidTitles` = 近 30 条库内标题 + 池内全部标题。
-- 人设：人生副本编剧。产出 `{title(15字内), subtitle(一句话钩子), category, mood, era, stages: string[8-12]}`——stages 为人生阶段小标题（参照「卧室DJ：在失去一切之后开始」式命名），阶段弧线须有起伏：起步→代价与挫折→转机→高光→回归式收束；DIY 模式须把四问答的回答倾向织入人生走向。
+- 人设：人生副本编剧。产出 `{title(15字内), subtitle(一句话钩子), category, mood, era, stages: string[8-12], notes: string[与 stages 等长]}`——stages 为人生阶段小标题（参照「卧室DJ：在失去一切之后开始」式命名），阶段弧线须有起伏：起步→代价与挫折→转机→高光→回归式收束；notes 为每阶段一句话梗概（30 字内，260926 新增：分批并行撰写的连贯性唯一依据，须含贯穿母题进展）；DIY 模式须把四问答的回答倾向织入人生走向。notes 缺项/错位时代码回退阶段小标题，不炸整篇。
 - 撞题处理（代码层）：`title.replace(/\s+/g,'')` 与 avoidTitles norm 比对，撞了带提示重调一次；再撞则换 tags/微调 direction 重来；两次仍撞抛错。
 - 实施注意：`category/mood/era` 须在对应枚举内，出界时代码回落到入参 tags 或随机枚举值。
 
-**generateCopySection(outline, range, worldMemo)**（非 jsonMode，temperature 0.85）：
+**generateCopySection(outline, range, isLastBatch)**（非 jsonMode，temperature 0.85）：
 
-- 按阶段区间分批生成正文（每批 3-4 个阶段，整副本 2-4 次调用，规避单次 max_tokens 限制）；`worldMemo` = 已生成各阶段的「阶段名 + 一句话摘要」串（保跨批连贯）。
+- 按阶段区间分批生成正文（每批 3-4 个阶段，整副本 2-4 批，规避单次 max_tokens 限制）；**260926 起各批 `Promise.all` 并行**（260926 开发者指令：单篇 2-3 分钟），跨批连贯性由大纲 `notes`（全篇各阶段梗概在每批 prompt 内列出）兜底，不再依赖串行 worldMemo 前文摘要；进度经 onProgress 按完成批数递增。
 - prompt 硬性要求（照参照项目密度）：第二人称「你」沉浸叙事；每阶段 500-900 字；**密度指标：每 500 字至少 3 个具体数字、2 个命名地点、1 段对话**；全文一条贯穿性母题（参照项目「两美元 U 盘」式物件/动机）；禁 Gods-eye 总结腔，细节落地；最后一批追加「回归式收束」要求（高潮后落回平静与自洽，参照 DJ 副本「400 席」结尾）。
 - 输出 md 片段：每阶段以 `## 阶段小标题` 开头（小标题与 outline.stages 一致，逐字照抄）。
 
@@ -162,7 +162,7 @@ copy:discard(id)            → void（软删 deleted_at；pool 行不可删抛 
 copy:diyQuestions(direction, jobId) → { questions: string[4], jobId }
                               （jobId 防连发取消模式照 wall:ensureToday）
 copy:diyGenerate(jobId, direction, answers) → { copy: CopyDetail }
-                              （编排：outline → 写 md 头 → 分批 section 循环（进度经
+                              （编排：outline → 分批 section 并行（进度经
                               copy:diyProgress 事件推渲染层）→ 拼 md → INSERT(source=diy,
                               state='unread', 统计 word_count/stage_count)；signal 取消即中止
                               不落库不删文件；进行中再入抛 COPY_DIY_BUSY）
@@ -176,7 +176,7 @@ copy:stockCheck()           → void（触发补库泵，fire-and-forget，不�
 - `poolCount()` = `COUNT(*) FROM copies WHERE state='pool' AND deleted_at IS NULL`；< `COPY_LOW`(5) 循环补到 `COPY_TARGET`(10)，逐条串行。
 - 单条生成编排：随机三维 tags（排除库内近 20 条完全相同组合；不足多样时任意）→ `generateCopyOutline({ tags, avoidTitles: 近 30 标题 + 池内全部标题 })` → 分批 `generateCopySection` → 拼 md 写 `md/copies/{id}.md` → INSERT（source='daily'、state='pool'、统计字数/阶段）→ `notifyStockChanged()`（`copies:stockChanged`）。
 - 单条失败（含 LLM 未配置）catch 记 console.warn 跳出本轮，下次触发再补。
-- **三个触发点**：① `main.ts` 启动后延迟 10s（照 reasoningStock，unref）；② `copy:chooseDaily` 消耗后；③ 进入副本库模块（`copy:stockCheck`）。
+- **三个触发点**：① `main.ts` 启动即触发（260926 开发者指令：启动立刻检测补库，不再延迟 10s 错峰）；② `copy:chooseDaily` 消耗后；③ 进入副本库模块（`copy:stockCheck`）。
 
 ## 5. 回收站接入（新增「副本库」页签）
 
@@ -209,7 +209,7 @@ copy:stockCheck()           → void（触发补库泵，fire-and-forget，不�
 - [ ] DIY：方向 → 4 道个性化问题 → 全部作答后可生成；生成中分段进度文案、可取消、取消不落库；完成自动入收藏库并进阅读
 - [ ] DIY 边界：生成中再触发 toast「已有定制任务进行中」；切页签不中断生成；LLM 未配置两按钮弹 GoConfigDialog
 - [ ] 收藏库：三排筛选（来源/状态/标签）生效；状态图标与进度/读毕日期正确；updated_at 倒序；删除二次确认入回收站
-- [ ] 补库泵：池 < 5 补到 10；三触发点（启动延迟 10s / 选定消耗后 / 进模块）各自生效；LLM 未配置静默跳过（console.warn）；`copies:stockChanged` 渐进刷新每日候选；池行不出现在收藏库
+- [ ] 补库泵：池 < 5 补到 10；三触发点（启动即触发 / 选定消耗后 / 进模块）各自生效；LLM 未配置静默跳过（console.warn）；`copies:stockChanged` 渐进刷新每日候选；池行不出现在收藏库
 - [ ] 回收站「副本库」页签：删除、恢复、3 天彻底删（连带 md 文件）；pool 行不可删
 - [ ] 热力图：第四源生效（选定且读毕记 done）；格子五档色正常；图例/悬浮文案含副本
 - [ ] 总导览生活模式「今日副本」块：三态（候选/续读/读毕）正确、换一批可用、深链直达阅读；学习模式不显示

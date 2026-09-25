@@ -1,6 +1,6 @@
 /* ===== 播客台（播客台 specs §4.4）：单集流 + 节目卡 + 添加订阅弹窗；色系随主题禁彩亮 ===== */
 
-/* 工具条：刷新 / 添加订阅 / 节目筛选 chips */
+/* 单行工具栏：刷新 / 添加订阅 / 视图 chips（钉位零位移）/ 清空收件箱 / 订阅筛选下拉（右对齐收束） */
 .pc-toolbar {
   display: flex;
   align-items: center;
@@ -8,19 +8,11 @@
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
-/* 收件箱视图行：收件箱 / 已归档 / 全部 chips + 清空收件箱 */
-.pc-viewbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.pc-filter {
+/* 视图 chips 组：紧跟固定宽度按钮之后，切视图零位移（不带 auto margin） */
+.pc-views {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
-  margin-left: auto;
 }
 .pc-filter-chip {
   padding: 4px 12px;
@@ -45,6 +37,24 @@
 }
 :root[data-theme='dark'] .pc-filter-chip.active {
   color: #fff;
+}
+
+/* 订阅筛选下拉按钮：复用 chip 样式语言，右对齐；置于 .pc-filter-chip 之后以覆盖其 max-width */
+.pc-feed-select {
+  margin-left: auto;
+  max-width: 260px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pc-feed-select .material-symbols-outlined {
+  font-size: 1em;
+  flex-shrink: 0;
+}
+.pc-feed-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 未读点 */

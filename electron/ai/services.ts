@@ -2994,6 +2994,8 @@ export interface CopyOutline {
   mood: string
   era: string
   stages: string[]
+  /** 与 stages 一一对应的每阶段一句话梗概（260926 提速：分批并行撰写的连贯性依据，取代串行 memo） */
+  notes: string[]
 }
 
 /** 副本密度指标与叙事要求（照参照项目「DJ 的一生」密度，写进正文分批生成 prompt） */
@@ -3019,6 +3021,7 @@ export async function generateDiyQuestions(direction: string, signal?: AbortSign
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.8,
     jsonMode: true,
+    thinking: 'disabled',
     scene: 'copy:questions',
     signal
   })
@@ -3054,8 +3057,9 @@ ${diyPart ? diyPart + '\n\n' : ''}${tagLine}${avoid}
 - title：人生标题，15 字内
 - subtitle：一句话钩子（如「从两美元U盘到八万人主舞台」）
 - stages：8-12 个人生阶段的小标题（参照「卧室DJ：在失去一切之后开始」式命名），阶段弧线须有起伏：起步 → 代价与挫折 → 转机 → 高光 → 回归式收束
+- notes：与 stages 逐条对应的一句话梗概（30 字内，写清该阶段发生的关键事件与转折，正文将按批次并行撰写，梗概是保持全篇连贯的唯一依据，须含贯穿母题的进展）
 
-只输出 JSON：{"title": "...", "subtitle": "...", "category": "...", "mood": "...", "era": "...", "stages": ["阶段1", "阶段2", ...]}`
+只输出 JSON：{"title": "...", "subtitle": "...", "category": "...", "mood": "...", "era": "...", "stages": ["阶段1", "阶段2", ...], "notes": ["梗概1", ...]}`
 }
 
 /** 人生大纲（specs §3 generateCopyOutline）：撞题由调用方 norm 比对处理 */
@@ -3064,6 +3068,7 @@ export async function generateCopyOutline(opts: CopyOutlineOpts, signal?: AbortS
     messages: [{ role: 'user', content: copyOutlinePrompt(opts) }],
     temperature: 0.9,
     jsonMode: true,
+    thinking: 'disabled',
     scene: 'copy:outline',
     signal
   })
@@ -3075,35 +3080,42 @@ export async function generateCopyOutline(opts: CopyOutlineOpts, signal?: AbortS
     typeof v === 'string' && (list as readonly string[]).includes(v) ? v : fallback
   const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
   if (!title || stages.length < 8 || stages.length > 12) throw new Error('LLM 返回副本大纲缺失')
+  // notes 与 stages 对齐：缺/短/长的条目回退阶段小标题（梗概缺位不炸整篇，连贯性降级可接受）
+  const notesRaw = Array.isArray(parsed.notes)
+    ? (parsed.notes as unknown[]).map((n) => (typeof n === 'string' ? n.trim() : ''))
+    : []
+  const notes = stages.map((s, i) => notesRaw[i] || s)
   return {
     title,
     subtitle: typeof parsed.subtitle === 'string' ? parsed.subtitle.trim() : '',
     category: normEnum(parsed.category, COPY_CATEGORIES, opts.tags?.category ?? '日常'),
     mood: normEnum(parsed.mood, COPY_MOODS, opts.tags?.mood ?? '震撼'),
     era: normEnum(parsed.era, COPY_ERAS, opts.tags?.era ?? '当代'),
-    stages
+    stages,
+    notes
   }
 }
 
-/** 正文分批生成（specs §3 generateCopySection）：range = [from, to) 阶段索引区间 */
+/** 正文分批生成（specs §3 generateCopySection）：range = [from, to) 阶段索引区间。
+ *  260926 提速：连贯性改由大纲 notes（每阶段梗概）兜底，各批可并行调用，不再传前文 memo。 */
 export async function generateCopySection(
   outline: CopyOutline,
   from: number,
   to: number,
-  worldMemo: string,
   isLastBatch: boolean,
   signal?: AbortSignal
 ): Promise<string> {
   const stageLines = outline.stages
     .slice(from, to)
-    .map((s) => `## ${s}`)
+    .map((s, i) => `## ${s}\n（本阶段梗概：${outline.notes[from + i] ?? s}）`)
     .join('\n\n占位\n\n')
   const ending = isLastBatch ? '\n这是全文最后一批，最后一个阶段必须完成回归式收束，给整段人生一个平静落点。' : ''
   const prompt = `你是人生副本编剧，正在为以下大纲撰写正文。
 
 大纲：标题《${outline.title}》——${outline.subtitle}
-${worldMemo ? `已写好的前文各阶段梗概（保持连贯，不要重复其内容）：\n${worldMemo}\n` : ''}
-请撰写第 ${from + 1} 到第 ${to} 个阶段的正文，每个阶段以「## 阶段小标题」开头（小标题与下面给出的完全一致，逐字照抄），阶段之间用空行分隔：
+全篇各阶段梗概（把握走向，与前后批次衔接连贯，不要写成其他阶段的内容）：
+${outline.stages.map((s, i) => `${i + 1}. ${s}——${outline.notes[i] ?? s}`).join('\n')}
+请撰写第 ${from + 1} 到第 ${to} 个阶段的正文，每个阶段以「## 阶段小标题」开头（小标题与下面给出的完全一致，逐字照抄），按各阶段梗概展开但不要照抄梗概，阶段之间用空行分隔：
 
 ${stageLines}
 ${ending}
@@ -3114,6 +3126,7 @@ ${COPY_DENSITY_RULES}
   const res = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.85,
+    thinking: 'disabled',
     scene: 'copy:section',
     signal
   })

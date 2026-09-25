@@ -53,6 +53,7 @@ export interface PokerPlayer {
   allin: boolean
   acted: boolean
   out: boolean
+  lastAction: string | null // 最近一次动作标签（过牌/跟注 X/下注 X/加注到 X/全下 X/弃牌），跨街保留
 }
 
 export interface HandLogEntry {
@@ -95,11 +96,15 @@ export interface PokerState {
   gameRank: number | null // 我的名次（gameover 时 1..4）
   handsLog: HandLogEntry[]
   startedAtMs: number
+  actionLog: string[] // 本手行动流水（新→旧展示用，每街带分隔标记），开手重置
+  notice: string | null // 规则提示（全下跑马等），开手重置
 }
 
 // ---------- 基础工具 ----------
 
 export const SUITS = ['♠', '♥', '♦', '♣']
+
+export const STREET_ZH: Record<Street, string> = { preflop: '翻前', flop: '翻牌', turn: '转牌', river: '河牌' }
 
 export function cardText(c: Card): string {
   const r = c.r === 14 ? 'A' : c.r === 13 ? 'K' : c.r === 12 ? 'Q' : c.r === 11 ? 'J' : String(c.r)
@@ -219,7 +224,7 @@ export function createInitialState(): PokerState {
   const personas: PersonaKey[] = ['tag', 'lag', 'station']
   const st: PokerState = {
     players: [
-      { id: 0, name: '我', isHuman: true, stack: START_STACK, bet: 0, totalBet: 0, cards: [], folded: false, allin: false, acted: false, out: false },
+      { id: 0, name: '我', isHuman: true, stack: START_STACK, bet: 0, totalBet: 0, cards: [], folded: false, allin: false, acted: false, out: false, lastAction: null },
       ...personas.map((k, i) => ({
         id: i + 1,
         name: PERSONAS[k].name,
@@ -232,7 +237,8 @@ export function createInitialState(): PokerState {
         folded: false,
         allin: false,
         acted: false,
-        out: false
+        out: false,
+        lastAction: null
       }))
     ],
     deck: [],
@@ -250,7 +256,9 @@ export function createInitialState(): PokerState {
     bustOrder: [],
     gameRank: null,
     handsLog: [],
-    startedAtMs: Date.now()
+    startedAtMs: Date.now(),
+    actionLog: [],
+    notice: null
   }
   return startHand(st)
 }
@@ -268,6 +276,8 @@ export function startHand(prev: PokerState): PokerState {
   st.street = 'preflop'
   st.currentBet = 0
   st.handOver = null
+  st.actionLog = [`—— 翻前（第 ${st.handNo} 手 · 盲注 ${st.sb}/${st.bb}）——`]
+  st.notice = null
   for (const p of st.players) {
     if (p.out) continue
     p.bet = 0
@@ -276,6 +286,7 @@ export function startHand(prev: PokerState): PokerState {
     p.folded = false
     p.allin = false
     p.acted = false
+    p.lastAction = null
   }
   // 庄钮在存活玩家里轮转
   const dealerIdx = nextSeat(st, st.players.findIndex((p) => p.id === st.dealerId), (p) => !p.out)
@@ -283,21 +294,24 @@ export function startHand(prev: PokerState): PokerState {
   const alive = alivePlayers(st)
   const aliveDealer = alive.findIndex((p) => p.id === st.dealerId)
   const headsUp = alive.length === 2
-  const post = (p: PokerPlayer, amount: number): void => {
+  const post = (p: PokerPlayer, amount: number, label: string): void => {
     const real = Math.min(amount, p.stack)
     p.stack -= real
     p.bet += real
     p.totalBet += real
     if (p.stack === 0) p.allin = true
+    p.lastAction = p.allin ? `全下盲注 ${real}` : label
+    st.actionLog.push(`${p.name} ${p.lastAction}`)
   }
   const sbP = alive[headsUp ? aliveDealer : (aliveDealer + 1) % alive.length]
   const bbP = alive[headsUp ? (aliveDealer + 1) % alive.length : (aliveDealer + 2) % alive.length]
-  post(sbP, st.sb)
-  post(bbP, st.bb)
+  post(sbP, st.sb, `小盲 ${st.sb}`)
+  post(bbP, st.bb, `大盲 ${st.bb}`)
   st.currentBet = st.bb
   for (const p of alive) p.cards = [st.deck.pop()!, st.deck.pop()!]
-  // 翻前首行动 = BB 下家（HU 时即庄家/SB 本人，公式通用）
-  st.toAct = nextSeat(st, (dealerIdx + (headsUp ? 0 : 2)) % st.players.length, (p) => !p.out && !p.allin && !p.folded)
+  // 翻前首行动 = BB 座位的下一位可行动者；HU 时 BB = 庄家唯一对手，绕回即庄家/SB 本人先动（单挑规则）
+  const bbIdx = st.players.findIndex((p) => p.id === bbP.id)
+  st.toAct = nextSeat(st, bbIdx, (p) => !p.out && !p.allin && !p.folded)
   syncAwaiting(st)
   return st
 }
@@ -310,6 +324,19 @@ function syncAwaiting(st: PokerState): void {
   } else {
     st.awaiting = 'settle' // 本街行动完毕，待 advance 收尾
   }
+}
+
+/** 行动后推进：把行动权交给下一位待行动者；无人待行动 → 本街结束（settle 收尾） */
+function advanceTurn(st: PokerState): void {
+  const pending = alivePlayers(st).filter((p) => !p.folded && !p.allin && !p.acted)
+  if (!pending.length) {
+    st.toAct = -1
+    st.awaiting = 'settle'
+    return
+  }
+  const from = st.toAct >= 0 ? st.toAct : st.players.findIndex((p) => p.id === st.dealerId)
+  st.toAct = nextSeat(st, from, (p) => pending.some((q) => q.id === p.id))
+  st.awaiting = st.players[st.toAct].isHuman ? 'human' : 'ai'
 }
 
 // ---------- 行动 ----------
@@ -343,25 +370,37 @@ function commit(st: PokerState, p: PokerPlayer, amount: number): void {
   if (p.stack === 0) p.allin = true
 }
 
+/** 记录当前行动者的动作标签 + 写入本手流水 */
+function record(st: PokerState, label: string): void {
+  const p = st.players[st.toAct]
+  p.lastAction = label
+  st.actionLog.push(`${p.name} ${label}`)
+}
+
 function applyFold(st: PokerState): void {
   st.players[st.toAct].folded = true
   st.players[st.toAct].acted = true
+  record(st, '弃牌')
 }
 
 function applyCall(st: PokerState): void {
   const p = st.players[st.toAct]
-  commit(st, p, st.currentBet - p.bet)
+  const real = Math.min(st.currentBet - p.bet, p.stack)
+  commit(st, p, real)
   p.acted = true
+  record(st, p.allin ? `全下跟注 ${real}` : `跟注 ${real}`)
 }
 
 function applyRaise(st: PokerState, raiseTo: number): void {
   const p = st.players[st.toAct]
+  const first = st.currentBet <= 0 // 本街首笔下注
   const target = Math.max(raiseTo, st.currentBet + 1)
   st.minRaise = Math.max(st.minRaise, target - st.currentBet)
   st.currentBet = Math.max(st.currentBet, target)
   commit(st, p, st.currentBet - p.bet)
   for (const q of alivePlayers(st)) if (q.id !== p.id && !q.folded && !q.allin) q.acted = false
   p.acted = true
+  record(st, p.allin ? `全下 ${st.currentBet}` : first ? `下注 ${st.currentBet}` : `加注到 ${st.currentBet}`)
 }
 
 // ---------- AI 决策 ----------
@@ -404,8 +443,10 @@ function aiDecide(st: PokerState): PokerAction {
 function performAction(st: PokerState, act: PokerAction): void {
   if (act.type === 'fold') applyFold(st)
   else if (act.type === 'call') applyCall(st)
-  else if (act.type === 'check') st.players[st.toAct].acted = true
-  else applyRaise(st, act.amount ?? legalActions(st).minRaiseTo)
+  else if (act.type === 'check') {
+    st.players[st.toAct].acted = true
+    record(st, '过牌')
+  } else applyRaise(st, act.amount ?? legalActions(st).minRaiseTo)
 }
 
 /** 玩家行动入口（awaiting==='human' 时合法） */
@@ -419,7 +460,7 @@ export function humanAct(prev: PokerState, act: PokerAction): PokerState {
     endByFold(st, live[0])
     return st
   }
-  syncAwaiting(st)
+  advanceTurn(st)
   return st
 }
 
@@ -463,13 +504,13 @@ export function advance(prev: PokerState): PokerState {
       endByFold(st, live[0])
       return st
     }
-    syncAwaiting(st)
+    advanceTurn(st)
     return st
   }
   return settleRound(st)
 }
 
-/** 下注轮收尾：清注 → 全下跑马/发下一街/摊牌 */
+/** 下注轮收尾：清注 → 发下一街；有人全下（跑马）时逐街发完直接摊牌 */
 function settleRound(prev: PokerState): PokerState {
   const st = clone(prev)
   for (const p of alivePlayers(st)) {
@@ -480,14 +521,18 @@ function settleRound(prev: PokerState): PokerState {
   st.minRaise = st.bb
   const live = alivePlayers(st).filter((p) => !p.folded)
   const canAct = live.filter((p) => !p.allin)
-  const maxLiveBet = Math.max(0, ...live.map((p) => p.bet))
-  const owesCall = canAct.some((p) => p.bet < maxLiveBet)
-  // 全员 all-in（或唯一可行动者已不需要再投注）→ 直接发完到河牌摊牌
-  if (st.street === 'river' || canAct.length === 0 || (canAct.length === 1 && !owesCall)) {
-    while (st.board.length < 5) {
+  // 全员 all-in（或只剩一名可行动者、无人能再跟注）→ 标准规则：无更多下注环节，逐街发完公共牌直接摊牌
+  if (st.street === 'river' || canAct.length <= 1) {
+    if (st.board.length < 5) {
+      st.notice = '已有玩家全下、无人可再投注——剩余公共牌逐街发完后直接摊牌，本手不再有下注环节'
+      st.toAct = -1
       st.deck.pop() // burn
-      const n = st.board.length === 0 ? 3 : 1
-      for (let i = 0; i < n; i++) st.board.push(st.deck.pop()!)
+      const deal = st.board.length === 0 ? 3 : 1
+      for (let i = 0; i < deal; i++) st.board.push(st.deck.pop()!)
+      st.street = st.street === 'preflop' ? 'flop' : st.street === 'flop' ? 'turn' : 'river'
+      st.actionLog.push(`—— ${STREET_ZH[st.street]} ——`)
+      st.awaiting = 'settle'
+      return st
     }
     return showdown(st)
   }
@@ -495,10 +540,10 @@ function settleRound(prev: PokerState): PokerState {
   const deal = st.street === 'preflop' ? 3 : 1
   for (let i = 0; i < deal; i++) st.board.push(st.deck.pop()!)
   st.street = st.street === 'preflop' ? 'flop' : st.street === 'flop' ? 'turn' : 'river'
+  st.actionLog.push(`—— ${STREET_ZH[st.street]} ——`)
   const dealerIdx = st.players.findIndex((p) => p.id === st.dealerId)
   st.toAct = nextSeat(st, dealerIdx, (p) => !p.out && !p.folded && !p.allin)
   syncAwaiting(st)
-  if (st.awaiting === 'settle') return settleRound(st) // 可行动者不足，继续收尾
   return st
 }
 
@@ -551,6 +596,11 @@ function cmpRank(a: HandRank, b: HandRank): number {
 
 function finishHand(st: PokerState): void {
   st.handsLog.push(st.handOver!.log)
+  // 底池已全部结清：归零下注计数（否则出局玩家的残留 totalBet 会被下一手 endByFold/摊牌误当底池重复发放）
+  for (const p of st.players) {
+    p.bet = 0
+    p.totalBet = 0
+  }
   // 破产出局（同手多人破产：余码少者名次更差）
   const busted = alivePlayers(st)
     .filter((p) => p.stack <= 0)

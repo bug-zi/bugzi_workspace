@@ -2301,10 +2301,31 @@
 .fuben-toc {
   width: 200px;
   flex-shrink: 0;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.fuben-toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.fuben-toc-title {
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  padding-left: 10px;
+}
+.fuben-toc-list {
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fuben-toc-toggle.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-deep);
 }
 .fuben-toc-item {
   text-align: left;

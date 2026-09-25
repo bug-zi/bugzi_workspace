@@ -1280,10 +1280,10 @@ const api = {
       ipcRenderer.invoke('podcast:feedsUpdate', id, patch),
     /** 退订连删该节目全部单集（前端二次确认后调用） */
     feedsDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:feedsDelete', id),
-    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部，缺省 all） */
+    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部 / starred 收藏，缺省 all） */
     episodes: (
       feedId: number | null,
-      view?: 'inbox' | 'archived' | 'all'
+      view?: import('../src/shared/types').PodcastEpisodeView
     ): Promise<import('../src/shared/types').PodcastEpisodeSummary[]> =>
       ipcRenderer.invoke('podcast:episodes', feedId, view),
     episodeRead: (id: number, read: boolean): Promise<boolean> =>
@@ -1296,6 +1296,11 @@ const api = {
     fetchAll: (): Promise<number> => ipcRenderer.invoke('podcast:fetchAll'),
     /** 手动转写触发（入队；状态流转经 onTaskChanged 渐进刷新） */
     transcribe: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:transcribe', id),
+    /** 收藏/取消收藏（收藏出流：收件箱不含、未读计数不计） */
+    episodeStar: (id: number, starred: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('podcast:episodeStar', id, starred),
+    /** 取消转写（排队摘队/在跑 abort，回 none 可重试） */
+    transcribeCancel: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:transcribeCancel', id),
     /** 转写状态机任何变化推送（none→queued→downloading→transcribing→done|failed），返回取消订阅 */
     onTaskChanged: (cb: () => void): (() => void) => {
       const listener = (): void => {

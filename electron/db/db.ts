@@ -1596,6 +1596,27 @@ function migrate(): void {
     d.prepare("UPDATE copies SET state = 'pool' WHERE state = 'unread' AND deleted_at IS NULL").run()
     d.exec('PRAGMA user_version = 59')
   }
+
+  if (version < 60) {
+    // v60：播客台删除墓碑（优化建议区第56轮，2026-09-26-工具栏单行合并与删除墓碑-design.md §3.1）——
+    // 手动删除的单集按 (feed_id, guid) 留墓碑，拉源入库前跳过，根治「删除后切模块触发
+    // fetchAll 复活（自动转写节目还会误入转写队列）」；退订时随删本 feed 墓碑（重订全新开始）。
+    d.exec(`CREATE TABLE podcast_deleted_eps (
+      feed_id INTEGER NOT NULL,
+      guid TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      PRIMARY KEY (feed_id, guid)
+    )`)
+    d.exec('PRAGMA user_version = 60')
+  }
+
+  if (version < 61) {
+    // v61：播客台收藏页签（优化建议区第57轮，2026-09-26-收藏页签与取消转写-design.md §3.1）——
+    // 单集加 starred_at 收藏列（信息源 favorited_at 同款）：收藏出流（收件箱不含、未读计数不计），
+    // 收藏页签按收藏时间倒序；取消收藏按已读态回流。
+    d.exec('ALTER TABLE podcast_episodes ADD COLUMN starred_at TEXT')
+    d.exec('PRAGMA user_version = 61')
+  }
 }
 
 // ---------- 通用工具 ----------

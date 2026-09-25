@@ -929,8 +929,8 @@ export interface PodcastFeed {
   rss_transcripts: number
 }
 
-/** 单集流视图（260925 收件箱制）：inbox=未读（默认），archived=已读（已读即归档），all=全部 */
-export type PodcastEpisodeView = 'inbox' | 'archived' | 'all'
+/** 单集流视图（260925 收件箱制；260926 增收藏）：inbox=未读未收藏（默认），archived=已读未收藏，all=全部含收藏，starred=收藏（按收藏时间倒序） */
+export type PodcastEpisodeView = 'inbox' | 'archived' | 'all' | 'starred'
 
 /** 播客单集列表轻量行（单集流；不含 shownotes/transcript_text/summary_md 大字段） */
 export interface PodcastEpisodeSummary {
@@ -946,6 +946,8 @@ export interface PodcastEpisodeSummary {
   has_rss_transcript: boolean
   transcript_error: string | null
   read_at: string | null
+  /** 收藏时间（NULL=未收藏；收藏出流——收件箱不含、未读计数不计） */
+  starred_at: string | null
 }
 
 /** 播客单集阅读视图全量（podcast:episodeDetail） */

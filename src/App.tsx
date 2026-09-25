@@ -65,9 +65,9 @@ const MODULES: {
   { id: 'answers', label: '答疑店', icon: 'forum', seg: 'learn' },
   { id: 'zhijiji', label: '致知己', icon: 'self_improvement', seg: 'learn' },
   // —— 生活区 ——
-  { id: 'zangyue', label: '图书馆', icon: 'collections_bookmark', seg: 'life' },
-  { id: 'fuben', label: '副本库', icon: 'sports_esports', seg: 'life' },
-  { id: 'fushi', label: '赋诗苑', icon: 'auto_awesome', seg: 'life' },
+  { id: 'zangyue', label: '图书馆', icon: 'menu_book', seg: 'life' },
+  { id: 'fuben', label: '副本库', icon: 'collections_bookmark', seg: 'life' },
+  { id: 'fushi', label: '赋诗苑', icon: 'brush', seg: 'life' },
   { id: 'reasoning', label: '推理角', icon: 'psychology', seg: 'life' },
   { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', seg: 'life' },

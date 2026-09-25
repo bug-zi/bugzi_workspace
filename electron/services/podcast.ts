@@ -15,11 +15,12 @@ import type {
   ItunesPodcast,
   PodcastEpisodeDetail,
   PodcastEpisodeSummary,
+  PodcastEpisodeView,
   PodcastFeed
 } from '../../src/shared/types'
 import { chatCompletion, notifyActivityChanged, registerLlmActivityProvider } from '../ai/llm'
 import { isLlmConfigured } from '../ai/services'
-import { beginJob, endJob } from '../ai/jobs'
+import { beginJob, cancelJob, endJob } from '../ai/jobs'
 import { stripTags } from './feed'
 
 /** 常规浏览器 UA（feed.ts 同款） */
@@ -208,7 +209,7 @@ export function listPodcastFeeds(): PodcastFeed[] {
   const rows = getDb()
     .prepare(
       `SELECT f.*,
-        (SELECT COUNT(*) FROM podcast_episodes e WHERE e.feed_id = f.id AND e.read_at IS NULL) AS unread,
+        (SELECT COUNT(*) FROM podcast_episodes e WHERE e.feed_id = f.id AND e.read_at IS NULL AND e.starred_at IS NULL) AS unread,
         (SELECT COUNT(*) FROM podcast_episodes e WHERE e.feed_id = f.id AND e.transcript_state IN ('none','failed')
            AND (e.transcript_url IS NULL OR e.transcript_url = '')) AS untranscribed,
         (SELECT COUNT(*) FROM podcast_episodes e WHERE e.feed_id = f.id AND e.transcript_url IS NOT NULL AND e.transcript_url != '') AS rss_transcripts
@@ -228,13 +229,14 @@ export function updatePodcastFeed(id: number, patch: { auto_transcribe?: boolean
   if (t) d.prepare('UPDATE podcast_feeds SET title = ? WHERE id = ?').run(t, id)
 }
 
-/** 退订连删该节目全部单集与文字稿（二次确认在渲染层；不入回收站） */
+/** 退订连删该节目全部单集与文字稿（二次确认在渲染层；不入回收站；随删墓碑——重订全新开始） */
 export function deletePodcastFeed(id: number): void {
   const d = getDb()
   const eps = d.prepare('SELECT id FROM podcast_episodes WHERE feed_id = ?').all(id) as { id: number }[]
   for (const e of eps) dequeueTranscribe(e.id)
   d.prepare('DELETE FROM podcast_episodes WHERE feed_id = ?').run(id)
   d.prepare('DELETE FROM podcast_feeds WHERE id = ?').run(id)
+  d.prepare('DELETE FROM podcast_deleted_eps WHERE feed_id = ?').run(id)
 }
 
 // ---------- RSS 直链 probe ----------
@@ -365,11 +367,20 @@ async function fetchPodcastFeed(feedId: number, feedUrl: string, isFirst: boolea
         (feed_id, guid, title, shownotes, published_at, duration_sec, enclosure_url, transcript_url, transcript_state, fetched_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'none', ?)`
     )
+    // 删除墓碑：用户删过的 (feed_id, guid) 不再回库（防 fetchAll 复活与自动转写误入队）
+    const tombstones = new Set(
+      (
+        d.prepare('SELECT guid FROM podcast_deleted_eps WHERE feed_id = ?').all(feedId) as unknown as {
+          guid: string
+        }[]
+      ).map((r) => r.guid)
+    )
     const feed = d.prepare('SELECT auto_transcribe FROM podcast_feeds WHERE id = ?').get(feedId) as
       | { auto_transcribe: number }
       | undefined
     let added = 0
     for (const it of items) {
+      if (tombstones.has(it.guid)) continue
       const best = it.transcripts[0] ?? null
       const r = ins.run(
         feedId,
@@ -425,34 +436,45 @@ function mapEpisodeSummary(r: FeedRow): PodcastEpisodeSummary {
     transcript_state: (r.transcript_state as PodcastEpisodeSummary['transcript_state']) ?? 'none',
     has_rss_transcript: r.transcript_url != null && r.transcript_url !== '',
     transcript_error: (r.transcript_error as string | null) ?? null,
-    read_at: (r.read_at as string | null) ?? null
+    read_at: (r.read_at as string | null) ?? null,
+    starred_at: (r.starred_at as string | null) ?? null
   }
 }
 
-/** 单集流（收件箱制，260925）：view=inbox 未读（默认首屏）/ archived 已读归档 / all 全部；
- *  发布倒序，无日期退 fetched_at。归档只动视图分类，转写状态/文字稿不受影响 */
-export function listPodcastEpisodes(
-  feedId: number | null,
-  view: 'inbox' | 'archived' | 'all' = 'all'
-): PodcastEpisodeSummary[] {
+/** 单集流（收件箱制 260925，收藏出流 260926）：view=inbox 未读且未收藏（默认首屏）/ archived 已读未收藏 /
+ *  starred 收藏（按收藏时间倒序）/ all 全部含收藏。发布倒序，无日期退 fetched_at。
+ *  归档/收藏只动视图分类，转写状态/文字稿不受影响 */
+export function listPodcastEpisodes(feedId: number | null, view: PodcastEpisodeView = 'all'): PodcastEpisodeSummary[] {
   const cond =
-    view === 'inbox' ? 'AND e.read_at IS NULL' : view === 'archived' ? 'AND e.read_at IS NOT NULL' : ''
+    view === 'inbox'
+      ? 'AND e.read_at IS NULL AND e.starred_at IS NULL'
+      : view === 'archived'
+        ? 'AND e.read_at IS NOT NULL AND e.starred_at IS NULL'
+        : view === 'starred'
+          ? 'AND e.starred_at IS NOT NULL'
+          : ''
+  const order =
+    view === 'starred'
+      ? 'e.starred_at DESC, e.id DESC'
+      : 'COALESCE(e.published_at, e.fetched_at) DESC, e.id DESC'
   const rows = getDb()
     .prepare(
       `SELECT e.id, e.feed_id, f.title AS feed_title, e.title, e.published_at, e.duration_sec,
-              e.transcript_state, e.transcript_url, e.transcript_error, e.read_at, e.fetched_at
+              e.transcript_state, e.transcript_url, e.transcript_error, e.read_at, e.starred_at, e.fetched_at
        FROM podcast_episodes e JOIN podcast_feeds f ON f.id = e.feed_id
        WHERE (? IS NULL OR e.feed_id = ?) ${cond}
-       ORDER BY COALESCE(e.published_at, e.fetched_at) DESC, e.id DESC`
+       ORDER BY ${order}`
     )
     .all(feedId, feedId) as unknown as FeedRow[]
   return rows.map(mapEpisodeSummary)
 }
 
-/** 收件箱一键清空：全部（或指定节目）未读置为已读 = 归档（已转写与否无关） */
+/** 收件箱一键清空：全部（或指定节目）未读置为已读 = 归档（已转写与否无关；收藏的集不动） */
 export function markAllEpisodesRead(feedId: number | null): number {
   const r = getDb()
-    .prepare('UPDATE podcast_episodes SET read_at = ? WHERE read_at IS NULL AND (? IS NULL OR feed_id = ?)')
+    .prepare(
+      'UPDATE podcast_episodes SET read_at = ? WHERE read_at IS NULL AND starred_at IS NULL AND (? IS NULL OR feed_id = ?)'
+    )
     .run(nowIso(), feedId, feedId)
   return Number(r.changes)
 }
@@ -462,10 +484,42 @@ export function setEpisodeRead(id: number, read: boolean): void {
   getDb().prepare('UPDATE podcast_episodes SET read_at = ? WHERE id = ?').run(read ? nowIso() : null, id)
 }
 
-/** 删单集（硬删，不入回收站；在队列中的顺带摘除） */
+/** 收藏/取消收藏（收藏出流：收件箱不含、未读计数不计；取消收藏按已读态回流） */
+export function setEpisodeStarred(id: number, starred: boolean): void {
+  getDb().prepare('UPDATE podcast_episodes SET starred_at = ? WHERE id = ?').run(starred ? nowIso() : null, id)
+}
+
+/** 取消转写（第57轮）：在跑的走全局 jobId 取消（processTranscribe catch 置回 none 可重试）；
+ *  排队的摘内存队列并置回 none（防徽章卡 queued）；异常卡住态顺带自愈。
+ *  polishing 不提供取消（转写成果已落库，取消反而丢） */
+export function cancelTranscribe(episodeId: number): void {
+  const active = activeTranscribes.get(episodeId)
+  if (active) {
+    cancelJob(active.jobId)
+    return
+  }
+  dequeueTranscribe(episodeId)
+  getDb()
+    .prepare("UPDATE podcast_episodes SET transcript_state = 'none' WHERE id = ? AND transcript_state = 'queued'")
+    .run(episodeId)
+  notifyTaskChanged()
+}
+
+/** 删单集（硬删，不入回收站；在队列中的顺带摘除；写墓碑防拉源复活） */
 export function deleteEpisode(id: number): void {
+  const d = getDb()
+  const row = d.prepare('SELECT feed_id, guid FROM podcast_episodes WHERE id = ?').get(id) as
+    | { feed_id: number; guid: string }
+    | undefined
   dequeueTranscribe(id)
-  getDb().prepare('DELETE FROM podcast_episodes WHERE id = ?').run(id)
+  if (row) {
+    d.prepare('INSERT OR REPLACE INTO podcast_deleted_eps (feed_id, guid, deleted_at) VALUES (?, ?, ?)').run(
+      row.feed_id,
+      row.guid,
+      nowIso()
+    )
+  }
+  d.prepare('DELETE FROM podcast_episodes WHERE id = ?').run(id)
 }
 
 /** 阅读视图全量（文字稿 + shownotes + summary_md + 节目封面） */

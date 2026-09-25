@@ -34,7 +34,7 @@ export default function FubenModule() {
       ) : (
         <>
           <div className="module-header">
-            <span className="material-symbols-outlined">sports_esports</span>
+            <span className="material-symbols-outlined">collections_bookmark</span>
             <span className="module-title">副本库</span>
             <span className="module-sub">每天抽一段别样人生，或定制一段属于自己的</span>
           </div>

@@ -11,7 +11,7 @@ export default function ZangyueModule() {
     <div className="module-page zy-page" style={{ maxWidth: 1200 }}>
       {!readerActive && (
         <div className="module-header">
-          <span className="material-symbols-outlined">collections_bookmark</span>
+          <span className="material-symbols-outlined">menu_book</span>
           <span className="module-title">图书馆</span>
           <span className="module-sub">书架</span>
         </div>

@@ -314,19 +314,17 @@ export async function composeCopyIntoDb(
   }
   onProgress?.({ step: 'section', current: 0, total: chunkStages(outline.stages).length })
   const bounds = chunkStages(outline.stages)
-  const parts: string[] = []
-  const memo: string[] = []
-  for (let i = 0; i < bounds.length; i++) {
-    const from = i === 0 ? 0 : bounds[i - 1]
-    const to = bounds[i]
-    const text = await generateCopySection(outline, from, to, memo.join('\n'), i === bounds.length - 1, signal)
-    parts.push(text)
-    outline.stages.slice(from, to).forEach((stage, k) => {
-      const seg = text.split(/^##\s+/m).slice(1)
-      memo.push(`${stage}：${(seg[k]?.replace(/\s+/g, ' ') ?? '').slice(0, 60)}`)
+  // 260926 提速（开发者指令：单篇 2-3 分钟）：三场景关思维链 + 各批并行撰写，连贯性由大纲 notes 兜底（不再串行 memo）
+  let done = 0
+  const parts = await Promise.all(
+    bounds.map((to, i) => {
+      const from = i === 0 ? 0 : bounds[i - 1]
+      return generateCopySection(outline, from, to, i === bounds.length - 1, signal).then((text) => {
+        onProgress?.({ step: 'section', current: ++done, total: bounds.length })
+        return text
+      })
     })
-    onProgress?.({ step: 'section', current: i + 1, total: bounds.length })
-  }
+  )
   const body = parts.join('\n\n')
   const now = nowIso()
   const db = getDb()
