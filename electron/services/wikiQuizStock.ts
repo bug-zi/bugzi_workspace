@@ -2,6 +2,7 @@
 // 每个 learned 词条常备 QUIZ_PER_ENTRY(2) 题在库，毕业（答对 2 次）即删题 + 词条熟练度 +1。
 // 三触发：main.ts 启动延迟 10s / wiki:quizDraw 抽题消耗后 / 进万象库模块（wiki:stockCheck 挂靠）。
 // fire-and-forget、永不抛错、永不弹窗；LLM 未配置静默跳过。
+import { logInfo, logWarn, logError } from './logger'
 import { BrowserWindow } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import { isLlmConfigured, generateEntryQuiz, type WikiQuizQuestion } from '../ai/services'
@@ -141,7 +142,7 @@ export async function ensureWikiQuizStock(): Promise<void> {
   pumping = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[wikiQuizStock] LLM 未配置，测一测题库泵跳过')
+      logWarn('stock', '[wikiQuizStock] LLM 未配置，测一测题库泵跳过')
       return
     }
     const needy = getDb()
@@ -153,7 +154,7 @@ export async function ensureWikiQuizStock(): Promise<void> {
       )
       .all() as { id: number; term: string; md_path: string }[]
     if (needy.length === 0) return
-    console.info(`[wikiQuizStock] 题库补充开始：${needy.map((e) => e.term).join(' · ')}`)
+    logInfo('stock', `[wikiQuizStock] 题库补充开始：${needy.map((e) => e.term).join(' · ')}`)
     for (const entry of needy) {
       try {
         // 并发触发下该词条可能已被上一轮补齐
@@ -175,12 +176,12 @@ export async function ensureWikiQuizStock(): Promise<void> {
         )
         insertQuizBankRows(qs)
         notifyStockChanged()
-        console.info(`[wikiQuizStock]「${entry.term}」题库 +${qs.length}（现 ${bankCountOf(entry.id)}）`)
+        logInfo('stock', `[wikiQuizStock]「${entry.term}」题库 +${qs.length}（现 ${bankCountOf(entry.id)}）`)
       } catch (e) {
-        console.warn(`[wikiQuizStock]「${entry.term}」出题失败，跳过：`, (e as Error).message)
+        logWarn('stock', `[wikiQuizStock]「${entry.term}」出题失败，跳过：`, (e as Error).message)
       }
     }
-    console.info('[wikiQuizStock] 题库补充结束')
+    logInfo('stock', '[wikiQuizStock] 题库补充结束')
   } finally {
     pumping = false
   }

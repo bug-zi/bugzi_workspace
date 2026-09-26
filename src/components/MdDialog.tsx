@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { renderMd } from './MdView'
+import { useSelectionBubble } from '../hooks/useSelectionBubble'
 import './MdDialog.css'
 
 export interface MdDialogProps {
@@ -233,60 +234,8 @@ export default function MdDialog(props: MdDialogProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, close])
 
-  // 划词气泡（万象卡片）
-  useEffect(() => {
-    const body = bodyRef.current
-    if (!open || !body || !selectionActions) return
-    let bubble: HTMLDivElement | null = null
-    const removeBubble = (): void => {
-      bubble?.remove()
-      bubble = null
-    }
-    const onMouseUp = (e: MouseEvent): void => {
-      // 点击气泡本身：不移除，交给按钮 click 处理。若在此移除，click 派发前按钮已脱离
-      // DOM，click 事件不会触发（「高光/问 AI」点击无响应的根因，DOM 顺序 mousedown→mouseup→click）
-      if (bubble && e.target instanceof Node && bubble.contains(e.target)) return
-      removeBubble()
-      const sel = window.getSelection()
-      const text = sel?.toString().trim() ?? ''
-      if (!text || text.length > 500 || !sel) return
-      const range = sel.getRangeAt(0)
-      if (!body.contains(range.commonAncestorContainer)) return
-      const rect = range.getBoundingClientRect()
-      bubble = document.createElement('div')
-      bubble.className = 'sel-bubble'
-      const mkBtn = (label: string, onClick: () => void): HTMLButtonElement => {
-        const b = document.createElement('button')
-        b.textContent = label
-        b.addEventListener('click', (e) => {
-          e.stopPropagation()
-          onClick()
-          removeBubble()
-          sel.removeAllRanges()
-        })
-        return b
-      }
-      // 选区整体落在既有高光 <mark> 内 → 出「取消高光」（整段标记文本，局部选中同段整体取消），
-      // 不再出「高光」（高光内再划高光会在 md 中产生嵌套 ==标记== 的脏写）
-      const anc = range.commonAncestorContainer
-      const ancEl = anc.nodeType === Node.TEXT_NODE ? anc.parentElement : (anc as Element)
-      const markEl = ancEl?.closest('mark') ?? null
-      const { onHighlight, onUnhighlight } = selectionActions
-      const btns = [mkBtn('问 AI', () => selectionActions.onAskAi(text))]
-      if (markEl && onUnhighlight) btns.unshift(mkBtn('取消高光', () => onUnhighlight(markEl.textContent ?? '')))
-      else if (onHighlight) btns.unshift(mkBtn('高光', () => onHighlight(text)))
-      bubble.append(...btns)
-      document.body.appendChild(bubble)
-      const bw = 150
-      bubble.style.left = `${Math.max(8, rect.left + rect.width / 2 - bw / 2)}px`
-      bubble.style.top = `${Math.max(8, rect.top - 40)}px`
-    }
-    document.addEventListener('mouseup', onMouseUp)
-    return () => {
-      document.removeEventListener('mouseup', onMouseUp)
-      removeBubble()
-    }
-  }, [open, selectionActions])
+  // 划词气泡（万象卡片；260927 抽 useSelectionBubble 共享，主栏阅读视图同款）
+  useSelectionBubble(open, bodyRef, selectionActions)
 
   if (!open) return null
 

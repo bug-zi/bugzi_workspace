@@ -1,3 +1,4 @@
+import { logInfo, logWarn } from '../logger'
 // embedding 索引与相关推荐（超级工作台 2.0 批次B + 批次F 实体扩容）：导读卡/科普解读/书导读
 // 向量化入库；每次运行顺带补索引万象库词条与学习库知识点（各推进一批）；余弦 top-3 写
 // knowledge_links（similarity，白名单 paper/wiki/science_article/book）。
@@ -32,7 +33,7 @@ async function backfillWikiIndex(): Promise<void> {
   if (rows.length === 0) return
   const vecs = await embedTexts(rows.map((r) => `${r.term}：${r.summary}`))
   rows.forEach((r, i) => storeEmbedding('wiki', r.id, vecs[i]))
-  console.info(`[agent:embed] 万象库词条补索引 ${rows.length} 条`)
+  logInfo('agent', `[agent:embed] 万象库词条补索引 ${rows.length} 条`)
 }
 
 /** 学习库知识点补索引（批次F：level=2 未删，title：summary 输入，同批量口径） */
@@ -45,7 +46,7 @@ async function backfillLearnNodes(): Promise<void> {
   if (rows.length === 0) return
   const vecs = await embedTexts(rows.map((r) => `${r.title}：${r.summary}`))
   rows.forEach((r, i) => storeEmbedding('learn_node', r.id, vecs[i]))
-  console.info(`[agent:embed] 学习库知识点补索引 ${rows.length} 条`)
+  logInfo('agent', `[agent:embed] 学习库知识点补索引 ${rows.length} 条`)
 }
 
 /** 两个补索引各推进一批；返回 false = Embedding 不可达（调用方本轮直接放弃） */
@@ -54,19 +55,19 @@ async function runBackfills(): Promise<boolean> {
     await backfillWikiIndex()
   } catch (e) {
     if (e instanceof EmbedUnavailableError) {
-      console.warn('[agent:embed] Ollama 不可达，本轮跳过（含补索引）')
+      logWarn('agent', '[agent:embed] Ollama 不可达，本轮跳过（含补索引）')
       return false
     }
-    console.warn(`[agent:embed] 词条补索引失败：${(e as Error).message}`)
+    logWarn('agent', `[agent:embed] 词条补索引失败：${(e as Error).message}`)
   }
   try {
     await backfillLearnNodes()
   } catch (e) {
     if (e instanceof EmbedUnavailableError) {
-      console.warn('[agent:embed] Ollama 不可达，本轮跳过（含补索引）')
+      logWarn('agent', '[agent:embed] Ollama 不可达，本轮跳过（含补索引）')
       return false
     }
-    console.warn(`[agent:embed] 知识点补索引失败：${(e as Error).message}`)
+    logWarn('agent', `[agent:embed] 知识点补索引失败：${(e as Error).message}`)
   }
   return true
 }
@@ -110,7 +111,7 @@ function readMdSlice(relPath: string | null | undefined, max: number): string {
 async function embedIndexRunner(paperId: number, ctx: TaskContext): Promise<void> {
   const cfg = getEmbeddingConfig()
   if (!cfg.enabled) {
-    console.info('[agent:embed] 语义检索未启用，跳过索引')
+    logInfo('agent', '[agent:embed] 语义检索未启用，跳过索引')
     return
   }
   if (!(await runBackfills())) return
@@ -123,14 +124,14 @@ async function embedIndexRunner(paperId: number, ctx: TaskContext): Promise<void
   const [vec] = await embedTexts([`${paper.title}。${input}`])
   storeEmbedding('paper', paperId, vec)
   const n = linkRelated('paper', paperId, vec)
-  console.info(`[agent:embed] 论文 #${paperId} 索引完成，相关推荐 ${n} 条`)
+  logInfo('agent', `[agent:embed] 论文 #${paperId} 索引完成，相关推荐 ${n} 条`)
 }
 
 /** 科普文章索引（批次F）：标题 + 轻加工/解读产物节选（translation||light 优先） */
 async function embedScienceRunner(articleId: number, ctx: TaskContext): Promise<void> {
   const cfg = getEmbeddingConfig()
   if (!cfg.enabled) {
-    console.info('[agent:embed] 语义检索未启用，跳过索引')
+    logInfo('agent', '[agent:embed] 语义检索未启用，跳过索引')
     return
   }
   if (!(await runBackfills())) return
@@ -146,14 +147,14 @@ async function embedScienceRunner(articleId: number, ctx: TaskContext): Promise<
   const [vec] = await embedTexts([`${article.title}。${input}`])
   storeEmbedding('science_article', articleId, vec)
   const n = linkRelated('science_article', articleId, vec)
-  console.info(`[agent:embed] 科普文章 #${articleId} 索引完成，相关推荐 ${n} 条`)
+  logInfo('agent', `[agent:embed] 科普文章 #${articleId} 索引完成，相关推荐 ${n} 条`)
 }
 
 /** 书籍索引（批次F）：书名 + 作者 + 导读节选 */
 async function embedBookRunner(bookId: number, ctx: TaskContext): Promise<void> {
   const cfg = getEmbeddingConfig()
   if (!cfg.enabled) {
-    console.info('[agent:embed] 语义检索未启用，跳过索引')
+    logInfo('agent', '[agent:embed] 语义检索未启用，跳过索引')
     return
   }
   if (!(await runBackfills())) return
@@ -170,7 +171,7 @@ async function embedBookRunner(bookId: number, ctx: TaskContext): Promise<void> 
   const [vec] = await embedTexts([input])
   storeEmbedding('book', bookId, vec)
   const n = linkRelated('book', bookId, vec)
-  console.info(`[agent:embed] 书籍 #${bookId} 索引完成，相关推荐 ${n} 条`)
+  logInfo('agent', `[agent:embed] 书籍 #${bookId} 索引完成，相关推荐 ${n} 条`)
 }
 
 registerTask({ type: 'embed_index', priority: 20, singleton: true, maxRetries: 1 }, (ctx) =>

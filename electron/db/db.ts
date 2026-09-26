@@ -1653,6 +1653,21 @@ function migrate(): void {
     ).run()
     d.exec('PRAGMA user_version = 63')
   }
+
+  if (version < 64) {
+    // v64：右栏日志库（2026-09-27-日志库-design.md §数据层）——主进程统一日志表：
+    // 7 天留存（scheduler.ts 启动+零点调 cleanupOldLogs）、单日 2000 条兜底（logger.ts 入库时裁）。
+    d.exec(`CREATE TABLE app_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      level TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      message TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX idx_app_logs_ts ON app_logs(ts)')
+    d.exec('CREATE INDEX idx_app_logs_scope ON app_logs(scope)')
+    d.exec('PRAGMA user_version = 64')
+  }
 }
 
 // ---------- 通用工具 ----------

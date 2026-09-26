@@ -2,6 +2,7 @@
 // 订阅与拉源管线（iTunes 搜索 + RSS 直链）+ 文字稿转写队列（RSS 自带优先 / ASR 兜底，串行后台）
 // + AI 导读卡（jobId 取消接线）。定位「读文字稿」：本服务零音频播放。
 // 手法同源借鉴 feed.ts（XML 解析/网络层/错误映射，不强行抽公共）、reasoningStock（推送渐进刷新）。
+import { logInfo, logWarn, logError } from './logger'
 import { app, net, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -641,14 +642,14 @@ async function polishTranscript(text: string, signal?: AbortSignal): Promise<str
           signal
         })
         const trimmed = res.content.trim()
-        console.info(
+        logInfo('podcast', 
           `[podcast] 排版 ${i + 1}/${chunks.length}（原 ${chunk.length} 字 → 出 ${trimmed.length} 字）`
         )
         return trimmed || chunk
       } catch (e) {
         // 取消原样上抛中止整集；其余单块失败回退原块（已完成的块成果不丢）
         if (signal?.aborted || String((e as Error).message) === '已取消') throw e
-        console.warn(`[podcast] 排版块 ${i + 1} 失败，回退原文：`, (e as Error).message)
+        logWarn('podcast', `[podcast] 排版块 ${i + 1} 失败，回退原文：`, (e as Error).message)
         return chunk
       }
     })
@@ -695,7 +696,7 @@ async function pumpTranscribeQueue(): Promise<void> {
         await processTranscribe(id)
       } catch (e) {
         // processTranscribe 内部已置 failed，这里只记日志防队列中断
-        console.warn(`[podcast] 单集 ${id} 转写失败：`, (e as Error).message)
+        logWarn('podcast', `[podcast] 单集 ${id} 转写失败：`, (e as Error).message)
       }
     }
   } finally {
@@ -717,7 +718,7 @@ export function resumePodcastTranscribes(): void {
     setTranscribeState(r.id, 'queued')
     transcribeQueue.push(r.id)
   }
-  console.info(`[podcast] 重启恢复转写队列 ${rows.length} 集`)
+  logInfo('podcast', `[podcast] 重启恢复转写队列 ${rows.length} 集`)
   void pumpTranscribeQueue()
 }
 
@@ -782,7 +783,7 @@ async function processTranscribe(id: number): Promise<void> {
         finalText = await polishTranscript(out, cancelAc.signal)
       } catch (pe) {
         // 排版失败或用户取消：保留原始转写直接完稿（cancel 时 ASR 已花钱，不回退 none）
-        console.warn(`[podcast] 单集 ${id} 排版未完成，保留原始转写：`, (pe as Error).message)
+        logWarn('podcast', `[podcast] 单集 ${id} 排版未完成，保留原始转写：`, (pe as Error).message)
       }
       d.prepare("UPDATE podcast_episodes SET transcript_text = ?, transcript_state = 'done' WHERE id = ?").run(
         finalText,
@@ -931,12 +932,12 @@ async function mapPool<T, R>(
  *  中段切片必须自含可解码内容——此前 mp3 式乱切 m4a 产出无效容器碎片，服务端解码 500 */
 async function transcribeChunked(buf: Buffer, cfg: AsrConfig, cancel?: AbortSignal): Promise<string> {
   const plan = sliceAudioForAsr(buf)
-  console.info(
+  logInfo('podcast', 
     `[podcast] 分片转写：${plan.chunks.length} 片（.${plan.ext}，共 ${(buf.length / 1024 / 1024).toFixed(1)}MB）`
   )
   const parts = await mapPool(plan.chunks, ASR_CHUNK_CONCURRENCY, (chunk, i) =>
     transcribeBuffer(chunk, cfg, cancel, plan.mime, plan.ext).then((t) => {
-      console.info(`[podcast] 分片 #${i + 1} 转写完成`)
+      logInfo('podcast', `[podcast] 分片 #${i + 1} 转写完成`)
       return t.trim()
     })
   )

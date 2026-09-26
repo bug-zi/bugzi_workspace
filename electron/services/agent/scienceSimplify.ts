@@ -1,3 +1,4 @@
+import { logWarn, logInfo } from '../logger'
 // 存量科普数据一次性繁→简（260927：正式文章统一简体呈现）。
 // 覆盖：解读产物 md（sa-*.md）、转正文章（title/summary/tags/glossary/concepts）、
 // 发现箱候选（source_type='article'）、划词高光。settings 旗标守卫只跑一次；bootstrap ready 后调用。
@@ -57,7 +58,7 @@ export function ensureScienceSimplified(): void {
     migrateScienceT2s(d)
     d.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(FLAG_KEY, nowIso())
   } catch (e) {
-    console.warn(`[agent:science] 存量科普繁转简失败（下次启动重试）：${(e as Error).message}`)
+    logWarn('agent', `[agent:science] 存量科普繁转简失败（下次启动重试）：${(e as Error).message}`)
   }
 }
 
@@ -76,7 +77,7 @@ function migrateScienceT2s(d: DatabaseSync): void {
       }
     }
   } catch (e) {
-    console.warn(`[agent:science] 存量解读产物繁转简失败：${(e as Error).message}`)
+    logWarn('agent', `[agent:science] 存量解读产物繁转简失败：${(e as Error).message}`)
   }
 
   const articles = d
@@ -131,7 +132,7 @@ function migrateScienceT2s(d: DatabaseSync): void {
     }
   }
 
-  console.info(
+  logInfo('agent', 
     `[agent:science] 存量科普繁转简完成：解读 md ×${mdCount}、转正文章 ×${articleCount}、发现箱 ×${discoverCount}、高光 ×${highlightCount}`
   )
 }

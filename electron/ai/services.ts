@@ -1,4 +1,5 @@
 // AI 业务服务（主进程）：格言生成、知识卡片生成、AI 边栏对话、辩真验证
+import { logInfo, logWarn, logError } from '../services/logger'
 import { getDb, nowIso, normalizeText, isDupMotto } from '../db/db'
 import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
@@ -1940,7 +1941,7 @@ export interface QaAnswerResult {
 export async function runQaAnswer(question: string, signal?: AbortSignal): Promise<QaAnswerResult> {
   // 动态 import 避免循环依赖（同 runVerification）
   const { findSearchTool } = await import('./mcp')
-  const found = await findSearchTool((msg) => console.info(`[qa] ${msg}`), signal)
+  const found = await findSearchTool((msg) => logInfo('llm', `[qa] ${msg}`), signal)
   if (!found) throw new Error('未找到可用的搜索工具，请检查 MCP 服务器是否提供 search 类工具')
   const { mcp, tool } = found
 
@@ -1961,7 +1962,7 @@ export async function runQaAnswer(question: string, signal?: AbortSignal): Promi
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 3)
-  console.info(`[qa] 检索关键词：${keywords.join('｜')}`)
+  logInfo('llm', `[qa] 检索关键词：${keywords.join('｜')}`)
 
   // 2) 逐组检索
   const searchResults: string[] = []
@@ -1970,15 +1971,15 @@ export async function runQaAnswer(question: string, signal?: AbortSignal): Promi
     try {
       const resultText = await mcp.callTool(tool, { query: kw })
       searchResults.push(`【关键词：${kw}】\n${resultText}`)
-      console.info(`[qa] 检索完成（${kw}，${resultText.length} 字）`)
+      logInfo('llm', `[qa] 检索完成（${kw}，${resultText.length} 字）`)
     } catch (e) {
-      console.warn(`[qa] 检索失败（${kw}）：`, (e as Error).message)
+      logWarn('llm', `[qa] 检索失败（${kw}）：`, (e as Error).message)
     }
   }
   if (searchResults.length === 0) throw new Error('全部检索失败，无法回答')
 
   // 3) LLM 综合回答
-  console.info('[qa] 正在综合回答…')
+  logInfo('llm', '[qa] 正在综合回答…')
   const answerRes = await chatCompletion({
     messages: [
       {
@@ -2009,7 +2010,7 @@ export async function runQaAnswer(question: string, signal?: AbortSignal): Promi
       .map((k) => `- ${k}`)
       .join('\n')}\n`
   )
-  console.info(`[qa] 回答完成，记录 #${id}`)
+  logInfo('llm', `[qa] 回答完成，记录 #${id}`)
   return { recordId: id }
 }
 
@@ -2598,7 +2599,7 @@ ${rows.map((r) => `# ${r.id}《${r.title}》\n汤底：${r.bottom}`).join('\n\n'
       }
     }
   } catch (e) {
-    console.warn('[backfillTrickNotes] 存量汤诡计摘要回填失败，下次启动再试：', e)
+    logWarn('llm', '[backfillTrickNotes] 存量汤诡计摘要回填失败，下次启动再试：', e)
   }
 }
 

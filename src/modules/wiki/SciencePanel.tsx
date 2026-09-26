@@ -1,34 +1,12 @@
-// 科普页签（超级工作台 2.0 批次D spec §6）：科普文章列表 + 解读阅读视图（MdDialog 只读 +
-// 划词高光/问AI + footer 产物切换/原文出处/关联词条）+ 跑一轮科普海选卡。
+// 科普页签（超级工作台 2.0 批次D spec §6）：跑一轮科普海选卡 + 发现箱/正式文章双子页签 + 领域筛选行；
+// 正式文章行点击进入 ScienceReader 主栏阅读视图（260927 长文阅读视图化，详情弹窗移除）。
 // 词条跳转/建词条经 WikiModule 注入回调（onOpenEntry / onCreateEntry），保持生成链路单点。
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import ConfirmDialog from '../../components/ConfirmDialog'
-import MdDialog from '../../components/MdDialog'
-import KnowledgeLinksDialog, { type RelatedLink } from '../../components/KnowledgeLinksDialog'
 import { useToast } from '../../components/Toast'
-import { openRelated, relatedIcon } from '../../services/relatedNav'
-import type {
-  AgentDomainRow,
-  AgentStatusSnapshot,
-  DiscoverItemRow,
-  InterpretationRow,
-  ScienceArticleRow,
-  ScienceHighlightRow,
-  WikiSection
-} from '../../renderer/api'
+import ScienceReader from './ScienceReader'
+import type { AgentDomainRow, AgentStatusSnapshot, DiscoverItemRow, ScienceArticleRow } from '../../renderer/api'
 import './science.css'
-
-interface ScienceDetail {
-  article: ScienceArticleRow
-  interpretations: InterpretationRow[]
-  highlights: ScienceHighlightRow[]
-  related: RelatedLink[]
-}
-
-/** 解读版产物（按语言自动分流：en=translation 全文解读 / zh=light 轻加工） */
-function autoKindOf(article: ScienceArticleRow): 'translation' | 'light' {
-  return article.language === 'en' ? 'translation' : 'light'
-}
 
 export interface SciencePanelProps {
   /** 划词问 AI（模块默认频道） */
@@ -39,7 +17,7 @@ export interface SciencePanelProps {
   onOpenEntry: (entryId: number) => void
   /** 建词条（走万象手动生成链路；成功返回 entryId，冲突返回 null） */
   onCreateEntry: (term: string, sectionId: number | null) => Promise<number | null>
-  /** 「出自科普文章」回链跳转入口：置值时打开该文详情，消费后回调复位 */
+  /** 「出自科普文章」回链跳转入口：置值时打开该文阅读视图，消费后回调复位 */
   openArticleId: number | null
   onOpenArticleConsumed: () => void
 }
@@ -55,25 +33,11 @@ export default function SciencePanel(props: SciencePanelProps) {
   const [domainFilter, setDomainFilter] = useState<'all' | number | 'none'>('all')
   const [collectDomain, setCollectDomain] = useState<number | null>(null)
   const [collecting, setCollecting] = useState(false)
-  const [sections, setSections] = useState<WikiSection[]>([])
-  const [detail, setDetail] = useState<ScienceDetail | null>(null)
-  const [mdVersion, setMdVersion] = useState(0)
-  /** 详情阅读视图：解读版 / 精讲 / 原文（260927：原文全文 App 内可读 + 生成中可看半成品） */
-  const [view, setView] = useState<'auto' | 'lecture' | 'source'>('auto')
-  const [sourceMd, setSourceMd] = useState<string | null>(null)
-  const [runningTasks, setRunningTasks] = useState<{ type: string; refId: number | null; progress: string | null }[]>([])
-  const [delTarget, setDelTarget] = useState<ScienceArticleRow | null>(null)
-  const [forceKind, setForceKind] = useState<'translate' | 'light' | 'lecture' | null>(null)
-  const [createTarget, setCreateTarget] = useState<string | null>(null)
-  const [createSection, setCreateSection] = useState<number | null>(null)
-  const [creating, setCreating] = useState(false)
-  // 关联知识管理弹窗（批次F）
-  const [linksOpen, setLinksOpen] = useState(false)
   // 子页签（260923 反馈：发现箱/正式文章分页签，同信息源文献页签口径）
   const [subTab, setSubTab] = useState<'discover' | 'articles'>('discover')
-  // 阅读视图页脚折叠（260923 反馈：关联词条/相关内容 chips 过多挤占正文，默认收起）
-  const [assocOpen, setAssocOpen] = useState(false)
-  const detailIdRef = useRef<number | null>(null)
+  // 主栏阅读视图（260927 长文阅读视图化）：阅读对象 articleId；null=列表态
+  const [readingId, setReadingId] = useState<number | null>(null)
+  const [delTarget, setDelTarget] = useState<ScienceArticleRow | null>(null)
 
   const loadArticles = useCallback((): void => {
     void window.api.science.list().then(setArticles)
@@ -98,66 +62,52 @@ export default function SciencePanel(props: SciencePanelProps) {
     loadArticles()
     loadCandidates()
     loadDomains()
-    void window.api.wiki.sections().then(setSections)
   }, [loadArticles, loadCandidates, loadDomains])
 
-  useEffect(() => {
-    detailIdRef.current = detail?.article.id ?? null
-  }, [detail])
-
-  // 换文章时页脚回到收起态（阅读优先）
-  useEffect(() => {
-    setAssocOpen(false)
-  }, [detail?.article.id])
-
-  const refreshDetail = useCallback((): void => {
-    const id = detailIdRef.current
-    if (id == null) return
-    void window.api.science
-      .detail(id)
-      .then((d) => {
-        setDetail(d)
-        setMdVersion((v) => v + 1)
-      })
-      .catch(() => {})
-  }, [])
-
-  // 实时刷新：海选完成 → 列表；解读产物完成/失败 → 列表 + 当前详情
+  // 实时刷新：海选完成 → 列表（阅读视图内的详情刷新在 ScienceReader）
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
-      setRunningTasks(s.runningTasks ?? [])
       const ev = s.lastEvent
       if (!ev || ev.status === 'enqueued') return
       if (ev.type === 'collect_science') {
         loadArticles()
         loadCandidates()
         toast(ev.status === 'done' ? '科普海选完成，发现箱已更新' : '科普海选失败，详见控制台 [agent] 日志')
-      } else if (ev.type === 'science_fetch') {
+      } else if (
+        ev.type === 'science_fetch' ||
+        ev.type === 'science_translate' ||
+        ev.type === 'science_light' ||
+        ev.type === 'science_lecture'
+      ) {
         loadArticles()
-        refreshDetail()
-      } else if (ev.type === 'science_translate' || ev.type === 'science_light' || ev.type === 'science_lecture') {
-        loadArticles()
-        refreshDetail()
         if (ev.status === 'failed') toast('解读任务失败，详见控制台 [agent] 日志')
       }
     })
     return off
-  }, [loadArticles, loadCandidates, refreshDetail, toast])
+  }, [loadArticles, loadCandidates, toast])
 
-  // 「出自科普文章」回链跳转入口
+  // 「出自科普文章」回链跳转入口 → 直达阅读视图
   useEffect(() => {
     if (props.openArticleId == null) return
     const id = props.openArticleId
     props.onOpenArticleConsumed()
-    void window.api.science
-      .detail(id)
-      .then((d) => {
-        setView('auto')
-        setDetail(d)
-        setMdVersion((v) => v + 1)
-      })
-      .catch((e) => toast(`打开文章失败：${(e as Error).message}`))
+    setReadingId(id)
   }, [props.openArticleId])
+
+  // ---------- 领域筛选（260927：NULL 或不在现存领域集合的条目一律归「未分类」） ----------
+
+  const isUncategorized = (id: number | null): boolean => id == null || !domainsAll.some((d) => d.id === id)
+  const matchDomain = (id: number | null): boolean => {
+    if (domainFilter === 'all') return true
+    if (domainFilter === 'none') return isUncategorized(id)
+    return id === domainFilter
+  }
+  const candidatesFiltered = candidates.filter((it) => matchDomain(it.domain_id))
+  const articlesFiltered = articles.filter((a) => matchDomain(a.domain_id))
+  // tab 计数口径：当前子页签筛选前列表；发现箱/正式文章共用同一筛选状态
+  const scopeList: { domain_id: number | null }[] = subTab === 'discover' ? candidates : articles
+  const domainCount = (id: number): number => scopeList.filter((it) => it.domain_id === id).length
+  const uncategorizedCount = scopeList.filter((it) => isUncategorized(it.domain_id)).length
 
   const runCollect = async (): Promise<void> => {
     if (collectDomain == null) {
@@ -173,16 +123,6 @@ export default function SciencePanel(props: SciencePanelProps) {
     } finally {
       setCollecting(false)
     }
-  }
-
-  const removeArticle = async (): Promise<void> => {
-    const t = delTarget
-    setDelTarget(null)
-    if (!t) return
-    await window.api.science.delete(t.id)
-    toast('科普文章已彻底删除（含解读产物与高光）')
-    if (detail?.article.id === t.id) setDetail(null)
-    loadArticles()
   }
 
   // ---------- 发现箱候选（接受 / 拒绝 / 删除） ----------
@@ -212,327 +152,21 @@ export default function SciencePanel(props: SciencePanelProps) {
     loadCandidates()
   }
 
-  // ---------- 详情与产物 ----------
-
-  const interpOf = (kind: 'translation' | 'light' | 'lecture'): InterpretationRow | undefined =>
-    detail?.interpretations.find((i) => i.kind === kind && i.status === 'done')
-
-  const busyTaskOf = (taskType: string): { progress: string | null } | null =>
-    detail ? (runningTasks.find((t) => t.type === taskType && t.refId === detail.article.id) ?? null) : null
-  const autoKind = detail ? autoKindOf(detail.article) : 'light'
-  const autoRow = detail ? interpOf(autoKind) : undefined
-  const lectureRow = detail ? interpOf('lecture') : undefined
-  const autoBusy = busyTaskOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
-  const lectureBusy = busyTaskOf('science_lecture')
-  const busyHere = !!autoBusy || !!lectureBusy
-  const currentRow = view === 'source' ? undefined : view === 'lecture' ? lectureRow : autoRow
-
-  // 生成中实时围观：done 台账未落也按约定路径读半成品 md（产物逐部分落盘，读到的永远是已完成部分）
-  const autoPath =
-    detail
-      ? autoRow?.md_path ??
-        (autoBusy ? `md/interpretations/sa-${detail.article.id}-${autoKind === 'translation' ? 'translate' : 'light'}.md` : undefined)
-      : undefined
-  const lecturePath = detail
-    ? lectureRow?.md_path ?? (lectureBusy ? `md/interpretations/sa-${detail.article.id}-lecture.md` : undefined)
-    : undefined
-
-  // 生成中每 5s 刷新详情与 md（逐部分落盘实时可见；任务终态事件本身也会触发即时刷新）
-  useEffect(() => {
-    if (!busyHere) return
-    const t = setInterval(() => refreshDetail(), 5000)
-    return () => clearInterval(t)
-  }, [busyHere, refreshDetail])
-
-  // 原文视图：读全文缓存转纯文本 md（只读，无高光/内链）
-  useEffect(() => {
-    if (view !== 'source' || !detail) return
-    let cancelled = false
-    void window.api.science.fulltext(detail.article.id).then((raw) => {
-      if (cancelled) return
-      setSourceMd(
-        raw
-          ? `# 原文：${detail.article.title}\n\n${raw
-              .split(/\n+/)
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .join('\n\n')}`
-          : '（原文缓存缺失，可回到解读视图「重试抓取」后再试）'
-      )
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [view, detail?.article.id])
-
-  /** 生成/重生成；done 且未 force 先弹确认 */
-  const generate = (kind: 'translate' | 'light' | 'lecture', force = false): void => {
-    if (!detail) return
-    const dbKind = kind === 'translate' ? 'translation' : kind === 'light' ? 'light' : 'lecture'
-    const existing = detail.interpretations.find((i) => i.kind === dbKind && i.status === 'done')
-    if (existing && !force) {
-      setForceKind(kind)
-      return
-    }
-    void window.api.science
-      .interpret(detail.article.id, kind, force)
-      .then(() => toast('任务已入队，逐部分生成中'))
-      .catch((e: unknown) => {
-        const msg = (e as Error).message
-        if (msg.includes('INTERPRET_EXISTS')) {
-          setForceKind(kind)
-          return
-        }
-        toast(`触发失败：${msg}`)
-      })
+  // 阅读视图（260927 长文阅读视图化）：页签容器内整页切换（万象库头部/页签仍可见，可直达百科）
+  if (readingId !== null) {
+    return (
+      <ScienceReader
+        key={readingId}
+        articleId={readingId}
+        onBack={() => setReadingId(null)}
+        onChanged={loadArticles}
+        onOpenAi={props.onOpenAi}
+        bumpAi={props.bumpAi}
+        onOpenEntry={props.onOpenEntry}
+        onCreateEntry={props.onCreateEntry}
+      />
+    )
   }
-
-  // ---------- 划词高光 / 问 AI ----------
-
-  const onHighlight = async (text: string): Promise<void> => {
-    if (!detail || !currentRow?.md_path) return
-    const md = await window.api.md.read(currentRow.md_path)
-    const wrapped = `==${text}==`
-    if (!md.includes(wrapped) && md.includes(text)) {
-      await window.api.md.write(currentRow.md_path, md.replace(text, wrapped))
-    }
-    await window.api.science.highlightAdd(detail.article.id, text)
-    refreshDetail()
-    toast('已加入高光')
-  }
-
-  const onUnhighlight = async (text: string): Promise<void> => {
-    if (!detail || !currentRow?.md_path) return
-    const md = await window.api.md.read(currentRow.md_path)
-    const wrapped = `==${text}==`
-    if (md.includes(wrapped)) {
-      await window.api.md.write(currentRow.md_path, md.replaceAll(wrapped, text))
-    }
-    await window.api.science.highlightRemove(detail.article.id, text)
-    refreshDetail()
-    toast('已取消高光')
-  }
-
-  const onAskAi = (text: string): void => {
-    props.onOpenAi(`关于科普文章《${detail?.article.title ?? ''}》：「${text}」\n\n请帮我解释。`)
-  }
-
-  // ---------- wiki:// 概念链接 ----------
-
-  const onWikiLink = (term: string): void => {
-    if (!detail) return
-    const c = detail.article.concepts.find((x) => x.term === term)
-    if (c?.entry_id != null) {
-      props.onOpenEntry(c.entry_id)
-      return
-    }
-    // 未命中词条 → 建词条流（选板块后走万象生成链路）
-    setCreateSection(sections[0]?.id ?? null)
-    setCreateTarget(term)
-  }
-
-  const confirmCreate = async (): Promise<void> => {
-    if (!detail || !createTarget || creating) return
-    setCreating(true)
-    try {
-      const entryId = await props.onCreateEntry(createTarget, createSection)
-      if (entryId != null) {
-        await window.api.science.linkManual(detail.article.id, createTarget, entryId)
-        toast(`词条「${createTarget}」已生成并建立关联`)
-        refreshDetail()
-      }
-    } finally {
-      setCreating(false)
-      setCreateTarget(null)
-    }
-  }
-
-  // ---------- 领域筛选（260927：NULL 或不在现存领域集合的条目一律归「未分类」） ----------
-
-  const isUncategorized = (id: number | null): boolean => id == null || !domainsAll.some((d) => d.id === id)
-  const matchDomain = (id: number | null): boolean => {
-    if (domainFilter === 'all') return true
-    if (domainFilter === 'none') return isUncategorized(id)
-    return id === domainFilter
-  }
-  const candidatesFiltered = candidates.filter((it) => matchDomain(it.domain_id))
-  const articlesFiltered = articles.filter((a) => matchDomain(a.domain_id))
-  // tab 计数口径：当前子页签筛选前列表；发现箱/正式文章共用同一筛选状态
-  const scopeList: { domain_id: number | null }[] = subTab === 'discover' ? candidates : articles
-  const domainCount = (id: number): number => scopeList.filter((it) => it.domain_id === id).length
-  const uncategorizedCount = scopeList.filter((it) => isUncategorized(it.domain_id)).length
-
-  // ---------- 阅读视图 footer ----------
-
-  const footer = detail ? (
-    <div className="sci-footer">
-      <div className="sci-footer-row">
-        <button
-          className="btn"
-          title={autoBusy ? '逐部分生成中；点击查看已生成的部分（每 5 秒自动刷新）' : undefined}
-          onClick={() => {
-            if (!detail) return
-            if (autoBusy || autoRow?.md_path) {
-              setView('auto')
-              setMdVersion((v) => v + 1)
-            } else {
-              generate(autoKind === 'translation' ? 'translate' : 'light')
-            }
-          }}
-        >
-          <span className={`material-symbols-outlined${autoBusy ? ' spin' : ''}`}>
-            {autoBusy ? 'progress_activity' : autoRow ? 'auto_stories' : 'auto_awesome'}
-          </span>
-          {autoBusy
-            ? `解读生成中${autoBusy.progress ? ` · ${autoBusy.progress}` : ''}`
-            : autoRow
-              ? '查看解读版'
-              : '生成解读版'}
-        </button>
-        <button
-          className="btn"
-          title={lectureBusy ? '逐部分生成中；点击查看已生成的部分（每 5 秒自动刷新）' : undefined}
-          onClick={() => {
-            if (!detail) return
-            if (lectureBusy || lectureRow?.md_path) {
-              setView('lecture')
-              setMdVersion((v) => v + 1)
-            } else {
-              generate('lecture')
-            }
-          }}
-        >
-          <span className={`material-symbols-outlined${lectureBusy ? ' spin' : ''}`}>
-            {lectureBusy ? 'progress_activity' : 'school'}
-          </span>
-          {lectureBusy
-            ? `精讲生成中${lectureBusy.progress ? ` · ${lectureBusy.progress}` : ''}`
-            : lectureRow
-              ? '查看精讲'
-              : '生成精讲'}
-        </button>
-        <button
-          className="btn"
-          onClick={() => {
-            if (!detail) return
-            void window.api.agent.askLiterature('science', detail.article.id)
-            props.bumpAi()
-          }}
-          title="注入该文章解读/全文上下文，在右栏「文献·追问」场景继续提问"
-        >
-          <span className="material-symbols-outlined">forum</span>
-          追问
-        </button>
-        <span style={{ flex: 1 }} />
-        {detail.article.status === 'ready' ? (
-          <>
-            <button
-              className="btn"
-              onClick={() => setView((v) => (v === 'source' ? 'auto' : 'source'))}
-              title="在 App 内阅读原文全文（再点一次回到解读）"
-            >
-              <span className="material-symbols-outlined">{view === 'source' ? 'menu_book' : 'article'}</span>
-              {view === 'source' ? '回解读' : '原文'}
-            </button>
-            <button
-              className="btn"
-              onClick={() => detail && void window.api.shell.openExternal(detail.article.url)}
-              title={`网页原链：${detail.article.url}`}
-            >
-              <span className="material-symbols-outlined">open_in_new</span>
-              网页原链
-            </button>
-          </>
-        ) : (
-          <button
-            className="btn"
-            onClick={() => {
-              if (!detail) return
-              void window.api.science
-                .retryFetch(detail.article.id)
-                .then(() => toast('重试抓取中，完成后自动解读'))
-                .catch((e) => toast(`重试失败：${(e as Error).message}`))
-            }}
-            title="重新抓取全文；成功后自动入队解读"
-          >
-            <span className="material-symbols-outlined">cloud_download</span>
-            重试抓取
-          </button>
-        )}
-        {detail.article.concepts.length + detail.related.length > 0 && (
-          <button
-            className="btn"
-            onClick={() => setAssocOpen((v) => !v)}
-            title="展开/收起关联词条与相关内容（阅读时可收起）"
-          >
-            <span className="material-symbols-outlined">{assocOpen ? 'expand_less' : 'expand_more'}</span>
-            {assocOpen
-              ? '收起关联'
-              : `关联与相关（${detail.article.concepts.length + detail.related.length}）`}
-          </button>
-        )}
-        <button className="btn" onClick={() => detail && setLinksOpen(true)} title="管理本文的手动/语义关联">
-          <span className="material-symbols-outlined">hub</span>
-          关联知识
-        </button>
-        <button className="btn btn-danger" onClick={() => detail && setDelTarget(detail.article)}>
-          <span className="material-symbols-outlined">delete</span>
-          删除
-        </button>
-      </div>
-      {assocOpen && detail.related.length > 0 && (
-        <div className="sci-footer-row sci-concepts">
-          <span className="sci-concepts-label">相关内容</span>
-          {detail.related.map((r) => (
-            <button
-              key={r.link_id}
-              className="sci-chip"
-              title={r.origin === 'manual' ? '手动关联，点击打开' : `语义相似 ${Math.round(r.score * 100)}%，点击打开`}
-              onClick={() => {
-                setDetail(null)
-                openRelated(r)
-              }}
-            >
-              <span className="material-symbols-outlined sci-chip-icon">{relatedIcon(r.peer_type)}</span>
-              {r.title}
-            </button>
-          ))}
-        </div>
-      )}
-      {assocOpen && detail.article.concepts.length > 0 && (
-        <div className="sci-footer-row sci-concepts">
-          <span className="sci-concepts-label">关联词条</span>
-          {detail.article.concepts.map((c) => (
-            <button
-              key={c.term}
-              className={`sci-chip${c.entry_id == null ? ' missing' : ''}`}
-              title={c.entry_id == null ? '暂无词条，点击可创建' : '打开词条'}
-              onClick={() => {
-                if (c.entry_id != null) props.onOpenEntry(c.entry_id)
-                else {
-                  setCreateSection(sections[0]?.id ?? null)
-                  setCreateTarget(c.term)
-                }
-              }}
-            >
-              {c.term}
-              {c.entry_id == null && <span className="sci-chip-add">＋建</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  ) : null
-
-  const readingContent = view === 'lecture' ? lecturePath : autoPath
-  const langLabel = detail?.article.language === 'en' ? '英文' : '中文'
-  const metaMd = detail
-    ? `# ${detail.article.title}\n\n> ${langLabel}${detail.article.domain_name ? ' · ' + detail.article.domain_name : ''}${detail.article.date ? ' · ' + detail.article.date : detail.article.year != null ? ' · ' + detail.article.year : ''} · ${detail.article.source}\n\n${detail.article.summary || '（暂无摘要）'}\n\n${
-        detail.article.status === 'meta_only'
-          ? '> ⚠ 全文尚未抓取到：可在下方「重试抓取」，成功后自动开始解读。'
-          : '> 全文已就绪，点击下方「生成解读版」开始解读。'
-      }\n`
-    : ''
 
   return (
     <div className="science-panel">
@@ -651,7 +285,7 @@ export default function SciencePanel(props: SciencePanelProps) {
         </div>
       )}
 
-      {/* 正式文章（转正入库，自动解读） */}
+      {/* 正式文章（转正入库，自动解读）；行点击进阅读视图 */}
       {subTab === 'articles' && (
         <div className="sci-list">
           {articlesFiltered.length === 0 && (
@@ -666,16 +300,8 @@ export default function SciencePanel(props: SciencePanelProps) {
           <div
             className="sci-item"
             key={a.id}
-            onClick={() => {
-              void window.api.science
-                .detail(a.id)
-                .then((d) => {
-                  setView('auto')
-                  setDetail(d)
-                  setMdVersion((v) => v + 1)
-                })
-                .catch((e) => toast(`打开详情失败：${(e as Error).message}`))
-            }}
+            title="点击进入阅读视图"
+            onClick={() => setReadingId(a.id)}
           >
             <div className="row-main">
               <div className="row-title">{a.title}</div>
@@ -701,51 +327,21 @@ export default function SciencePanel(props: SciencePanelProps) {
         </div>
       )}
 
-      {/* 解读/原文阅读视图 */}
-      {detail && (
-        <MdDialog
-          key={`${detail.article.id}-${mdVersion}-${view}`}
-          open
-          title={detail.article.title}
-          titleTag={[
-            langLabel,
-            view === 'source' ? '原文' : currentRow ? undefined : busyHere ? '生成中' : '待解读'
-          ].filter((x): x is string => !!x)}
-          subtitle={`${detail.article.domain_name ?? ''}${detail.article.domain_name ? ' ｜ ' : ''}${detail.article.source}`}
-          filePath={view === 'source' ? undefined : readingContent ?? undefined}
-          content={
-            view === 'source'
-              ? sourceMd ?? '（原文加载中…）'
-              : readingContent
-                ? undefined
-                : metaMd
-          }
-          readOnly
-          selectionActions={
-            currentRow
-              ? {
-                  onHighlight: (t) => void onHighlight(t),
-                  onUnhighlight: (t) => void onUnhighlight(t),
-                  onAskAi
-                }
-              : undefined
-          }
-          onWikiLink={currentRow ? onWikiLink : undefined}
-          footerBar={footer}
-          onClose={() => {
-            setDetail(null)
-            loadArticles()
-          }}
-        />
-      )}
-
-      {/* 删除确认（彻底删：连解读产物/高光/链接/全文缓存） */}
+      {/* 删除确认（列表行入口；阅读视图内删除在 ScienceReader。彻底删：连解读产物/高光/链接/全文缓存） */}
       <ConfirmDialog
         open={delTarget !== null}
         title="删除科普文章"
         danger
         confirmText="彻底删除"
-        onConfirm={() => void removeArticle()}
+        onConfirm={() => {
+          const t = delTarget
+          setDelTarget(null)
+          if (!t) return
+          void window.api.science.delete(t.id).then(() => {
+            toast('科普文章已彻底删除（含解读产物与高光）')
+            loadArticles()
+          })
+        }}
         onCancel={() => setDelTarget(null)}
       >
         确认彻底删除《{delTarget?.title}》？其解读产物、划词高光、关联词条链接与全文缓存将一并删除，不可恢复。
@@ -762,58 +358,6 @@ export default function SciencePanel(props: SciencePanelProps) {
       >
         确认删除「{delDiscover?.title}」？下次海选仍可能重新发现它。
       </ConfirmDialog>
-
-      {/* 关联知识管理（批次F：双向列表 + 手动添加） */}
-      <KnowledgeLinksDialog
-        open={linksOpen && detail != null}
-        srcType="science_article"
-        srcId={detail?.article.id ?? 0}
-        title={detail?.article.title ?? ''}
-        onClose={() => setLinksOpen(false)}
-      />
-
-      {/* 重生成确认 */}
-      <ConfirmDialog
-        open={forceKind !== null}
-        title="重新生成解读"
-        danger
-        confirmText="重新生成"
-        onConfirm={() => forceKind && generate(forceKind, true)}
-        onCancel={() => setForceKind(null)}
-      >
-        已有生成产物，重新生成将覆盖现有内容（逐部分生成会从头重写）。确定继续？
-      </ConfirmDialog>
-
-      {/* 建词条（选板块 → 走万象生成链路） */}
-      {createTarget && (
-        <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setCreateTarget(null)}>
-          <div className="dialog" style={{ width: 400 }}>
-            <div className="dialog-header">创建词条「{createTarget}」</div>
-            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div className="module-sub">万象库暂无该词条，选择板块后由 AI 生成知识卡片（先进待学习区），并自动建立与本文的关联。</div>
-              <select
-                className="field"
-                value={createSection ?? ''}
-                onChange={(e) => setCreateSection(Number(e.target.value))}
-              >
-                {sections.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="dialog-footer">
-              <button className="btn" onClick={() => setCreateTarget(null)}>
-                取消
-              </button>
-              <button className="btn btn-primary" disabled={createSection == null || creating} onClick={() => void confirmCreate()}>
-                {creating ? '生成中…' : '生成并关联'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

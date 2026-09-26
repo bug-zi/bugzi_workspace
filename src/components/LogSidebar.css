@@ -1,0 +1,196 @@
+/* 日志库边栏（260927 新功能开发区）：结构镜像资源管理器，宽度走 --logs-width（280–560px） */
+.log-sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: var(--logs-width);
+  min-width: var(--logs-width);
+  max-width: var(--logs-width);
+  height: 100%;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+}
+
+.logx-resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.logx-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.logx-header > .material-symbols-outlined {
+  font-size: 20px;
+  color: var(--color-primary-deep);
+}
+.logx-title {
+  font-size: 15px;
+}
+.logx-flex {
+  flex: 1;
+}
+.logx-icon-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: inline-flex;
+}
+.logx-icon-btn:hover {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-text);
+}
+.logx-icon-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.logx-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.logx-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+}
+.logx-search .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--color-text-secondary);
+}
+.logx-search input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.logx-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.logx-filter-btn.active {
+  color: var(--color-primary-deep);
+  border-color: var(--color-primary);
+}
+.logx-filter-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+.logx-filter-label {
+  font-size: 12px;
+}
+
+.logx-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+.logx-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 12px 5px 9px;
+  border-left: 3px solid transparent;
+}
+.logx-row + .logx-row {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+}
+.logx-error {
+  border-left-color: var(--color-danger);
+}
+.logx-warn {
+  border-left-color: #a5824d;
+}
+:root[data-theme='dark'] .logx-warn {
+  border-left-color: #b99a5e;
+}
+.logx-time {
+  flex: none;
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+  opacity: 0.85;
+}
+.logx-scope {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.8;
+  padding: 0 7px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary-deep);
+  white-space: nowrap;
+}
+.logx-msg {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text);
+}
+.logx-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.logx-retry {
+  display: block;
+  margin: 10px auto 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 4px 14px;
+}
+.logx-older-hint {
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  padding: 6px 0;
+}
+
+.logx-bottom-btn {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid var(--color-primary);
+  border-radius: 16px;
+  background: var(--color-surface-strong);
+  color: var(--color-primary-deep);
+  cursor: pointer;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  z-index: 4;
+}

@@ -1,3 +1,4 @@
+import { logWarn } from '../../logger'
 // arXiv 渠道（总纲 §4.5：论文优先走结构化 API 而非网页抓取）：Atom API 检索，
 // 返回原始候选元信息；结构化筛选与推荐理由由批次 B 海选 LLM 调用完成。
 import { XMLParser } from 'fast-xml-parser'
@@ -59,7 +60,7 @@ export async function searchArxiv(keywords: string[], signal?: AbortSignal): Pro
       }
     } catch (e) {
       if (signal?.aborted) break
-      console.warn(`[agent:arxiv] 关键词「${kw}」检索失败：${(e as Error).message}`)
+      logWarn('agent', `[agent:arxiv] 关键词「${kw}」检索失败：${(e as Error).message}`)
     }
   }
   return results

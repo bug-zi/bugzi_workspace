@@ -5,6 +5,7 @@ import { SettingsKeys } from '../../src/shared/types'
 import { generateMottos } from '../ai/services'
 import { cleanupExpired } from './recycle'
 import { cleanupOldArticles } from './feed'
+import { cleanupOldLogs, logInfo, logWarn } from './logger'
 import { ensureDailyLearn } from './wikiStock'
 import { ensureLearnStock } from './learnStock'
 import { ensureInterviewDaily } from './interviewBank'
@@ -66,10 +67,10 @@ async function runScheduledMottos(): Promise<void> {
     if (alreadyRanToday(schedule)) return
     await generateMottos()
     setSetting(SettingsKeys.LastMottoRun, new Date().toISOString())
-    console.log(`[scheduler] 定时格言生成完成 ${new Date().toISOString()}`)
+    logInfo('scheduler', `[scheduler] 定时格言生成完成 ${new Date().toISOString()}`)
   } catch (e) {
     // LLM 未配置也静默（定时任务不弹窗）
-    console.warn(`[scheduler] 定时格言生成失败：${(e as Error).message}`)
+    logWarn('scheduler', `[scheduler] 定时格言生成失败：${(e as Error).message}`)
   }
 }
 
@@ -79,11 +80,13 @@ export function scheduleMidnightCleanup(): void {
   midnightTimer = setTimeout(() => {
     try {
       const n = cleanupExpired()
-      if (n > 0) console.log(`[scheduler] 回收站零点清理 ${n} 条`)
+      if (n > 0) logInfo('scheduler', `[scheduler] 回收站零点清理 ${n} 条`)
       const a = cleanupOldArticles()
-      if (a > 0) console.log(`[scheduler] 信息源 30 天已读文章清理 ${a} 条`)
+      if (a > 0) logInfo('scheduler', `[scheduler] 信息源 30 天已读文章清理 ${a} 条`)
+      const l = cleanupOldLogs()
+      if (l > 0) logInfo('scheduler', `[scheduler] 零点清理 7 天外日志 ${l} 条`)
     } catch (e) {
-      console.warn(`[scheduler] 回收站清理失败：${(e as Error).message}`)
+      logWarn('scheduler', `[scheduler] 回收站清理失败：${(e as Error).message}`)
     }
     // 万象库每日待学习批次（260910）：App 跨天常驻时零点也生成（内部幂等 + 静默失败）
     void ensureDailyLearn()
@@ -103,11 +106,13 @@ export function scheduleMidnightCleanup(): void {
 export function startSchedulers(): void {
   try {
     const n = cleanupExpired()
-    if (n > 0) console.log(`[scheduler] 启动清理回收站 ${n} 条`)
+    if (n > 0) logInfo('scheduler', `[scheduler] 启动清理回收站 ${n} 条`)
     const a = cleanupOldArticles()
-    if (a > 0) console.log(`[scheduler] 启动清理信息源 30 天已读文章 ${a} 条`)
+    if (a > 0) logInfo('scheduler', `[scheduler] 启动清理信息源 30 天已读文章 ${a} 条`)
+    const l = cleanupOldLogs()
+    if (l > 0) logInfo('scheduler', `[scheduler] 启动清理 7 天外日志 ${l} 条`)
   } catch (e) {
-    console.warn(`[scheduler] 启动清理失败：${(e as Error).message}`)
+    logWarn('scheduler', `[scheduler] 启动清理失败：${(e as Error).message}`)
   }
   scheduleMottoTask()
   scheduleMidnightCleanup()

@@ -2,6 +2,7 @@
 // v2（260910 推理角效率优化）：chatCompletion 保持唯一咽喉点，调用方透明获得
 // 模型池溢出路由 + llm_usage 记账 + llm:activity 活动广播；
 // 手动诊断路径（测试连接/拉模型列表）不经咽喉点，不路由不记账。
+import { logInfo, logWarn, logError } from '../services/logger'
 import { BrowserWindow, net } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import { getJsonSetting, getSetting } from '../db/settings'
@@ -119,7 +120,7 @@ function recordUsage(row: {
         row.errorBrief
       )
   } catch (e) {
-    console.warn('[llm] usage 记账失败（忽略）：', e)
+    logWarn('llm', '[llm] usage 记账失败（忽略）：', e)
   }
 }
 

@@ -104,6 +104,8 @@ export const SettingsKeys = {
   FilesRootPath: 'explorer_root_path',
   FilesLastFile: 'explorer_last_file',
   FilesWidth: 'explorer_width',
+  // 日志库（260927 新功能开发区）：右栏第五面板宽度
+  LogsWidth: 'logs_width',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode',
   // 内置终端（260912 新功能开发区）：JSON { shell, cwd, height }
@@ -1743,4 +1745,32 @@ export interface DuiyiStats {
   win: number
   loss: number
   draw: number
+}
+
+/** 右栏日志库（260927）：日志级别 */
+export type LogLevel = 'info' | 'warn' | 'error'
+/** 右栏日志库：来源分类（主进程 logger scope，UI 筛选即此） */
+export type LogScope =
+  | 'system'
+  | 'agent'
+  | 'scheduler'
+  | 'stock'
+  | 'llm'
+  | 'podcast'
+  | 'library'
+  | 'whoami'
+/** app_logs 行（log:list / log:appended 载荷） */
+export interface AppLogRow {
+  id: number
+  ts: string
+  level: LogLevel
+  scope: LogScope
+  message: string
+}
+/** log:list 查询参数（均可选；beforeId 不传 = 首页） */
+export interface LogListQuery {
+  scope?: LogScope
+  keyword?: string
+  beforeId?: number
+  limit?: number
 }

@@ -1416,6 +1416,16 @@ export interface Api {
     /** 读图片为 data URL（超 5MB reject） */
     readImage(root: string, filePath: string): Promise<string>
   }
+  logs: {
+    /** 游标分页拉日志（beforeId 不传 = 首页；返回新→旧） */
+    list(q: import('../shared/types').LogListQuery): Promise<import('../shared/types').AppLogRow[]>
+    /** 7 天窗口各来源计数（筛选下拉用） */
+    scopes(): Promise<Record<import('../shared/types').LogScope, number>>
+    /** 清空全部（前端二次确认后调用） */
+    clear(): Promise<number>
+    /** 新日志推送（500ms 合批），返回取消订阅 */
+    onAppended(cb: (rows: import('../shared/types').AppLogRow[]) => void): () => void
+  }
   wenbi: {
     /** 浮生记条目列表（created_at 倒序；零 AI 板块） */
     journalList(): Promise<WenbiJournalRecord[]>
@@ -1972,6 +1982,8 @@ export interface Api {
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
     runInterpret(paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number>
     importPaperPdf(paperId: number): Promise<boolean>
+    /** 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null） */
+    paperFulltext(id: number): Promise<string | null>
     pendingCounts(): Promise<{ discovered: number }>
     /** 彻底删除正式文献（连带解读 md/全文缓存/向量/链接，二次确认由渲染层负责） */
     paperDelete(id: number): Promise<boolean>

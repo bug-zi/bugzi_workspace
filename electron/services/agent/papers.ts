@@ -1,3 +1,4 @@
+import { logInfo, logWarn } from '../logger'
 // 正式文献服务（超级工作台 2.0 批次B spec §2）：发现箱终选转正、全文抓取
 // （arXiv PDF → pdfjs legacy 抽文本 / 网页 → readability 抽正文）、手动传 PDF 兜底。
 // 抓取失败降级 meta_only，主管道不炸（总纲 §5.1 兜底）。
@@ -172,7 +173,7 @@ export function deletePaper(id: number): void {
       /* 无该文件 */
     }
   }
-  console.info(`[agent:papers] 文献 #${id}《${paper.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
+  logInfo('agent', `[agent:papers] 文献 #${id}《${paper.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
 }
 
 /** 全文缓存绝对路径 */
@@ -224,7 +225,7 @@ export async function ensureFulltext(paper: PaperRow): Promise<void> {
   const d = getDb()
   const fail = (reason: string): void => {
     d.prepare("UPDATE papers SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), paper.id)
-    console.warn(`[agent:papers] 《${paper.title}》全文抓取失败（meta_only）：${reason}`)
+    logWarn('agent', `[agent:papers] 《${paper.title}》全文抓取失败（meta_only）：${reason}`)
   }
   try {
     let text = ''
@@ -248,7 +249,7 @@ export async function ensureFulltext(paper: PaperRow): Promise<void> {
       nowIso(),
       paper.id
     )
-    console.info(`[agent:papers] 《${paper.title}》全文就绪（${Math.round(text.length / 1000)}k 字符）`)
+    logInfo('agent', `[agent:papers] 《${paper.title}》全文就绪（${Math.round(text.length / 1000)}k 字符）`)
   } catch (e) {
     fail((e as Error).message)
   }
@@ -266,10 +267,10 @@ export async function importManualPdf(paperId: number, srcAbsPath: string): Prom
     getDb()
       .prepare("UPDATE papers SET status = 'ready', fulltext_path = ?, updated_at = ? WHERE id = ?")
       .run(`papers/${paperId}.txt`, nowIso(), paperId)
-    console.info(`[agent:papers] 《${paper.title}》手动 PDF 导入成功`)
+    logInfo('agent', `[agent:papers] 《${paper.title}》手动 PDF 导入成功`)
     return true
   } catch (e) {
-    console.warn(`[agent:papers] 手动 PDF 抽取失败：${(e as Error).message}`)
+    logWarn('agent', `[agent:papers] 手动 PDF 抽取失败：${(e as Error).message}`)
     throw e
   }
 }

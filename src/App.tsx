@@ -7,6 +7,7 @@ import AiSidebar from './components/AiSidebar'
 import DraftSidebar from './components/DraftSidebar'
 import CanvasSidebar from './components/CanvasSidebar'
 import FileExplorerSidebar from './components/FileExplorerSidebar'
+import LogSidebar from './components/LogSidebar'
 import OverviewModule from './modules/zonglan/OverviewModule'
 import LearnModule from './modules/learn/LearnModule'
 import WikiModule from './modules/wiki/WikiModule'
@@ -119,8 +120,8 @@ function Shell() {
   useEffect(() => {
     moduleRef.current = module
   }, [module])
-  // 右缘四面板互斥展开（260916 资源管理器加入）：'ai'=debugzi | 'draft'=草稿本 | 'files'=资源管理器 | 'canvas'=画布 | null=都收起（右缘细条四图标入口）
-  const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | 'files' | 'canvas' | null>('ai')
+  // 右缘五面板互斥展开（260927 日志库加入）：'ai'=debugzi | 'draft'=草稿本 | 'files'=资源管理器 | 'logs'=日志库 | 'canvas'=画布 | null=都收起（右缘细条五图标入口）
+  const [rightPanel, setRightPanel] = useState<'ai' | 'draft' | 'files' | 'logs' | 'canvas' | null>('ai')
   const [aiPending, setAiPending] = useState<{ text: string; channel: AiChannel; auto: boolean } | null>(null)
   const [aiVersion, setAiVersion] = useState(0)
   const [aiForceOpen, setAiForceOpen] = useState(false)
@@ -163,6 +164,7 @@ function Shell() {
       if (v === 'draft') setRightPanel('draft')
       else if (v === 'canvas') setRightPanel('canvas')
       else if (v === 'files') setRightPanel('files')
+      else if (v === 'logs') setRightPanel('logs')
       else if (v === '') setRightPanel(null)
       else setRightPanel('ai')
     })
@@ -216,7 +218,7 @@ function Shell() {
     void registerCustomFontFaces()
   }, [])
 
-  const switchRightPanel = useCallback((p: 'ai' | 'draft' | 'files' | 'canvas' | null): void => {
+  const switchRightPanel = useCallback((p: 'ai' | 'draft' | 'files' | 'logs' | 'canvas' | null): void => {
     setRightPanel(p)
     void window.api.settings.set(SettingsKeys.RightPanelExpanded, p ?? '')
   }, [])
@@ -459,8 +461,8 @@ function Shell() {
           {module === 'agent' && <AgentCenterPage />}
         </main>
 
-        {/* 右侧边栏（右缘四面板互斥：debugzi 常驻挂载保持生成态，草稿本/资源管理器/画布按需挂载）；
-            主题按钮仅四面板收起时显示于右下角（优化建议区第29轮：右栏展开时隐藏，治展开态通条不美观） */}
+        {/* 右侧边栏（右缘五面板互斥：debugzi 常驻挂载保持生成态，草稿本/资源管理器/日志库/画布按需挂载）；
+            主题按钮仅五面板收起时显示于右下角（优化建议区第29轮：右栏展开时隐藏，治展开态通条不美观） */}
         <div className="right-col">
           <AiSidebar
             collapsed={rightPanel !== 'ai'}
@@ -469,6 +471,7 @@ function Shell() {
             onCollapse={() => switchRightPanel(null)}
             onOpenDraft={() => switchRightPanel('draft')}
             onOpenFiles={() => switchRightPanel('files')}
+            onOpenLogs={() => switchRightPanel('logs')}
             onOpenCanvas={() => switchRightPanel('canvas')}
             currentModule={module}
             pending={aiPending}
@@ -482,6 +485,7 @@ function Shell() {
           {rightPanel === 'files' && (
             <FileExplorerSidebar onCollapse={() => switchRightPanel(null)} />
           )}
+          {rightPanel === 'logs' && <LogSidebar onCollapse={() => switchRightPanel(null)} />}
           {rightPanel === 'canvas' && <CanvasSidebar onCollapse={() => switchRightPanel(null)} />}
           {/* AI 实时活动指示（第31轮反馈修订：自左栏底部迁来右下角主题按钮上方——左栏留给未来新模块；
               同主题按钮规则：四面板任一展开即不渲染，收起态才显示；空闲（无在途调用）也不渲染） */}

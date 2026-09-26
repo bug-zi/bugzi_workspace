@@ -1,6 +1,7 @@
 // 数据存储位置服务（优化建议区 #2）：
 // 默认数据目录为内置 D 盘路径；用户可在个人中心迁移到任意位置，
 // 迁移后在系统默认 userData 位置留 data_home.json 指针，启动时据此定位实际目录。
+import { logInfo, logWarn, logError } from './logger'
 import { app } from 'electron'
 import {
   existsSync,
@@ -52,7 +53,7 @@ export function applyDataDirAtStartup(): void {
     app.setPath('userData', dir)
   } catch (e) {
     // D 盘等不可用 → 回退系统默认，避免完全无法启动
-    console.warn(`[storage] 数据目录不可用（${dir}），回退系统默认：${(e as Error).message}`)
+    logWarn('library', `[storage] 数据目录不可用（${dir}），回退系统默认：${(e as Error).message}`)
   }
 }
 
@@ -133,7 +134,7 @@ export function migrateDataDir(newDir: string): void {
       if (statSync(p).isDirectory()) rmSync(p, { recursive: true, force: true })
       else unlinkSync(p)
     } catch (e) {
-      console.warn(`[storage] 旧目录清理失败 ${p}：${(e as Error).message}`)
+      logWarn('library', `[storage] 旧目录清理失败 ${p}：${(e as Error).message}`)
     }
   }
 }

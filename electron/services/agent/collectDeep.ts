@@ -1,6 +1,8 @@
-// 深读线海选巡检（超级工作台 2.0 批次B spec §1）：领域 → arXiv + MCP 双渠道 →
-// 海选 LLM（jsonMode 元信息+一句话推荐理由，无结果合法）→ url 白名单防编造 +
-// url_hash/embedding 近重复去重 → discover_items。
+import { logInfo, logWarn } from '../logger'
+// 深读线海选巡检（超级工作台 2.0 批次B spec §1）：领域 → 检索词英化（论文检索基本只在
+// 英文文献圈有效，含中文词先经 LLM 转英文研究向检索词）→ arXiv + MCP 双渠道 →
+// 海选 LLM（jsonMode 元信息+一句话推荐理由，无结果合法）→ url 白名单防编造（arXiv 候选
+// ∪ MCP 原文抽取）+ url_hash/embedding 近重复去重 → discover_items。
 import { createHash } from 'node:crypto'
 import { getDb, nowIso } from '../../db/db'
 import { chatCompletion } from '../../ai/llm'
@@ -73,6 +75,22 @@ export function matchesWhitelist(url: string, whitelist: Set<string>): boolean {
   }
 }
 
+/** 从渠道原始文本抽取 url 白名单（防编造：origin+path 归一）；MCP 结果未结构化，只能正则抽原文链接 */
+export function whitelistFromText(text: string): Set<string> {
+  const set = new Set<string>()
+  for (const raw of text.match(/https?:\/\/[^\s"'<>）)\]]+/g) ?? []) {
+    const clean = raw.replace(/[.,;:!?]+$/, '').replace(/\/+$/, '')
+    set.add(clean)
+    try {
+      const u = new URL(clean)
+      set.add(u.origin + u.pathname.replace(/\/+$/, ''))
+    } catch {
+      /* 非法 url 跳过 */
+    }
+  }
+  return set
+}
+
 /** 候选 url（origin+path 归一键）→ 原始元信息：日期/渠道直接映射材料值，不经 LLM 转述防篡改 */
 export function candidateMetaMap(candidates: Candidate[]): Map<string, { date: string | null; source: string }> {
   const map = new Map<string, { date: string | null; source: string }>()
@@ -127,6 +145,45 @@ export async function isNearDuplicate(title: string, summary: string): Promise<b
   }
 }
 
+const CJK_RE = /[一-鿿]/
+
+/** 检索词英化：论文检索基本只在英文文献圈有效，含中文的领域名/关键词先经 LLM 转英文研究向检索词；无需转或失败返回 null（按原词降级，不炸本轮） */
+async function toEnglishTerms(
+  domainName: string,
+  keywords: string[],
+  signal?: AbortSignal
+): Promise<string[] | null> {
+  const raw = [domainName, ...keywords]
+  if (!raw.some((s) => CJK_RE.test(s))) return null
+  try {
+    const res = await chatCompletion({
+      messages: [
+        {
+          role: 'user',
+          content: `将下面的研究方向转写为最适合在 arXiv / Google Scholar 检索的英文检索词。要求：
+1. 最多 4 个，每个 2-6 个英文单词，用研究性术语而非泛称（如「Go语言开发」应得到 Go runtime、goroutine scheduling、Go garbage collection 这类词）。
+2. 仅输出 JSON 对象：{"terms":["...","..."]}，不要任何其他文字。
+
+待转写：${raw.join('；')}`
+        }
+      ],
+      temperature: 0,
+      jsonMode: true,
+      scene: 'agent:collect',
+      signal
+    })
+    const parsed = extractJson(res.content)
+    const list = Array.isArray(parsed.terms) ? parsed.terms : []
+    const terms = list
+      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim())
+      .slice(0, 4)
+    return terms.length > 0 ? terms : null
+  } catch {
+    return null
+  }
+}
+
 export async function runCollectDeep(domainId: number, ctx: TaskContext): Promise<void> {
   const domain = getDb()
     .prepare('SELECT * FROM agent_domains WHERE id = ?')
@@ -134,7 +191,7 @@ export async function runCollectDeep(domainId: number, ctx: TaskContext): Promis
   if (!domain) throw new Error('领域不存在（可能已被删除）')
   if (!isLlmConfigured()) throw new Error('LLM 未配置')
   if (!collectionAllowed()) {
-    console.info(`[agent:collect] 领域「${domain.name}」超出每日预算，本轮跳过`)
+    logInfo('agent', `[agent:collect] 领域「${domain.name}」超出每日预算，本轮跳过`)
     return
   }
   let keywords: string[] = []
@@ -146,13 +203,18 @@ export async function runCollectDeep(domainId: number, ctx: TaskContext): Promis
   }
   if (keywords.length === 0) keywords = [domain.name]
 
+  ctx.progress('检索词英化中…')
+  const searchTerms = (await toEnglishTerms(domain.name, keywords, ctx.signal)) ?? keywords
+  if (searchTerms !== keywords) {
+    logInfo('agent', `[agent:collect] 检索词英化：${keywords.join('、')} → ${searchTerms.join(' / ')}`)
+  }
   ctx.progress('双渠道检索中…')
   // 双渠道并行，单渠道失败留痕不炸
   const [arxivRes, mcpRes] = await Promise.allSettled([
-    searchArxiv(keywords, ctx.signal),
+    searchArxiv(searchTerms, ctx.signal),
     searchViaMcp(
-      `${domain.name} ${keywords.join(' ')} 最新论文 research`,
-      (m) => console.info(`[agent:collect] ${m}`),
+      `${searchTerms.join(' ')} latest research papers`,
+      (m) => logInfo('agent', `[agent:collect] ${m}`),
       ctx.signal
     )
   ])
@@ -170,14 +232,14 @@ export async function runCollectDeep(domainId: number, ctx: TaskContext): Promis
       })
     }
   } else {
-    console.warn(`[agent:collect] arXiv 渠道失败：${(arxivRes.reason as Error)?.message}`)
+    logWarn('agent', `[agent:collect] arXiv 渠道失败：${(arxivRes.reason as Error)?.message}`)
   }
   const mcpText = mcpRes.status === 'fulfilled' ? String(mcpRes.value) : ''
   if (mcpRes.status === 'rejected') {
-    console.warn(`[agent:collect] MCP 搜索渠道失败：${(mcpRes.reason as Error)?.message}`)
+    logWarn('agent', `[agent:collect] MCP 搜索渠道失败：${(mcpRes.reason as Error)?.message}`)
   }
   if (candidates.length === 0 && !mcpText.trim()) {
-    console.info(`[agent:collect] 领域「${domain.name}」本轮双渠道均无结果`)
+    logInfo('agent', `[agent:collect] 领域「${domain.name}」本轮双渠道均无结果`)
     return
   }
 
@@ -206,6 +268,7 @@ ${mcpText.trim() ? wrapMaterial('MCP 搜索原始结果', mcpText.slice(0, 30000
   ensureAlive(ctx)
 
   const whitelist = urlWhitelist(candidates)
+  for (const u of whitelistFromText(mcpText)) whitelist.add(u)
   const metaMap = candidateMetaMap(candidates)
   let items: Selection[] = []
   try {
@@ -230,14 +293,14 @@ ${mcpText.trim() ? wrapMaterial('MCP 搜索原始结果', mcpText.slice(0, 30000
   for (const it of items) {
     if (!it.title?.trim() || !it.url?.trim()) continue
     if (!matchesWhitelist(it.url, whitelist)) {
-      console.warn(`[agent:collect] 丢弃编造 url 候选：${it.title}`)
+      logWarn('agent', `[agent:collect] 丢弃编造 url 候选：${it.title}`)
       continue
     }
     const hash = urlHash(it.url)
     const dup = d.prepare('SELECT id FROM discover_items WHERE url_hash = ?').get(hash)
     if (dup) continue
     if (await isNearDuplicate(it.title, it.summary ?? '')) {
-      console.info(`[agent:collect] 近重复跳过：${it.title}`)
+      logInfo('agent', `[agent:collect] 近重复跳过：${it.title}`)
       continue
     }
     try {
@@ -257,7 +320,7 @@ ${mcpText.trim() ? wrapMaterial('MCP 搜索原始结果', mcpText.slice(0, 30000
           it.language === 'zh' ? 'zh' : 'en',
           it.length_est ?? '',
           it.url.trim(),
-          meta.source || it.source || 'arxiv',
+          meta.source || it.source || 'mcp',
           it.reason ?? '',
           hash,
           domainId,
@@ -270,7 +333,7 @@ ${mcpText.trim() ? wrapMaterial('MCP 搜索原始结果', mcpText.slice(0, 30000
       /* UNIQUE 冲突等逐条忽略 */
     }
   }
-  console.info(`[agent:collect] 领域「${domain.name}」海选完成：候选 ${candidates.length}，入选 ${items.length}，新增 ${added}`)
+  logInfo('agent', `[agent:collect] 领域「${domain.name}」海选完成：候选 ${candidates.length}，入选 ${items.length}，新增 ${added}`)
 }
 
 export async function embedDiscoverVector(title: string, summary: string): Promise<number[] | null> {

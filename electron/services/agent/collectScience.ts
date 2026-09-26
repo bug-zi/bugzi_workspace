@@ -1,3 +1,4 @@
+import { logInfo, logWarn } from '../logger'
 // 科普线海选巡检（超级工作台 2.0 批次D spec §2）：领域 → MCP 渠道（渠道注册表留扩展点）→
 // 海选 LLM（科普向遴选：排除学术论文/新闻稿/营销文，无结果合法）→ url 白名单防编造 +
 // url_hash/embedding 近重复去重（复用 collectDeep 导出件，近重复判定跨线共享）→ discover_items
@@ -10,7 +11,7 @@ import { registerTask } from './queue'
 import { collectionAllowed } from './budget'
 import { wrapMaterial } from './guardrails'
 import { searchViaMcp } from './sources/mcpSearch'
-import { embedDiscoverVector, extractJson, isNearDuplicate, matchesWhitelist, urlHash, type Selection } from './collectDeep'
+import { embedDiscoverVector, extractJson, isNearDuplicate, matchesWhitelist, urlHash, whitelistFromText, type Selection } from './collectDeep'
 import type { TaskContext } from './queue'
 
 interface Candidate {
@@ -29,7 +30,7 @@ const CHANNELS: ((keywords: string[], signal?: AbortSignal) => Promise<Candidate
   async (keywords, signal) =>
     searchViaMcp(
       `${keywords.join(' ')} 科普 深入浅出 文章`,
-      (m) => console.info(`[agent:collect:s] ${m}`),
+      (m) => logInfo('agent', `[agent:collect:s] ${m}`),
       signal
     )
 ]
@@ -58,22 +59,6 @@ function isVideoPageUrl(url: string): boolean {
   }
 }
 
-/** 从渠道原始文本抽取 url 白名单（防编造：origin+path 归一，同 collectDeep 口径） */
-function whitelistFromText(text: string): Set<string> {
-  const set = new Set<string>()
-  for (const raw of text.match(/https?:\/\/[^\s"'<>）)\]]+/g) ?? []) {
-    const clean = raw.replace(/[.,;:!?]+$/, '').replace(/\/+$/, '')
-    set.add(clean)
-    try {
-      const u = new URL(clean)
-      set.add(u.origin + u.pathname.replace(/\/+$/, ''))
-    } catch {
-      /* 非法 url 跳过 */
-    }
-  }
-  return set
-}
-
 export async function runCollectScience(domainId: number, ctx: TaskContext): Promise<void> {
   const domain = getDb()
     .prepare('SELECT * FROM agent_domains WHERE id = ?')
@@ -81,7 +66,7 @@ export async function runCollectScience(domainId: number, ctx: TaskContext): Pro
   if (!domain) throw new Error('领域不存在（可能已被删除）')
   if (!isLlmConfigured()) throw new Error('LLM 未配置')
   if (!collectionAllowed()) {
-    console.info(`[agent:collect:s] 领域「${domain.name}」超出每日预算，本轮跳过`)
+    logInfo('agent', `[agent:collect:s] 领域「${domain.name}」超出每日预算，本轮跳过`)
     return
   }
   let keywords: string[] = []
@@ -101,11 +86,11 @@ export async function runCollectScience(domainId: number, ctx: TaskContext): Pro
       const text = String(out)
       if (text.trim()) channelTexts.push(text)
     } catch (e) {
-      console.warn(`[agent:collect:s] 科普渠道失败：${(e as Error).message}`)
+      logWarn('agent', `[agent:collect:s] 科普渠道失败：${(e as Error).message}`)
     }
   }
   if (channelTexts.length === 0) {
-    console.info(`[agent:collect:s] 领域「${domain.name}」本轮科普渠道均无结果`)
+    logInfo('agent', `[agent:collect:s] 领域「${domain.name}」本轮科普渠道均无结果`)
     return
   }
 
@@ -154,11 +139,11 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
   for (const it of items) {
     if (!it.title?.trim() || !it.url?.trim()) continue
     if (isVideoPageUrl(it.url)) {
-      console.info(`[agent:collect:s] 跳过视频页候选：${it.title}`)
+      logInfo('agent', `[agent:collect:s] 跳过视频页候选：${it.title}`)
       continue
     }
     if (!matchesWhitelist(it.url, whitelist)) {
-      console.warn(`[agent:collect:s] 丢弃编造 url 候选：${it.title}`)
+      logWarn('agent', `[agent:collect:s] 丢弃编造 url 候选：${it.title}`)
       continue
     }
     const hash = urlHash(it.url)
@@ -169,7 +154,7 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
     const tags = JSON.stringify((it.tags ?? []).slice(0, 5).map((t) => toSimplified(String(t))))
     const reason = toSimplified(it.reason ?? '')
     if (await isNearDuplicate(title, summary)) {
-      console.info(`[agent:collect:s] 近重复跳过：${title}`)
+      logInfo('agent', `[agent:collect:s] 近重复跳过：${title}`)
       continue
     }
     try {
@@ -204,7 +189,7 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
       /* UNIQUE 冲突等逐条忽略 */
     }
   }
-  console.info(`[agent:collect:s] 领域「${domain.name}」科普海选完成：入选 ${items.length}，新增 ${added}`)
+  logInfo('agent', `[agent:collect:s] 领域「${domain.name}」科普海选完成：入选 ${items.length}，新增 ${added}`)
 }
 
 // 任务注册（模块顶层；bootstrap.ts side-effect import）

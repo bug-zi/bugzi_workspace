@@ -1,3 +1,4 @@
+import { logWarn } from '../logger'
 // 科普解读（超级工作台 2.0 批次D spec §4）：英文全文解读（术语表先行 + 逐章翻译，kind=translation）、
 // 中文轻加工（逐块 JSON {md, concepts} 加注版全文——结构导航 + 术语括注 + wiki:// 概念内链，
 // 硬约束不删减原文信息点，kind=light）、精讲（按需，kind=lecture）。
@@ -152,7 +153,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
         .map((g) => ({ en: g.en, zh: toSimplified(g.zh) }))
         .slice(0, 40)
     } catch {
-      console.warn(`[agent:s-translate] 《${article.title}》术语表生成失败，直接翻译`)
+      logWarn('agent', `[agent:s-translate] 《${article.title}》术语表生成失败，直接翻译`)
     }
     if (glossary.length > 0) {
       getDb()

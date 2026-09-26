@@ -1,3 +1,4 @@
+import { logWarn } from '../logger'
 // 解读产物（超级工作台 2.0 批次B spec §3）：导读卡（终选后自动）/ 精讲 / 精译（按需）。
 // 长文逐章落盘、按章幂等续跑；token 记账走 llm_usage 场景差值；不注入个人画像（白名单默认全关）。
 import { existsSync, readFileSync } from 'node:fs'
@@ -193,7 +194,7 @@ async function runTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> 
         .slice(0, 40)
     } catch {
       /* 术语表失败不阻塞翻译，仅一致性下降 */
-      console.warn(`[agent:translate] 《${paper.title}》术语表生成失败，直接翻译`)
+      logWarn('agent', `[agent:translate] 《${paper.title}》术语表生成失败，直接翻译`)
     }
     if (glossary.length > 0) {
       getDb()

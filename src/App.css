@@ -720,6 +720,85 @@
   border-radius: 14px;
 }
 
+/* ===== 划词气泡（useSelectionBubble 共享；260927 自 MdDialog.css 上移全局） ===== */
+.sel-bubble {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+.sel-bubble button {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: var(--color-text);
+}
+.sel-bubble button:hover {
+  background: var(--color-primary-soft);
+}
+
+/* ===== 主栏阅读视图通用（260927 论文库/科普：信息源 ArticleView 同款整页切换） =====
+   高度由 useFillHeight 量根节点 top 贴底自适应——整页切换与页签容器内嵌两种场景通用 */
+.module-reader-page {
+  position: relative;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.module-reader-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.module-reader-bar .reader-title {
+  flex: 1;
+  min-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.module-reader-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-strong);
+  padding: 22px 26px 34px;
+}
+.module-reader-article {
+  max-width: 52em;
+  margin: 0 auto;
+}
+.module-reader-zoom {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-primary) 18%, transparent);
+  cursor: pointer;
+  z-index: 5;
+  font-size: 0.9em;
+  color: var(--color-text);
+}
+
 /* ===== 首次引导 ===== */
 .welcome-step {
   display: flex;

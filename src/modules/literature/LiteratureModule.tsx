@@ -1,5 +1,5 @@
-// 论文库（260924 自信息源拆出为独立模块，学习区）：深读线壳——头部 + LiteraturePanel；
-// 批次F 相关内容深链（relatedNav 'literature-paper'）随模块迁入
+// 论文库（260924 自信息源拆出为独立模块，学习区）：深读线壳——头部与阅读视图切换在 LiteraturePanel 内
+// （260927 长文阅读视图化：阅读态整页切换不渲染模块头部，播客台同款）；批次F 相关内容深链随模块迁入
 import { useState } from 'react'
 import LiteraturePanel from './LiteraturePanel'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
@@ -18,17 +18,10 @@ export default function LiteratureModule(props: {
     }
   })
   return (
-    <div className="module-page" style={{ maxWidth: 1200 }}>
-      <div className="module-header">
-        <span className="material-symbols-outlined">library_books</span>
-        <span className="module-title">论文库</span>
-        <span className="module-sub">发现箱 · 正式文献</span>
-      </div>
-      <LiteraturePanel
-        onOpenAi={() => props.onOpenAi?.('', { channel: 'literature' })}
-        openPaperId={openPaperId}
-        onOpenPaperConsumed={() => setOpenPaperId(null)}
-      />
-    </div>
+    <LiteraturePanel
+      onOpenAi={(prefill) => props.onOpenAi?.(prefill ?? '', { channel: 'literature' })}
+      openPaperId={openPaperId}
+      onOpenPaperConsumed={() => setOpenPaperId(null)}
+    />
   )
 }

@@ -1,3 +1,4 @@
+import { logInfo, logWarn } from '../logger'
 // 面经搜集任务（2026-09-24-面经题库化-design.md §四）：agent 队列任务 interview_collect——
 // 关键词轮转（传统 + AI 双主线，最薄弱分类定向）→ searchViaMcp 搜面经文章 → readability 抓正文
 // → LLM 拆题（只提真实题 + 要点式答案 + 建议分类）→ norm 查重（questions + intake 双表）→ 待审核。
@@ -110,10 +111,10 @@ async function runInterviewCollect(ctx: TaskContext): Promise<void> {
   const texts: string[] = []
   for (const kw of keywords) {
     try {
-      const t = await searchViaMcp(kw, (m) => console.info(`[interview] ${m}`), ctx.signal)
+      const t = await searchViaMcp(kw, (m) => logInfo('agent', `[interview] ${m}`), ctx.signal)
       texts.push(String(t))
     } catch (e) {
-      console.warn(`[interview] 关键词「${kw}」搜索失败：`, (e as Error).message)
+      logWarn('agent', `[interview] 关键词「${kw}」搜索失败：`, (e as Error).message)
     }
   }
   const mcpText = texts.join('\n\n').trim()
@@ -169,7 +170,7 @@ ${wrapMaterial('搜索原始结果', mcpText.slice(0, 30000))}`
       ctx.progress(`抓取并拆题（${i + 1}/${picked.length}）…`)
       const text = await fetchPageText(url)
       if (text.length < 400) {
-        console.warn(`[interview] 正文过短跳过：${url}`)
+        logWarn('agent', `[interview] 正文过短跳过：${url}`)
         continue
       }
       const items = await extractQuestions(text, categories, ctx.signal)
@@ -190,11 +191,11 @@ ${wrapMaterial('搜索原始结果', mcpText.slice(0, 30000))}`
       }
     } catch (e) {
       if ((e as Error).message === '已取消') throw e
-      console.warn(`[interview] 文章处理失败跳过：${url}`, (e as Error).message)
+      logWarn('agent', `[interview] 文章处理失败跳过：${url}`, (e as Error).message)
     }
   }
   if (added === 0) throw new Error('本轮未拆出新题（可能均已存在或文章质量不足）')
-  console.info(`[interview] 搜集完成：批次 ${batchId} 新增待审 ${added} 题`)
+  logInfo('agent', `[interview] 搜集完成：批次 ${batchId} 新增待审 ${added} 题`)
 }
 
 // 任务注册（模块顶层；ipc.ts import 即完成注册）

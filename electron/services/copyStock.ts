@@ -1,6 +1,7 @@
 // 副本库补库泵（specs §4）：待读区 < COPY_LOW 自动补到 COPY_TARGET（照 wikiStock 简洁风格）
 // 260925 v2「泵可视化」：库存即待读区页签（用户可浏览/删除），维持 10-12 篇
 // 触发点：main.ts 启动延迟 10s / copy:chooseDaily 或删除/丢弃消耗后 / 进模块（copy:stockCheck）
+import { logInfo, logWarn, logError } from './logger'
 import { BrowserWindow } from 'electron'
 import { getDb } from '../db/db'
 import { runPumpJob } from '../ai/jobs'
@@ -50,9 +51,9 @@ async function pumpPool(): Promise<void> {
       const tags = pickTags()
       const r = await runPumpJob('copy', (sig) => composePoolCopy(tags, sig))
       notifyStockChanged()
-      console.info(`[copyStock] 补池 +1《${r.title}》（现 ${poolCount()}）`)
+      logInfo('stock', `[copyStock] 补池 +1《${r.title}》（现 ${poolCount()}）`)
     } catch (e) {
-      console.warn('[copyStock] 单条生成失败，终止本轮：', (e as Error).message)
+      logWarn('stock', '[copyStock] 单条生成失败，终止本轮：', (e as Error).message)
       return
     }
   }
@@ -65,12 +66,12 @@ export async function ensureCopyStock(): Promise<void> {
   pumping = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[copyStock] LLM 未配置，副本补库泵跳过')
+      logWarn('stock', '[copyStock] LLM 未配置，副本补库泵跳过')
       return
     }
-    console.info(`[copyStock] 补充开始：池 ${poolCount()}/${COPY_LOW}（目标 ${COPY_TARGET}）`)
+    logInfo('stock', `[copyStock] 补充开始：池 ${poolCount()}/${COPY_LOW}（目标 ${COPY_TARGET}）`)
     await pumpPool()
-    console.info(`[copyStock] 补充结束：池 ${poolCount()}`)
+    logInfo('stock', `[copyStock] 补充结束：池 ${poolCount()}`)
   } finally {
     pumping = false
   }

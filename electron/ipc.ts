@@ -52,7 +52,8 @@ import {
   importManualPdf,
   pendingDiscoverCount,
   deletePaper,
-  deleteDiscover
+  deleteDiscover,
+  readFulltext
 } from './services/agent/papers'
 import { runInterpret } from './services/agent/interpret'
 import { runScienceInterpret } from './services/agent/interpretScience'
@@ -277,6 +278,8 @@ import type { TerminalCreateOpts } from './services/terminal'
 import { listMusic, importTracks, playlistCreate, playlistRename, playlistDelete, trackMove, trackDelete, setTrackDuration, readTrackFile } from './services/music'
 import { listTriggers, importTriggers, triggerRename, triggerDelete, readTriggerFile } from './services/trigger'
 import { getUpdateState, checkForUpdates, downloadUpdate, installUpdate } from './services/updater'
+import { listLogs, scopeCounts, clearLogs, logWarn } from './services/logger'
+import type { LogListQuery } from '../src/shared/types'
 
 function win(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0]
@@ -1729,7 +1732,7 @@ export function registerIpc(): void {
     d.prepare('UPDATE interview_questions SET answer_path = ? WHERE id = ?').run(path, id)
     if (!answer.trim()) {
       void supplementInterviewAnswer(id, q).catch((e: unknown) =>
-        console.warn('[interview] 补答案失败（占位保留，可双击手写）:', (e as Error).message)
+        logWarn('system', '[interview] 补答案失败（占位保留，可双击手写）:', (e as Error).message)
       )
     }
     return id
@@ -2104,6 +2107,11 @@ export function registerIpc(): void {
   ipcMain.handle('explorer:readImage', (_e, root: string, filePath: string) =>
     readExplorerImage(root, filePath)
   )
+
+  // ---------- 日志库（DB v64，2026-09-27-日志库-design.md §IPC）：三通道 ----------
+  ipcMain.handle('log:list', (_e, q: LogListQuery) => listLogs(q ?? {}))
+  ipcMain.handle('log:scopes', () => scopeCounts())
+  ipcMain.handle('log:clear', () => clearLogs())
 
   // ---------- 文笔坊（DB v17，文笔坊 specs §2/§3/§4）：浮生记零 AI + 写作台 + Copilot ----------
   ipcMain.handle('wenbi:journalList', () =>
@@ -4017,6 +4025,8 @@ export function registerIpc(): void {
     // 相关内容统一走 listLinks（批次F：双向合并 + link_id/origin，peer 标题已解析）
     return { paper, interpretations: listInterpretations(id), related: listLinks('paper', id) }
   })
+  // 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null；260927 阅读视图化）
+  ipcMain.handle('agent:paperFulltext', (_e, id: number) => readFulltext(id))
   ipcMain.handle('agent:runCollect', (_e, domainId: number) => {
     // 按领域 track 路由（批次D）：deep→collect_deep、science→collect_science
     const d = listDomains().find((x) => x.id === domainId)

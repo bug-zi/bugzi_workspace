@@ -1,3 +1,4 @@
+import { logWarn, logInfo } from '../logger'
 // 引擎装配（超级工作台 2.0 总纲 §2）：应用运行中才存在的主动型后台引擎。
 // startAgent 自判 agent_enabled（关闭态零副作用）；负载卫兵 + 任务队列 + 每日错峰巡检；
 // 状态经 onEngineChange 单向通知 → 500ms 节流合并 → agent:status 推送。
@@ -72,12 +73,12 @@ function scheduleStagger(): void {
       try {
         collector?.(d)
       } catch (e) {
-        console.warn('[agent] 巡检回调异常：', e)
+        logWarn('agent', '[agent] 巡检回调异常：', e)
       }
     }, FIRST_STAGGER_MS + i * STAGGER_MS)
     t.unref?.()
   })
-  if (due.length > 0) console.info(`[agent] 今日巡检排程：${due.length} 个领域错峰执行`)
+  if (due.length > 0) logInfo('agent', `[agent] 今日巡检排程：${due.length} 个领域错峰执行`)
   if (rescanTimer) clearTimeout(rescanTimer)
   rescanTimer = setTimeout(() => {
     if (started) scheduleStagger()
@@ -92,7 +93,7 @@ function startEngine(): void {
   startLoadGuard()
   startDispatch()
   scheduleStagger()
-  console.info('[agent] 引擎已启动')
+  logInfo('agent', '[agent] 引擎已启动')
   notifyChange()
 }
 
@@ -105,7 +106,7 @@ function stopEngine(): void {
   stopDispatch()
   if (started) {
     started = false
-    console.info('[agent] 引擎已关闭')
+    logInfo('agent', '[agent] 引擎已关闭')
   }
   notifyChange()
 }
@@ -129,7 +130,7 @@ export function startAgent(): void {
   })
   const enabled = getSetting(SettingsKeys.AgentEnabled) === '1'
   if (!enabled) {
-    console.info('[agent] 引擎未启用，待命（个人档可开启）')
+    logInfo('agent', '[agent] 引擎未启用，待命（个人档可开启）')
     return
   }
   startEngine()

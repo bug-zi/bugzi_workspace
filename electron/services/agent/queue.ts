@@ -1,3 +1,4 @@
+import { logInfo } from '../logger'
 // 任务队列（超级工作台 2.0 总纲 §4.1）：task_runs 持久台账 + 内存执行池。
 // 单飞行（同类型并发=1）、优先级、并发上限、失败退避重试、负载暂停让路、启动恢复终态化。
 import { getDb, nowIso } from '../../db/db'
@@ -186,7 +187,7 @@ export function recoverOnBoot(): void {
     .prepare("UPDATE task_runs SET status = 'failed', finished_at = ?, error = 'app_restart' WHERE status = 'running'")
     .run(nowIso())
   const changes = (r as { changes?: number }).changes ?? 0
-  if (changes > 0) console.info(`[agent] 启动恢复：${changes} 条中断任务已终态化`)
+  if (changes > 0) logInfo('agent', `[agent] 启动恢复：${changes} 条中断任务已终态化`)
 }
 
 /** 负载卫兵调用：true=暂停派新（在跑的跑完即止） */

@@ -4,6 +4,7 @@
 // 每日定档已迁 interviewBank.ts（260924 面经题库化：learn_daily 所有权随刷题化迁移）。
 // 泵三触发：main.ts 启动延迟 10s / 进学习库模块（learn:stockCheck）/ mark learn 消耗后；
 // 另 scheduler.ts 午夜零点触发。
+import { logInfo, logWarn, logError } from './logger'
 import { BrowserWindow } from 'electron'
 import { getDb } from '../db/db'
 import { generateLearnCard, isLlmConfigured, localDateStr } from '../ai/services'
@@ -61,7 +62,7 @@ export async function ensureLearnStock(): Promise<void> {
   pumping = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[learnStock] LLM 未配置，备学池泵跳过（配置后下次触发补齐）')
+      logWarn('stock', '[learnStock] LLM 未配置，备学池泵跳过（配置后下次触发补齐）')
       return
     }
     const d = getDb()
@@ -90,17 +91,17 @@ export async function ensureLearnStock(): Promise<void> {
       picked.push(p.nodes.splice(Math.floor(Math.random() * p.nodes.length), 1)[0])
     }
     if (picked.length === 0) return
-    console.info(`[learnStock] 备学池补充开始：${picked.length} 张（现存量 ${ready.c}）`)
+    logInfo('stock', `[learnStock] 备学池补充开始：${picked.length} 张（现存量 ${ready.c}）`)
     for (const n of picked) {
       try {
         await runPumpJob('learn', (sig) => generateLearnCard(n.id, sig))
         notifyStockChanged()
-        console.info(`[learnStock] 备学池卡片就绪「${n.title}」`)
+        logInfo('stock', `[learnStock] 备学池卡片就绪「${n.title}」`)
       } catch (e) {
-        console.warn(`[learnStock] 卡片「${n.title}」生成失败，下次触发补齐：`, (e as Error).message)
+        logWarn('stock', `[learnStock] 卡片「${n.title}」生成失败，下次触发补齐：`, (e as Error).message)
       }
     }
-    console.info('[learnStock] 备学池补充结束')
+    logInfo('stock', '[learnStock] 备学池补充结束')
   } finally {
     pumping = false
   }

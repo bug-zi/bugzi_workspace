@@ -1,3 +1,4 @@
+import { logWarn, logInfo } from '../logger'
 // 科普线服务（超级工作台 2.0 批次D spec §3/§5）：发现箱 article 条目转正分流、全文抓取
 // （网页 → readability 抽正文，失败降级 meta_only 不炸）、科普文章查询/删除、划词高光、
 // 概念自动建链（concepts → wiki_entries 精确/双向模糊）与 knowledge_links 通用增删查（批次 F 复用）。
@@ -143,7 +144,7 @@ export async function ensureScienceFulltext(article: ScienceArticleRow): Promise
   const d = getDb()
   const fail = (reason: string): void => {
     d.prepare("UPDATE science_articles SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), article.id)
-    console.warn(`[agent:science] 《${article.title}》全文抓取失败（meta_only）：${reason}`)
+    logWarn('agent', `[agent:science] 《${article.title}》全文抓取失败（meta_only）：${reason}`)
   }
   try {
     const { text: html } = await politeFetch(article.url)
@@ -157,7 +158,7 @@ export async function ensureScienceFulltext(article: ScienceArticleRow): Promise
       nowIso(),
       article.id
     )
-    console.info(`[agent:science] 《${article.title}》全文就绪（${Math.round(plain.length / 1000)}k 字符）`)
+    logInfo('agent', `[agent:science] 《${article.title}》全文就绪（${Math.round(plain.length / 1000)}k 字符）`)
   } catch (e) {
     fail((e as Error).message)
   }
@@ -215,7 +216,7 @@ export function deleteScienceArticle(id: number): void {
   } catch {
     /* 无该文件 */
   }
-  console.info(`[agent:science] 科普文章 #${id}《${article.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
+  logInfo('agent', `[agent:science] 科普文章 #${id}《${article.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
 }
 
 // ---------- 划词高光（万象词条同机制：md 标记由渲染层写，此处管登记表） ----------

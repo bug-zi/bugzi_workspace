@@ -1,6 +1,7 @@
 // 我是谁（260921 新功能开发区，2026-09-21-我是谁-design.md）：每日 3-4 问 + 回答提炼候选画像条目
 // 逐条确认入档 profile_facts(source='ai')。出题一次调用（广谱聚合上下文），提炼每答一题一次调用。
 // 历史行永不删：显示只取当日，历史供防重复提问。启动/午夜触发静默失败，LLM 未配置跳过不记日期。
+import { logInfo, logWarn, logError } from './logger'
 import { getDb, nowIso } from '../db/db'
 import { getSetting, setSetting } from '../db/settings'
 import { PROFILE_CATEGORIES, SettingsKeys } from '../../src/shared/types'
@@ -278,7 +279,7 @@ export async function generateTodayBatch(): Promise<void> {
     .prepare('INSERT INTO whoami_questions (date, question, created_at, updated_at) VALUES (?, ?, ?, ?)')
   for (const q of questions) ins.run(today, q, now, now)
   setSetting(SettingsKeys.WhoamiDailyDate, today)
-  console.info(`[whoami] 每日问题生成 ${questions.length}/${count}`)
+  logInfo('whoami', `[whoami] 每日问题生成 ${questions.length}/${count}`)
 }
 
 /** 启动/午夜调度入口：静默失败永不抛错（同 ensureDailyLearn 口径） */
@@ -291,7 +292,7 @@ export async function ensureWhoamiDaily(): Promise<void> {
   try {
     await generateTodayBatch()
   } catch (e) {
-    console.warn('[whoami] 每日问题生成失败：', (e as Error).message)
+    logWarn('whoami', '[whoami] 每日问题生成失败：', (e as Error).message)
   } finally {
     generating = false
   }

@@ -24,6 +24,12 @@ import { createTray } from './services/tray'
 import { initUpdater } from './services/updater'
 import { getSetting } from './db/settings'
 import { SettingsKeys } from '../src/shared/types'
+import { logError } from './services/logger'
+
+// 未捕获异常/拒绝 → 日志库（260927）：记录入库。主进程注册监听后 Electron 默认错误弹窗
+// 不再出现、进程继续运行——属可接受行为变化（日志库 design §全量迁移映射）。
+process.on('uncaughtException', (e) => logError('system', '未捕获异常', e))
+process.on('unhandledRejection', (reason) => logError('system', '未处理的 Promise 拒绝', reason))
 
 // userData 钉回 %APPDATA%\bugzi_workspace（dev 同款）：打包态 productName 变化会导致默认 userData 分裂、
 // 已有数据"消失"。必须先于单实例锁（锁文件在 userData）与 applyDataDirAtStartup（读 userData 下 data_home.json）

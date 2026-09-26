@@ -6,6 +6,7 @@
 // 泵三触发：main.ts 启动延迟 10s / 抽卡消耗后（ipc.ts）/ 进入万象库模块（wiki:stockCheck）。
 // 每日批次两触发：main.ts 启动延迟 10s + scheduler.ts 午夜排程（App 跨天常驻不断供）。
 // 不做瞬态退避重试/自愈重排（推理角那套保留在推理角；wiki 触发点更密，YAGNI）。
+import { logInfo, logWarn, logError } from './logger'
 import { BrowserWindow } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import { getSetting, setSetting } from '../db/settings'
@@ -77,17 +78,17 @@ async function pumpSection(sectionId: number, sectionName: string): Promise<void
       // 板块可能在补充进行中被删：逐张重查，防孤儿池卡
       const exists = getDb().prepare('SELECT id FROM wiki_sections WHERE id = ?').get(sectionId)
       if (!exists) {
-        console.warn(`[wikiStock] 板块「${sectionName}」已删除，中止其补充`)
+        logWarn('stock', `[wikiStock] 板块「${sectionName}」已删除，中止其补充`)
         return
       }
       const r = await runPumpJob('wiki', (sig) => generateWikiCard(null, sectionId, sig, 'pool'))
       notifyWikiStockChanged()
-      console.info(
+      logInfo('stock', 
         `[wikiStock] 后库 +1「${r.term}」（${sectionName}，现 ${poolCountOf(sectionId)}）`
       )
     }
   } catch (e) {
-    console.warn(`[wikiStock] 板块「${sectionName}」补充中断：`, (e as Error).message)
+    logWarn('stock', `[wikiStock] 板块「${sectionName}」补充中断：`, (e as Error).message)
   }
 }
 
@@ -102,14 +103,14 @@ export async function ensureWikiStock(): Promise<void> {
   pumping = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[wikiStock] LLM 未配置，后库补充泵跳过')
+      logWarn('stock', '[wikiStock] LLM 未配置，后库补充泵跳过')
       return
     }
-    console.info(
+    logInfo('stock', 
       `[wikiStock] 后库补充开始：${needy.map((s) => `${s.name} ${poolCountOf(s.id)}/${WIKI_POOL_TARGET}`).join(' · ')}`
     )
     await Promise.all(needy.map((s) => pumpSection(s.id, s.name)))
-    console.info('[wikiStock] 后库补充结束')
+    logInfo('stock', '[wikiStock] 后库补充结束')
   } finally {
     pumping = false
   }
@@ -125,7 +126,7 @@ export async function ensureDailyLearn(): Promise<void> {
   dailyRunning = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[wikiStock] LLM 未配置，每日待学习批次跳过（不记日期，配置后下次触发再生成）')
+      logWarn('stock', '[wikiStock] LLM 未配置，每日待学习批次跳过（不记日期，配置后下次触发再生成）')
       return
     }
     const sections = getDb()
@@ -137,20 +138,20 @@ export async function ensureDailyLearn(): Promise<void> {
     // 轮转交错出卡而非按板块连出，批次中途失败时各板块到手更均匀
     const shuffled = sections.slice().sort(() => Math.random() - 0.5)
     const order = Array.from({ length: count }, (_, i) => shuffled[i % shuffled.length])
-    console.info(`[wikiStock] 每日待学习批次开始：今日 ${count} 张（板块均摊）`)
+    logInfo('stock', `[wikiStock] 每日待学习批次开始：今日 ${count} 张（板块均摊）`)
     let inserted = 0
     for (const s of order) {
       try {
         const r = await runPumpJob('wiki', (sig) => generateWikiCard(null, s.id, sig, 'learn'))
         inserted++
         notifyWikiStockChanged()
-        console.info(`[wikiStock] 待学习 +1「${r.term}」（${s.name}）`)
+        logInfo('stock', `[wikiStock] 待学习 +1「${r.term}」（${s.name}）`)
       } catch (e) {
-        console.warn(`[wikiStock] 板块「${s.name}」本张生成失败，跳过：`, (e as Error).message)
+        logWarn('stock', `[wikiStock] 板块「${s.name}」本张生成失败，跳过：`, (e as Error).message)
       }
     }
     if (inserted > 0) setSetting(SettingsKeys.WikiDailyLearnDate, today)
-    console.info(`[wikiStock] 每日批次结束：成功 ${inserted}/${count}`)
+    logInfo('stock', `[wikiStock] 每日批次结束：成功 ${inserted}/${count}`)
   } finally {
     dailyRunning = false
   }

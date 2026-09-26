@@ -1,3 +1,4 @@
+import { logInfo } from '../logger'
 // 书籍全文抽取（超级工作台 2.0 批次E spec §1）：epub（unzipSync → container.xml → OPF →
 // spine 顺序 xhtml 剥标签，spine 缺失兜底 manifest 全量）/ pdf（复用 papers.extractPdfText）
 // → books/{id}.txt 一次性缓存；<200 字符视为抽取失败抛错（扫描版/异构包），不炸其他功能。
@@ -162,6 +163,6 @@ export async function ensureBookFulltext(book: BookFileRef): Promise<string> {
     throw new Error('全文抽取失败：扫描版 PDF 无文本层或 epub 结构异常（无文本内容无法生成导读）')
   }
   writeFileSync(bookFulltextPath(book.id), text, 'utf-8')
-  console.info(`[agent:booktext] 《${book.title}》全文就绪（${Math.round(text.length / 1000)}k 字符）`)
+  logInfo('agent', `[agent:booktext] 《${book.title}》全文就绪（${Math.round(text.length / 1000)}k 字符）`)
   return text
 }

@@ -6,6 +6,7 @@
 // 自动重试至多 3 次（间隔 25s），仍败或质量类失败才 console.warn 跳出、待下次触发再补。
 // 三触发点：main.ts 启动延迟 10s / 每次消耗后（ipc.ts）/ 进入推理角模块（reasoning:stockCheck）。
 // 与手动「来 3 碗汤」并发无碍：手动入口不经泵，各自独立插库，最坏多 3 碗。
+import { logInfo, logWarn, logError } from './logger'
 import { BrowserWindow } from 'electron'
 import { getDb, nowIso } from '../db/db'
 import {
@@ -40,13 +41,13 @@ let postponeTimer: NodeJS.Timeout | null = null
 function schedulePostponeReRun(): void {
   if (postponeTimer) return // 已有重排在途（汤/题两路同轮失败只排一次）
   if (postponeCount >= POSTPONE_MAX) {
-    console.warn(
+    logWarn('stock', 
       `[reasoningStock] 通道持续不可用，已连续推迟 ${POSTPONE_MAX} 次，本轮放弃——待下次消耗/进模块/重启再试`
     )
     return
   }
   postponeCount++
-  console.info(
+  logInfo('stock', 
     `[reasoningStock] 通道暂不可用，${POSTPONE_DELAY_MS / 60_000} 分钟后自动再试（${postponeCount}/${POSTPONE_MAX}）`
   )
   postponeTimer = setTimeout(() => {
@@ -79,7 +80,7 @@ async function retryTransient<T>(label: string, fn: () => Promise<T>): Promise<T
     } catch (e) {
       if (attempt >= RETRY_DELAYS_MS.length || !isTransientLlmError(e)) throw e
       const wait = RETRY_DELAYS_MS[attempt] / 1000
-      console.warn(
+      logWarn('stock', 
         `[reasoningStock] ${label}遇瞬态错误，${wait}s 后重试（${attempt + 1}/${RETRY_DELAYS_MS.length}）：`,
         (e as Error).message
       )
@@ -120,10 +121,10 @@ async function pumpSoups(): Promise<void> {
   while (freshSoupCount() < SOUP_TARGET) {
     const r = await runPumpJob('soup', (sig) => retryTransient('补汤', () => generateSoups('random', sig)))
     notifyStockChanged()
-    console.info(`[reasoningStock] 补汤一批 +${r.inserted}（fresh 现 ${freshSoupCount()}）`)
+    logInfo('stock', `[reasoningStock] 补汤一批 +${r.inserted}（fresh 现 ${freshSoupCount()}）`)
     if (r.inserted === 0) {
       // 整批审题全灭——质量类失败，重试无意义，跳出待下次触发（避免死循环空转）
-      console.warn('[reasoningStock] 补汤一批零入库，跳出待下次触发')
+      logWarn('stock', '[reasoningStock] 补汤一批零入库，跳出待下次触发')
       break
     }
   }
@@ -225,7 +226,7 @@ async function pumpPuzzles(): Promise<void> {
             nowIso()
           )
         notifyStockChanged()
-        console.info(
+        logInfo('stock', 
           `[reasoningStock] 题池 +1（${draft.difficulty}/${draft.type}，现 ${poolCount()}）`
         )
       } else {
@@ -260,23 +261,23 @@ export async function ensureReasoningStock(): Promise<void> {
   pumping = true
   try {
     if (!isLlmConfigured()) {
-      console.warn('[reasoningStock] LLM 未配置，题库补充泵跳过')
+      logWarn('stock', '[reasoningStock] LLM 未配置，题库补充泵跳过')
       return
     }
-    console.info(`[reasoningStock] 补充开始：汤库 fresh ${soups}/${SOUP_LOW} · 题池 ${puzzles}/${PUZZLE_LOW}（目标各 ${SOUP_TARGET}/${PUZZLE_TARGET}）`)
+    logInfo('stock', `[reasoningStock] 补充开始：汤库 fresh ${soups}/${SOUP_LOW} · 题池 ${puzzles}/${PUZZLE_LOW}（目标各 ${SOUP_TARGET}/${PUZZLE_TARGET}）`)
     // 双路并行（260910 效率优化）：题池与汤库同时补；两路各自容错互不阻断（原语义保留）
     await Promise.all([
       pumpPuzzles().catch((e) => {
-        console.warn('[reasoningStock] 题池补充中断：', e)
+        logWarn('stock', '[reasoningStock] 题池补充中断：', e)
         // 通道类错误（过载/瞬断）→ 自愈重排，几分钟后自动再试；质量类失败等下次用户侧触发
         if (isTransientLlmError(e)) schedulePostponeReRun()
       }),
       pumpSoups().catch((e) => {
-        console.warn('[reasoningStock] 汤库补充中断：', e)
+        logWarn('stock', '[reasoningStock] 汤库补充中断：', e)
         if (isTransientLlmError(e)) schedulePostponeReRun()
       })
     ])
-    console.info(`[reasoningStock] 补充结束：汤库 fresh ${freshSoupCount()} · 题池 ${poolCount()}`)
+    logInfo('stock', `[reasoningStock] 补充结束：汤库 fresh ${freshSoupCount()} · 题池 ${poolCount()}`)
   } finally {
     pumping = false
   }

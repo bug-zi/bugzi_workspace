@@ -527,6 +527,24 @@ const api = {
     readImage: (root: string, filePath: string): Promise<string> =>
       ipcRenderer.invoke('explorer:readImage', root, filePath)
   },
+  logs: {
+    /** 游标分页拉日志（beforeId 不传 = 首页；返回新→旧） */
+    list: (q: import('../src/shared/types').LogListQuery): Promise<import('../src/shared/types').AppLogRow[]> =>
+      ipcRenderer.invoke('log:list', q),
+    /** 7 天窗口各来源计数（筛选下拉用） */
+    scopes: (): Promise<Record<import('../src/shared/types').LogScope, number>> =>
+      ipcRenderer.invoke('log:scopes'),
+    /** 清空全部（前端二次确认后调用） */
+    clear: (): Promise<number> => ipcRenderer.invoke('log:clear'),
+    /** 新日志推送（主进程 500ms 合批，多行一包），返回取消订阅 */
+    onAppended: (cb: (rows: import('../src/shared/types').AppLogRow[]) => void): (() => void) => {
+      const listener = (_e: unknown, rows: import('../src/shared/types').AppLogRow[]): void => {
+        cb(rows)
+      }
+      ipcRenderer.on('log:appended', listener)
+      return () => ipcRenderer.removeListener('log:appended', listener)
+    }
+  },
   wenbi: {
     /** 浮生记条目列表（created_at 倒序；零 AI 板块） */
     journalList: (): Promise<import('../src/shared/types').WenbiJournalRecord[]> =>
@@ -1229,6 +1247,8 @@ const api = {
     runInterpret: (paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number> =>
       ipcRenderer.invoke('agent:runInterpret', paperId, kind, force),
     importPaperPdf: (paperId: number): Promise<boolean> => ipcRenderer.invoke('agent:importPaperPdf', paperId),
+    /** 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null） */
+    paperFulltext: (id: number): Promise<string | null> => ipcRenderer.invoke('agent:paperFulltext', id),
     pendingCounts: (): Promise<{ discovered: number }> => ipcRenderer.invoke('agent:pendingCounts'),
     paperDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:paperDelete', id),
     discoverDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:discoverDelete', id),
