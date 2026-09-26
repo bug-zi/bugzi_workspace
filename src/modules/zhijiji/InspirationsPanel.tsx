@@ -1,4 +1,5 @@
-// 灵感泉模块（灵感泉 specs 全量）：四区看板、拖拽/菜单移动、标题编辑、丢弃
+// 灵感泉面板（260926 自生活模式独立模块迁入致知己，作为第一页签；原灵感泉 specs 全量功能不变）：
+// 四区看板、拖拽/菜单移动、标题编辑、丢弃
 // v2.0（specs §6）：来5条灵感 / AI 完善（预览追加）/ 问 AI 预填边栏
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { InspirationRecord } from '../../renderer/api'
@@ -17,11 +18,11 @@ const ZONES: { status: InspirationRecord['status']; label: string }[] = [
   { status: 'archive', label: '归档区' }
 ]
 
-export interface InspirationsModuleProps {
+export interface InspirationsPanelProps {
   onOpenAi: (prefill?: string) => void
 }
 
-export default function InspirationsModule(props: InspirationsModuleProps) {
+export default function InspirationsPanel(props: InspirationsPanelProps) {
   const { toast } = useToast()
   const [items, setItems] = useState<InspirationRecord[]>([])
   const [openDoc, setOpenDoc] = useState<InspirationRecord | null>(null)
@@ -75,8 +76,8 @@ export default function InspirationsModule(props: InspirationsModuleProps) {
     void load()
   }, [load])
 
-  // keep-alive：切回灵感泉时刷新（回收站恢复操作可能改动了列表）
-  useModuleActivated('inspirations', () => void load())
+  // keep-alive：切回致知己时刷新（回收站恢复操作可能改动了列表；260926 迁入致知己页签后监听 zhijiji）
+  useModuleActivated('zhijiji', () => void load())
 
   const itemsOf = (status: InspirationRecord['status']): InspirationRecord[] =>
     items.filter((i) => i.status === status).sort((a, b) => a.sort - b.sort || a.id - b.id)

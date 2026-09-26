@@ -50,10 +50,12 @@ export function saveDomain(
   return id
 }
 
-/** 删领域（配置数据硬删不入回收站）；发现箱条目断链保留 */
+/** 删领域（配置数据硬删不入回收站）；发现箱/正式文献/科普文章三表条目断链保留（归「未分类」） */
 export function deleteDomain(id: number): void {
   const d = getDb()
   d.prepare('UPDATE discover_items SET domain_id = NULL WHERE domain_id = ?').run(id)
+  d.prepare('UPDATE papers SET domain_id = NULL WHERE domain_id = ?').run(id)
+  d.prepare('UPDATE science_articles SET domain_id = NULL WHERE domain_id = ?').run(id)
   d.prepare('DELETE FROM agent_domains WHERE id = ?').run(id)
 }
 

@@ -8,6 +8,7 @@ import { getDb, nowIso, userDataDir } from '../../db/db'
 import { chatCompletion } from '../../ai/llm'
 import { isLlmConfigured } from '../../ai/services'
 import { mdWrite } from '../files'
+import { toSimplified } from '../t2s'
 import { registerTask, enqueue } from './queue'
 import type { TaskContext } from './queue'
 import { tokensSince } from './budget'
@@ -72,10 +73,10 @@ function metaOnlyHead(metaOnly: boolean): string {
 function headOf(article: ScienceArticleRow, label: string, metaOnly: boolean, glossary?: { en: string; zh: string }[]): string {
   const authors = article.authors.length ? ` ｜ ${article.authors.slice(0, 5).join(', ')}` : ''
   const date = article.date ?? (article.year != null ? String(article.year) : '')
-  let head = `# ${label}：${article.title}\n\n> 来源：${article.url}${authors}${date ? ` ｜ ${date}` : ''}`
+  let head = `# ${label}：${toSimplified(article.title)}\n\n> 来源：${article.url}${authors}${date ? ` ｜ ${date}` : ''}`
   head += metaOnlyHead(metaOnly)
   if (glossary && glossary.length > 0) {
-    head += `\n## 术语表\n\n${glossary.map((g) => `- ${g.en} → ${g.zh}`).join('\n')}\n`
+    head += `\n## 术语表\n\n${glossary.map((g) => `- ${g.en} → ${toSimplified(g.zh)}`).join('\n')}\n`
   }
   return head
 }
@@ -108,7 +109,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
       messages: [
         {
           role: 'user',
-          content: `你是科普解读助手。以下为一篇英文科普文章的摘要（全文缺失），请用中文完整转述其内容与要点，不要补充原文之外的信息。只输出 Markdown 正文。\n\n${wrapMaterial('文章摘要', text)}`
+          content: `你是科普解读助手。以下为一篇英文科普文章的摘要（全文缺失），请用简体中文完整转述其内容与要点（不要出现繁体字），不要补充原文之外的信息。只输出 Markdown 正文。\n\n${wrapMaterial('文章摘要', text)}`
         }
       ],
       temperature: 0.3,
@@ -116,7 +117,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
       signal: ctx.signal
     })
     delta()
-    mdWrite(rel, headOf(article, '解读', true) + '\n' + res.content.trim() + '\n')
+    mdWrite(rel, headOf(article, '解读', true) + '\n' + toSimplified(res.content.trim()) + '\n')
     upsertInterpretation('science_article', article.id, 'translation', rel, 0)
     mergeScienceConcepts(article.id, [])
     linkConcepts(article.id)
@@ -127,11 +128,12 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
   let glossary = glossaryOf(article)
   if (glossary.length === 0) {
     ensureAlive(ctx)
+    ctx.progress('提取术语表…')
     const res = await chatCompletion({
       messages: [
         {
           role: 'user',
-          content: `从以下科普文章材料中提取需要统一翻译的英文术语（概念、方法名、缩写、人名系统等），给出全文统一的中文定译。10-30 条，仅输出 JSON：{"glossary":[{"en":"原文","zh":"定译"}]}，不要其他文字。\n\n${wrapMaterial('文章材料', text.slice(0, GLOSSARY_INPUT_MAX))}`
+          content: `从以下科普文章材料中提取需要统一翻译的英文术语（概念、方法名、缩写、人名系统等），给出全文统一的简体中文定译。10-30 条，仅输出 JSON：{"glossary":[{"en":"原文","zh":"定译"}]}，不要其他文字。\n\n${wrapMaterial('文章材料', text.slice(0, GLOSSARY_INPUT_MAX))}`
         }
       ],
       temperature: 0.2,
@@ -147,6 +149,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
       }
       glossary = (parsed.glossary ?? [])
         .filter((g): g is { en: string; zh: string } => typeof g?.en === 'string' && typeof g?.zh === 'string')
+        .map((g) => ({ en: g.en, zh: toSimplified(g.zh) }))
         .slice(0, 40)
     } catch {
       console.warn(`[agent:s-translate] 《${article.title}》术语表生成失败，直接翻译`)
@@ -165,6 +168,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
   const glossaryJson = glossary.length ? JSON.stringify(glossary) : ''
   for (let i = done; i < chunks.length; i++) {
     ensureAlive(ctx)
+    ctx.progress(`翻译第 ${i + 1}/${chunks.length} 部分…`)
     const res = await chatCompletion({
       messages: [
         ...(glossaryJson
@@ -177,7 +181,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
           : []),
         {
           role: 'user',
-          content: `请将下面科普文章《${article.title}》的第 ${i + 1}/${chunks.length} 部分翻译成中文（通俗流畅，术语与全文统一；该部分可能从章节中间开始）。仅输出译文 Markdown，不要原文、不要解释。\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
+          content: `请将下面科普文章《${article.title}》的第 ${i + 1}/${chunks.length} 部分翻译成简体中文（全文使用简体字、不要出现繁体字；通俗流畅，术语与全文统一；该部分可能从章节中间开始）。仅输出译文 Markdown，不要原文、不要解释。\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
         }
       ],
       temperature: 0.2,
@@ -185,7 +189,7 @@ async function runScienceTranslate(article: ScienceArticleRow, ctx: TaskContext)
       signal: ctx.signal
     })
     delta()
-    md += `\n## 第 ${i + 1} 章\n\n${res.content.trim()}\n`
+    md += `\n## 第 ${i + 1} 章\n\n${toSimplified(res.content.trim())}\n`
     mdWrite(rel, md)
   }
   upsertInterpretation('science_article', article.id, 'translation', rel, 0)
@@ -206,10 +210,10 @@ function parseLightChunk(raw: string): LightChunk {
   const e = cleaned.lastIndexOf('}')
   if (s < 0 || e <= s) throw new Error('LLM 未返回 JSON')
   const parsed = JSON.parse(cleaned.slice(s, e + 1)) as { md?: unknown; concepts?: unknown }
-  const md = typeof parsed.md === 'string' ? parsed.md.trim() : ''
+  const md = typeof parsed.md === 'string' ? toSimplified(parsed.md.trim()) : ''
   if (!md) throw new Error('LLM 未返回加注正文')
   const concepts = Array.isArray(parsed.concepts)
-    ? parsed.concepts.filter((x): x is string => typeof x === 'string')
+    ? parsed.concepts.filter((x): x is string => typeof x === 'string').map((x) => toSimplified(x))
     : []
   return { md, concepts }
 }
@@ -220,11 +224,12 @@ async function runScienceLight(article: ScienceArticleRow, ctx: TaskContext): Pr
 
   if (metaOnly) {
     ensureAlive(ctx)
+    ctx.progress('基于摘要生成中…')
     const res = await chatCompletion({
       messages: [
         {
           role: 'user',
-          content: `你是中文科普编辑。以下为一篇科普文章的摘要（全文缺失），请在保留其全部信息点的前提下整理为结构清晰、要点提示齐全的加注版（不为摘要外的内容杜撰）。同时给出值得建词条/查词条的核心概念名（无则空数组）。仅输出 JSON：{"md":"加注版 Markdown","concepts":["术语"]}。\n\n${wrapMaterial('文章摘要', text)}`
+          content: `你是中文科普编辑。以下为一篇科普文章的摘要（全文缺失），请在保留其全部信息点的前提下整理为结构清晰、要点提示齐全的加注版（全文使用简体字、不要出现繁体字，不为摘要外的内容杜撰）。同时给出值得建词条/查词条的核心概念名（无则空数组）。仅输出 JSON：{"md":"加注版 Markdown","concepts":["术语"]}。\n\n${wrapMaterial('文章摘要', text)}`
         }
       ],
       temperature: 0.3,
@@ -252,6 +257,7 @@ async function runScienceLight(article: ScienceArticleRow, ctx: TaskContext): Pr
   const allConcepts: string[] = []
   for (let i = done; i < chunks.length; i++) {
     ensureAlive(ctx)
+    ctx.progress(`加注第 ${i + 1}/${chunks.length} 部分…`)
     const res = await chatCompletion({
       messages: [
         {
@@ -261,7 +267,7 @@ async function runScienceLight(article: ScienceArticleRow, ctx: TaskContext): Pr
 2. 结构导航：为内容加小节标题（用 ### 三级标题）与要点提示，层级清晰。
 3. 术语加注：专业术语首次出现处以括注给出一句简释。
 4. 概念内链：确定是概念/术语的词改为 Markdown 链接 [术语](wiki://术语)（URL 部分就是术语本身，不要编码），每部分最多标注 10 处，只标真正的概念词，宁缺毋滥。
-5. 仅输出 JSON：{"md":"该部分加注版全文","concepts":["该部分值得建词条/查词条的核心概念名，最多 10 个"]}\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
+5. 全文使用简体字呈现，不要出现繁体字。仅输出 JSON：{"md":"该部分加注版全文","concepts":["该部分值得建词条/查词条的核心概念名，最多 10 个"]}\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
         }
       ],
       temperature: 0.2,
@@ -293,11 +299,12 @@ async function runScienceLecture(article: ScienceArticleRow, ctx: TaskContext): 
   const done = sectionCount(md, /^## 第 \d+ 部分/gm)
   for (let i = done; i < chunks.length; i++) {
     ensureAlive(ctx)
+    ctx.progress(`精讲第 ${i + 1}/${chunks.length} 部分…`)
     const res = await chatCompletion({
       messages: [
         {
           role: 'user',
-          content: `你是科普精讲老师。以下是科普文章《${article.title}》的第 ${i + 1}/${chunks.length} 部分（可能从章节中间开始）。用中文重述讲解这部分内容：解释概念与论证思路，给出直觉解释与必要例子；与其他部分衔接处以「（承前）」「（后文将）」轻量带过。只输出 Markdown 正文（不要一级标题，不要开场白）。\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
+          content: `你是科普精讲老师。以下是科普文章《${article.title}》的第 ${i + 1}/${chunks.length} 部分（可能从章节中间开始）。用简体中文重述讲解这部分内容（不要出现繁体字）：解释概念与论证思路，给出直觉解释与必要例子；与其他部分衔接处以「（承前）」「（后文将）」轻量带过。只输出 Markdown 正文（不要一级标题，不要开场白）。\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
         }
       ],
       temperature: 0.3,
@@ -305,7 +312,7 @@ async function runScienceLecture(article: ScienceArticleRow, ctx: TaskContext): 
       signal: ctx.signal
     })
     delta()
-    md += `\n## 第 ${i + 1} 部分\n\n${res.content.trim()}\n`
+    md += `\n## 第 ${i + 1} 部分\n\n${toSimplified(res.content.trim())}\n`
     mdWrite(rel, md)
   }
   upsertInterpretation('science_article', article.id, 'lecture', rel, 0)

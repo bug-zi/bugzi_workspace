@@ -316,3 +316,16 @@
   font-size: 0.85em;
   padding: 18px 0;
 }
+
+/* 底部决策条（260926 查阅区）：阅读后自行「收藏 / 归档」，收藏居左、归档居右 */
+.pc-reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 22px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.pc-reader-actions .btn:last-child {
+  margin-left: auto;
+}

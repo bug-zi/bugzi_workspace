@@ -43,7 +43,7 @@ interface QueuedItem {
 const decls = new Map<string, TaskDecl>()
 const runners = new Map<string, Runner>()
 const queue: QueuedItem[] = []
-const running = new Map<number, { type: string; controller: AbortController }>()
+const running = new Map<number, { type: string; refId: number | null; progress: string | null; controller: AbortController }>()
 let dispatchPaused = false
 let stopped = false
 let notify: ((ev?: QueueEvent) => void) | null = null
@@ -113,7 +113,7 @@ function pump(): void {
 
 function execute(item: QueuedItem): void {
   const controller = new AbortController()
-  running.set(item.runId, { type: item.type, controller })
+  running.set(item.runId, { type: item.type, refId: item.refId, progress: null, controller })
   changed()
   const runner = runners.get(item.type)
   const decl = decls.get(item.type)
@@ -134,7 +134,13 @@ function execute(item: QueuedItem): void {
         /* 台账失败不炸任务 */
       }
     },
-    progress: () => {}
+    // 进度文本写 running 快照并触发广播（engine 500ms 节流合并），科普/任务面板据此显示
+    progress: (msg) => {
+      const r = running.get(item.runId)
+      if (!r || r.progress === msg) return
+      r.progress = msg
+      changed()
+    }
   }
   const settle = (status: 'done' | 'failed', error: string | null): void => {
     running.delete(item.runId)
@@ -203,8 +209,8 @@ export function startDispatch(): void {
   pump()
 }
 
-export function runningRuns(): { runId: number; type: string }[] {
-  return [...running.entries()].map(([runId, r]) => ({ runId, type: r.type }))
+export function runningRuns(): { runId: number; type: string; refId: number | null; progress: string | null }[] {
+  return [...running.entries()].map(([runId, r]) => ({ runId, type: r.type, refId: r.refId, progress: r.progress }))
 }
 
 /** 取消在跑任务（任务中心批次 C 用） */

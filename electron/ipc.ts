@@ -64,6 +64,7 @@ import {
   scienceRelated,
   deleteScienceArticle,
   retryScienceFetch,
+  readScienceFulltext,
   addScienceHighlight,
   removeScienceHighlight,
   scienceLinkManual,
@@ -149,6 +150,15 @@ import {
   blackjackSettle,
   blackjackGetStats
 } from './services/yule'
+import {
+  duiyiStart,
+  duiyiPlaying,
+  duiyiSaveState,
+  duiyiFinish,
+  duiyiList,
+  duiyiStats
+} from './services/duiyi'
+import type { DuiyiGameKey } from './services/duiyi'
 import { fushiNorm, GENRE_ZH } from '../src/shared/types'
 import type { FeihuaLine, FushiGenre, FushiResult } from '../src/shared/types'
 import type { TurtleSoupMaterial, WallPuzzleType } from './ai/services'
@@ -202,6 +212,7 @@ import {
   updatePodcastFeed,
   deletePodcastFeed,
   listPodcastEpisodes,
+  getViewCounts,
   setEpisodeRead,
   setEpisodeStarred,
   cancelTranscribe,
@@ -2446,10 +2457,12 @@ export function registerIpc(): void {
     deletePodcastFeed(id)
     return true
   })
-  /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部 / starred 收藏） */
+  /** 单集流（feedId=null 全部订阅；view=inbox 未读未转写完 / review 查阅区未读转写完成 / archived 已读归档 / all 全部 / starred 收藏） */
   ipcMain.handle('podcast:episodes', (_e, feedId: number | null, view?: PodcastEpisodeView) =>
     listPodcastEpisodes(feedId, view ?? 'all')
   )
+  /** 视图计数（260926 查阅区）：收件箱/查阅区 chips 徽标 */
+  ipcMain.handle('podcast:viewCounts', (_e, feedId: number | null) => getViewCounts(feedId))
   /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
   ipcMain.handle('podcast:markAllRead', (_e, feedId: number | null) => markAllEpisodesRead(feedId))
   ipcMain.handle('podcast:episodeRead', (_e, id: number, read: boolean) => {
@@ -2636,6 +2649,30 @@ export function registerIpc(): void {
     blackjackSettle(bet, result, net)
   )
   ipcMain.handle('yule:blackjack:stats', () => blackjackGetStats())
+
+  // ---------- 对弈社（2026-09-26 对弈社 design §5：五棋人机对弈留档） ----------
+  ipcMain.handle(
+    'duiyi:start',
+    (_e, game: DuiyiGameKey, difficulty: number, boardSpec: number | null, initialState: string) =>
+      duiyiStart(game, difficulty, boardSpec, initialState)
+  )
+  ipcMain.handle('duiyi:playing', (_e, game: DuiyiGameKey) => duiyiPlaying(game))
+  ipcMain.handle('duiyi:saveState', (_e, id: number, state: string, moveCount: number) => {
+    duiyiSaveState(id, state, moveCount)
+    return true
+  })
+  ipcMain.handle(
+    'duiyi:finish',
+    (_e, id: number, result: 'win' | 'loss' | 'draw', reason: string, record: string, moveCount: number, durationMs: number) =>
+      duiyiFinish(id, result, reason, record, moveCount, durationMs)
+  )
+  ipcMain.handle('duiyi:list', (_e, game?: DuiyiGameKey) => duiyiList(game))
+  ipcMain.handle('duiyi:stats', () => duiyiStats())
+  ipcMain.handle('duiyi:discard', (_e, id: number) => {
+    discardToRecycle('duiyi', id)
+    win()?.webContents.send('recycle:changed')
+    return true
+  })
 
   // ---------- 辩真阁 ----------
   ipcMain.handle('verify:list', () =>
@@ -4051,6 +4088,8 @@ export function registerIpc(): void {
     return true
   })
   ipcMain.handle('agent:scienceRetryFetch', (_e, id: number) => retryScienceFetch(id))
+  // 原文全文（260927：全文就绪文章在 App 内可读，不再只跳外部浏览器）
+  ipcMain.handle('agent:scienceFulltext', (_e, id: number) => readScienceFulltext(id))
   ipcMain.handle(
     'agent:scienceInterpret',
     (_e, id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean) =>
@@ -4106,9 +4145,11 @@ export function registerIpc(): void {
   })
   ipcMain.handle(
     'fushi:feihuaEnd',
-    (_e, keyword: string, daily: boolean, result: FushiResult, lines: FeihuaLine[]) => {
+    (_e, keyword: string, daily: boolean, result: FushiResult, lines: FeihuaLine[], startedDate?: string) => {
       if (!keyword.trim()) throw new Error('BAD_KEYWORD')
-      return saveFeihuaGame({ keyword: keyword.trim(), daily, result, lines })
+      // 存档恢复局的开局日（YYYY-MM-DD 校验，坏值回退今天 = 原口径）
+      const started = startedDate && /^\d{4}-\d{2}-\d{2}$/.test(startedDate) ? startedDate : undefined
+      return saveFeihuaGame({ keyword: keyword.trim(), daily, result, lines, startedDate: started })
     }
   )
   ipcMain.handle('fushi:doushiNew', (_e, jobId: string) => {

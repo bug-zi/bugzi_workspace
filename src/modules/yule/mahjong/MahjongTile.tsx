@@ -7,6 +7,7 @@ export default function MahjongTile({
   small,
   selected,
   joker,
+  latest,
   onClick
 }: {
   face?: TileId
@@ -14,6 +15,8 @@ export default function MahjongTile({
   small?: boolean
   selected?: boolean
   joker?: boolean
+  /** 牌河最新出牌高亮（优化建议区第58轮） */
+  latest?: boolean
   onClick?: () => void
 }) {
   if (back) {
@@ -35,6 +38,7 @@ export default function MahjongTile({
     small ? 'small' : '',
     selected ? ' selected' : '',
     joker ? ' joker' : '',
+    latest ? ' latest' : '',
     onClick ? ' clickable' : ''
   ]
     .join(' ')

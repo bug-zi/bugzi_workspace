@@ -50,13 +50,18 @@ export default function SciencePanel(props: SciencePanelProps) {
   const [candidates, setCandidates] = useState<DiscoverItemRow[]>([])
   const [delDiscover, setDelDiscover] = useState<DiscoverItemRow | null>(null)
   const [domains, setDomains] = useState<AgentDomainRow[]>([])
+  // 领域筛选（260927）：domainsAll=science 轨全量（tab 数据源，含停用），domains=启用中（海选下拉）
+  const [domainsAll, setDomainsAll] = useState<AgentDomainRow[]>([])
+  const [domainFilter, setDomainFilter] = useState<'all' | number | 'none'>('all')
   const [collectDomain, setCollectDomain] = useState<number | null>(null)
   const [collecting, setCollecting] = useState(false)
   const [sections, setSections] = useState<WikiSection[]>([])
   const [detail, setDetail] = useState<ScienceDetail | null>(null)
   const [mdVersion, setMdVersion] = useState(0)
-  const [showLecture, setShowLecture] = useState(false)
-  const [runningTypes, setRunningTypes] = useState<string[]>([])
+  /** 详情阅读视图：解读版 / 精讲 / 原文（260927：原文全文 App 内可读 + 生成中可看半成品） */
+  const [view, setView] = useState<'auto' | 'lecture' | 'source'>('auto')
+  const [sourceMd, setSourceMd] = useState<string | null>(null)
+  const [runningTasks, setRunningTasks] = useState<{ type: string; refId: number | null; progress: string | null }[]>([])
   const [delTarget, setDelTarget] = useState<ScienceArticleRow | null>(null)
   const [forceKind, setForceKind] = useState<'translate' | 'light' | 'lecture' | null>(null)
   const [createTarget, setCreateTarget] = useState<string | null>(null)
@@ -81,9 +86,11 @@ export default function SciencePanel(props: SciencePanelProps) {
   }, [])
   const loadDomains = useCallback((): void => {
     void window.api.agent.domains().then((ds) => {
-      const sci = ds.filter((d) => d.track === 'science' && d.enabled)
-      setDomains(sci)
-      setCollectDomain((cur) => cur ?? sci[0]?.id ?? null)
+      const sci = ds.filter((d) => d.track === 'science')
+      setDomainsAll(sci)
+      const sciEnabled = sci.filter((d) => d.enabled)
+      setDomains(sciEnabled)
+      setCollectDomain((cur) => cur ?? sciEnabled[0]?.id ?? null)
     })
   }, [])
 
@@ -118,7 +125,7 @@ export default function SciencePanel(props: SciencePanelProps) {
   // 实时刷新：海选完成 → 列表；解读产物完成/失败 → 列表 + 当前详情
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
-      setRunningTypes(s.runningTypes ?? [])
+      setRunningTasks(s.runningTasks ?? [])
       const ev = s.lastEvent
       if (!ev || ev.status === 'enqueued') return
       if (ev.type === 'collect_science') {
@@ -145,7 +152,7 @@ export default function SciencePanel(props: SciencePanelProps) {
     void window.api.science
       .detail(id)
       .then((d) => {
-        setShowLecture(false)
+        setView('auto')
         setDetail(d)
         setMdVersion((v) => v + 1)
       })
@@ -210,11 +217,53 @@ export default function SciencePanel(props: SciencePanelProps) {
   const interpOf = (kind: 'translation' | 'light' | 'lecture'): InterpretationRow | undefined =>
     detail?.interpretations.find((i) => i.kind === kind && i.status === 'done')
 
-  const busyOf = (taskType: string): boolean => runningTypes.includes(taskType)
+  const busyTaskOf = (taskType: string): { progress: string | null } | null =>
+    detail ? (runningTasks.find((t) => t.type === taskType && t.refId === detail.article.id) ?? null) : null
   const autoKind = detail ? autoKindOf(detail.article) : 'light'
   const autoRow = detail ? interpOf(autoKind) : undefined
   const lectureRow = detail ? interpOf('lecture') : undefined
-  const currentRow = detail ? (showLecture ? lectureRow : autoRow) : undefined
+  const autoBusy = busyTaskOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
+  const lectureBusy = busyTaskOf('science_lecture')
+  const busyHere = !!autoBusy || !!lectureBusy
+  const currentRow = view === 'source' ? undefined : view === 'lecture' ? lectureRow : autoRow
+
+  // 生成中实时围观：done 台账未落也按约定路径读半成品 md（产物逐部分落盘，读到的永远是已完成部分）
+  const autoPath =
+    detail
+      ? autoRow?.md_path ??
+        (autoBusy ? `md/interpretations/sa-${detail.article.id}-${autoKind === 'translation' ? 'translate' : 'light'}.md` : undefined)
+      : undefined
+  const lecturePath = detail
+    ? lectureRow?.md_path ?? (lectureBusy ? `md/interpretations/sa-${detail.article.id}-lecture.md` : undefined)
+    : undefined
+
+  // 生成中每 5s 刷新详情与 md（逐部分落盘实时可见；任务终态事件本身也会触发即时刷新）
+  useEffect(() => {
+    if (!busyHere) return
+    const t = setInterval(() => refreshDetail(), 5000)
+    return () => clearInterval(t)
+  }, [busyHere, refreshDetail])
+
+  // 原文视图：读全文缓存转纯文本 md（只读，无高光/内链）
+  useEffect(() => {
+    if (view !== 'source' || !detail) return
+    let cancelled = false
+    void window.api.science.fulltext(detail.article.id).then((raw) => {
+      if (cancelled) return
+      setSourceMd(
+        raw
+          ? `# 原文：${detail.article.title}\n\n${raw
+              .split(/\n+/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .join('\n\n')}`
+          : '（原文缓存缺失，可回到解读视图「重试抓取」后再试）'
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [view, detail?.article.id])
 
   /** 生成/重生成；done 且未 force 先弹确认 */
   const generate = (kind: 'translate' | 'light' | 'lecture', force = false): void => {
@@ -298,6 +347,21 @@ export default function SciencePanel(props: SciencePanelProps) {
     }
   }
 
+  // ---------- 领域筛选（260927：NULL 或不在现存领域集合的条目一律归「未分类」） ----------
+
+  const isUncategorized = (id: number | null): boolean => id == null || !domainsAll.some((d) => d.id === id)
+  const matchDomain = (id: number | null): boolean => {
+    if (domainFilter === 'all') return true
+    if (domainFilter === 'none') return isUncategorized(id)
+    return id === domainFilter
+  }
+  const candidatesFiltered = candidates.filter((it) => matchDomain(it.domain_id))
+  const articlesFiltered = articles.filter((a) => matchDomain(a.domain_id))
+  // tab 计数口径：当前子页签筛选前列表；发现箱/正式文章共用同一筛选状态
+  const scopeList: { domain_id: number | null }[] = subTab === 'discover' ? candidates : articles
+  const domainCount = (id: number): number => scopeList.filter((it) => it.domain_id === id).length
+  const uncategorizedCount = scopeList.filter((it) => isUncategorized(it.domain_id)).length
+
   // ---------- 阅读视图 footer ----------
 
   const footer = detail ? (
@@ -305,49 +369,47 @@ export default function SciencePanel(props: SciencePanelProps) {
       <div className="sci-footer-row">
         <button
           className="btn"
-          disabled={busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light')}
+          title={autoBusy ? '逐部分生成中；点击查看已生成的部分（每 5 秒自动刷新）' : undefined}
           onClick={() => {
-            if (busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light')) return
-            if (autoRow?.md_path) {
-              setShowLecture(false)
+            if (!detail) return
+            if (autoBusy || autoRow?.md_path) {
+              setView('auto')
               setMdVersion((v) => v + 1)
             } else {
               generate(autoKind === 'translation' ? 'translate' : 'light')
             }
           }}
         >
-          <span
-            className={`material-symbols-outlined${busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light') ? ' spin' : ''}`}
-          >
-            {busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
-              ? 'progress_activity'
-              : autoRow
-                ? 'auto_stories'
-                : 'auto_awesome'}
+          <span className={`material-symbols-outlined${autoBusy ? ' spin' : ''}`}>
+            {autoBusy ? 'progress_activity' : autoRow ? 'auto_stories' : 'auto_awesome'}
           </span>
-          {busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
-            ? '解读生成中…'
+          {autoBusy
+            ? `解读生成中${autoBusy.progress ? ` · ${autoBusy.progress}` : ''}`
             : autoRow
               ? '查看解读版'
               : '生成解读版'}
         </button>
         <button
           className="btn"
-          disabled={busyOf('science_lecture')}
+          title={lectureBusy ? '逐部分生成中；点击查看已生成的部分（每 5 秒自动刷新）' : undefined}
           onClick={() => {
-            if (busyOf('science_lecture')) return
-            if (lectureRow?.md_path) {
-              setShowLecture(true)
+            if (!detail) return
+            if (lectureBusy || lectureRow?.md_path) {
+              setView('lecture')
               setMdVersion((v) => v + 1)
             } else {
               generate('lecture')
             }
           }}
         >
-          <span className={`material-symbols-outlined${busyOf('science_lecture') ? ' spin' : ''}`}>
-            {busyOf('science_lecture') ? 'progress_activity' : 'school'}
+          <span className={`material-symbols-outlined${lectureBusy ? ' spin' : ''}`}>
+            {lectureBusy ? 'progress_activity' : 'school'}
           </span>
-          {busyOf('science_lecture') ? '精讲生成中…' : lectureRow ? '查看精讲' : '生成精讲'}
+          {lectureBusy
+            ? `精讲生成中${lectureBusy.progress ? ` · ${lectureBusy.progress}` : ''}`
+            : lectureRow
+              ? '查看精讲'
+              : '生成精讲'}
         </button>
         <button
           className="btn"
@@ -362,7 +424,26 @@ export default function SciencePanel(props: SciencePanelProps) {
           追问
         </button>
         <span style={{ flex: 1 }} />
-        {detail.article.status === 'meta_only' ? (
+        {detail.article.status === 'ready' ? (
+          <>
+            <button
+              className="btn"
+              onClick={() => setView((v) => (v === 'source' ? 'auto' : 'source'))}
+              title="在 App 内阅读原文全文（再点一次回到解读）"
+            >
+              <span className="material-symbols-outlined">{view === 'source' ? 'menu_book' : 'article'}</span>
+              {view === 'source' ? '回解读' : '原文'}
+            </button>
+            <button
+              className="btn"
+              onClick={() => detail && void window.api.shell.openExternal(detail.article.url)}
+              title={`网页原链：${detail.article.url}`}
+            >
+              <span className="material-symbols-outlined">open_in_new</span>
+              网页原链
+            </button>
+          </>
+        ) : (
           <button
             className="btn"
             onClick={() => {
@@ -376,15 +457,6 @@ export default function SciencePanel(props: SciencePanelProps) {
           >
             <span className="material-symbols-outlined">cloud_download</span>
             重试抓取
-          </button>
-        ) : (
-          <button
-            className="btn"
-            onClick={() => detail && void window.api.shell.openExternal(detail.article.url)}
-            title={detail.article.source}
-          >
-            <span className="material-symbols-outlined">open_in_new</span>
-            原文出处
           </button>
         )}
         {detail.article.concepts.length + detail.related.length > 0 && (
@@ -452,7 +524,7 @@ export default function SciencePanel(props: SciencePanelProps) {
     </div>
   ) : null
 
-  const readingContent = currentRow?.md_path
+  const readingContent = view === 'lecture' ? lecturePath : autoPath
   const langLabel = detail?.article.language === 'en' ? '英文' : '中文'
   const metaMd = detail
     ? `# ${detail.article.title}\n\n> ${langLabel}${detail.article.domain_name ? ' · ' + detail.article.domain_name : ''}${detail.article.date ? ' · ' + detail.article.date : detail.article.year != null ? ' · ' + detail.article.year : ''} · ${detail.article.source}\n\n${detail.article.summary || '（暂无摘要）'}\n\n${
@@ -513,18 +585,46 @@ export default function SciencePanel(props: SciencePanelProps) {
             正式文章{articles.length > 0 ? `（${articles.length}）` : ''}
           </button>
         </div>
+        {/* 领域筛选行（260927）：两子页签共用，切换子页签保持所选领域 */}
+        {scopeList.length > 0 && (
+          <div className="recycle-tabs domain-tabs">
+            <button
+              className={`recycle-tab${domainFilter === 'all' ? ' active' : ''}`}
+              onClick={() => setDomainFilter('all')}
+            >
+              全部（{scopeList.length}）
+            </button>
+            {domainsAll.map((d) => (
+              <button
+                key={d.id}
+                className={`recycle-tab${domainFilter === d.id ? ' active' : ''}`}
+                onClick={() => setDomainFilter(d.id)}
+              >
+                {d.name}（{domainCount(d.id)}）
+              </button>
+            ))}
+            <button
+              className={`recycle-tab${domainFilter === 'none' ? ' active' : ''}`}
+              onClick={() => setDomainFilter('none')}
+            >
+              未分类（{uncategorizedCount}）
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 发现箱（科普候选） */}
       {subTab === 'discover' && (
         <div className="sci-list">
-          {candidates.length === 0 && (
+          {candidatesFiltered.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">inbox</span>
-              发现箱空空的——点「跑一轮科普海选」，AI 找到的候选会先出现在这里，由你决定是否入库
+              {domainFilter === 'all'
+                ? '发现箱空空的——点「跑一轮科普海选」，AI 找到的候选会先出现在这里，由你决定是否入库'
+                : '该领域下暂无候选'}
             </div>
           )}
-          {candidates.map((it) => (
+          {candidatesFiltered.map((it) => (
             <div className="sci-item" key={`d-${it.id}`}>
               <div className="row-main">
                 <div className="row-title">{it.title}</div>
@@ -554,13 +654,15 @@ export default function SciencePanel(props: SciencePanelProps) {
       {/* 正式文章（转正入库，自动解读） */}
       {subTab === 'articles' && (
         <div className="sci-list">
-          {articles.length === 0 && (
+          {articlesFiltered.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">science</span>
-              还没有科普文章——在发现箱「接受」候选后，文章会入库到这里并自动解读
+              {domainFilter === 'all'
+                ? '还没有科普文章——在发现箱「接受」候选后，文章会入库到这里并自动解读'
+                : '该领域下暂无文章'}
             </div>
           )}
-          {articles.map((a) => (
+          {articlesFiltered.map((a) => (
           <div
             className="sci-item"
             key={a.id}
@@ -568,7 +670,7 @@ export default function SciencePanel(props: SciencePanelProps) {
               void window.api.science
                 .detail(a.id)
                 .then((d) => {
-                  setShowLecture(false)
+                  setView('auto')
                   setDetail(d)
                   setMdVersion((v) => v + 1)
                 })
@@ -599,16 +701,25 @@ export default function SciencePanel(props: SciencePanelProps) {
         </div>
       )}
 
-      {/* 解读阅读视图 */}
+      {/* 解读/原文阅读视图 */}
       {detail && (
         <MdDialog
-          key={`${detail.article.id}-${mdVersion}-${showLecture ? 'lec' : 'auto'}`}
+          key={`${detail.article.id}-${mdVersion}-${view}`}
           open
           title={detail.article.title}
-          titleTag={[langLabel, currentRow ? undefined : '待解读'].filter((x): x is string => !!x)}
+          titleTag={[
+            langLabel,
+            view === 'source' ? '原文' : currentRow ? undefined : busyHere ? '生成中' : '待解读'
+          ].filter((x): x is string => !!x)}
           subtitle={`${detail.article.domain_name ?? ''}${detail.article.domain_name ? ' ｜ ' : ''}${detail.article.source}`}
-          filePath={readingContent ?? undefined}
-          content={readingContent ? undefined : metaMd}
+          filePath={view === 'source' ? undefined : readingContent ?? undefined}
+          content={
+            view === 'source'
+              ? sourceMd ?? '（原文加载中…）'
+              : readingContent
+                ? undefined
+                : metaMd
+          }
           readOnly
           selectionActions={
             currentRow

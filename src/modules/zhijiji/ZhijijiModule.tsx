@@ -12,6 +12,7 @@ import { useModuleActivated } from '../../hooks/useModuleActivated'
 import { useModuleNavigate } from '../../hooks/useModuleNavigate'
 import { SettingsKeys } from '../../shared/types'
 import TwelvePanel from './TwelvePanel'
+import InspirationsPanel from './InspirationsPanel'
 
 export interface ZhijijiModuleProps {
   onNavigateToProfile: () => void
@@ -61,8 +62,8 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   // 删除确认 / LLM 未配置
   const [discardTarget, setDiscardTarget] = useState<ZhijijiQuestion | null>(null)
   const [needConfig, setNeedConfig] = useState(false)
-  // 三 tab（2026-09-12 设计 §二）：沉淀 = 原问题+版本区；tab 不持久化（万象库/推理角惯例）
-  const [tab, setTab] = useState<'core' | 'twelve'>('core')
+  // 三页签（2026-09-12 设计 §二；260926 灵感泉迁入为第一页签）：灵感泉｜沉淀｜十二问题；tab 不持久化（万象库/推理角惯例）
+  const [tab, setTab] = useState<'inspirations' | 'core' | 'twelve'>('core')
   // 问题分级（优化建议区 260912）：AI 出题候选 / 补评 / 改星菜单 / 星级筛选
   const [suggestions, setSuggestions] = useState<{ title: string; stars: number; note: string }[] | null>(
     null
@@ -72,7 +73,7 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
   const [rateJob, setRateJob] = useState<string | null>(null)
   const [starMenu, setStarMenu] = useState<{ q: ZhijijiQuestion; anchor: HTMLElement } | null>(null)
   const [starFilter, setStarFilter] = useState<'all' | '4plus' | '5' | 'unrated'>('all')
-  const switchTab = (t: 'core' | 'twelve'): void => {
+  const switchTab = (t: 'inspirations' | 'core' | 'twelve'): void => {
     setTab(t)
     if (t !== 'core') {
       setViewQ(null)
@@ -80,9 +81,10 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
     }
   }
 
-  // 总导览「十二问题」数字块深链（target = 'twelve' → 直切该页签）
+  // 总导览「十二问题」数字块深链（target = 'twelve' → 直切该页签）；灵感泉页签同款扩展位（260926）
   useModuleNavigate('zhijiji', (target) => {
     if (target === 'twelve') switchTab('twelve')
+    if (target === 'inspirations') switchTab('inspirations')
   })
 
   const curVersion = versions.find((v) => v.id === curVerId) ?? null
@@ -324,8 +326,15 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         )}
       </div>
 
-      {/* 双 tab：沉淀 ｜ 十二问题（260924 预言家拆入答疑店） */}
+      {/* 三页签 keep-alive（260926 灵感泉迁入；照娱乐城容器模式——切页签不打断生成中的 AI 任务）：
+          灵感泉｜沉淀｜十二问题 */}
       <div className="recycle-tabs">
+        <button
+          className={`recycle-tab${tab === 'inspirations' ? ' active' : ''}`}
+          onClick={() => switchTab('inspirations')}
+        >
+          灵感泉
+        </button>
         <button className={`recycle-tab${tab === 'core' ? ' active' : ''}`} onClick={() => switchTab('core')}>
           沉淀
         </button>
@@ -334,8 +343,19 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         </button>
       </div>
 
-      {tab === 'core' && (
-        <>
+      {/* 灵感泉页签（260926 自生活模式迁入，原独立模块全量功能不变） */}
+      <div
+        className={tab === 'inspirations' ? 'module-live' : 'module-live module-hidden'}
+        aria-hidden={tab !== 'inspirations'}
+      >
+        <InspirationsPanel onOpenAi={props.onOpenAi} />
+      </div>
+
+      <div
+        className={tab === 'core' ? 'module-live' : 'module-live module-hidden'}
+        aria-hidden={tab !== 'core'}
+      >
+      <>
       <section className="zone">
         <div className="recycle-tabs" style={{ padding: '10px 12px 0' }}>
           {(
@@ -625,12 +645,15 @@ export default function ZhijijiModule(props: ZhijijiModuleProps) {
         }}
         onCancel={() => setNeedConfig(false)}
       />
-        </>
-      )}
+      </>
+      </div>
 
-      {tab === 'twelve' && (
+      <div
+        className={tab === 'twelve' ? 'module-live' : 'module-live module-hidden'}
+        aria-hidden={tab !== 'twelve'}
+      >
         <TwelvePanel onOpenAi={props.onOpenAi} onNavigateToProfile={props.onNavigateToProfile} />
-      )}
+      </div>
     </div>
   )
 }

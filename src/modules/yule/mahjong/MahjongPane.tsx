@@ -102,7 +102,7 @@ export default function MahjongPane() {
   const remaining = st.replIdx - st.drawIdx + 1
   const flowers = (seat: number) => st.players[seat].flowers
   const melds = (seat: number) => st.players[seat].melds
-  const handBacks = (seat: number) => st.players[seat].hand.length
+  const handCount = (seat: number) => st.players[seat].hand.length
 
   const seatCard = (seat: 1 | 2 | 3) => (
     <div className={`mj-seat${st.turn === seat && st.phase === 'playing' ? ' acting' : ''}`}>
@@ -111,12 +111,10 @@ export default function MahjongPane() {
         <span className="mj-seat-persona">{engine.PERSONA_LABEL[st.players[seat].persona!]}</span>
         {st.dealerSeat === seat && <span className="mj-dealer-tag">庄</span>}
       </div>
+      {/* 对手隐藏手牌不展示（优化建议区第58轮），只显张数 */}
       <div className="mj-seat-row">
         <span className="mj-seat-row-label">牌</span>
-        {Array.from({ length: Math.min(handBacks(seat), 17) }, (_, i) => (
-          <MahjongTile key={i} back small />
-        ))}
-        <span className="mj-seat-persona">×{handBacks(seat)}</span>
+        <span className="mj-seat-hand-count">手牌 ×{handCount(seat)}</span>
       </div>
       {melds(seat).length > 0 && (
         <div className="mj-seat-row">
@@ -161,15 +159,27 @@ export default function MahjongPane() {
       <div className="mj-mid-row">
         {seatCard(3)}
         <div className="mj-river">
-          <span className="mj-river-title">牌河（各家最近打出的牌）</span>
-          <div className="mj-river-line">
-            {[3, 2, 1].map((seat) => {
-              const last = st.players[seat].discards[st.players[seat].discards.length - 1]
-              return last ? <MahjongTile key={seat} face={last} small /> : null
-            })}
+          <div className="mj-river-head">
+            <span className="mj-river-title">牌河 · 各家历史出牌（最新高亮）</span>
             {st.claimTile && st.phase === 'playing' && (
               <span className="mj-claim-mark">待响应 {tileText(st.claimTile)}</span>
             )}
+          </div>
+          <div className="mj-river-seats">
+            {[3, 2, 1].map((seat) => {
+              const ds = st.players[seat].discards
+              return (
+                <div key={seat} className="mj-river-seat">
+                  <span className="mj-river-seat-name">{st.players[seat].name}</span>
+                  <div className="mj-river-line">
+                    {ds.map((t, i) => (
+                      <MahjongTile key={i} face={t} small latest={i === ds.length - 1} />
+                    ))}
+                    {ds.length === 0 && <span className="mj-river-empty">未出牌</span>}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
         {seatCard(1)}
@@ -298,8 +308,8 @@ export default function MahjongPane() {
 
       <div className="mj-feed">
         {[...st.feed]
+          .slice(-6)
           .reverse()
-          .slice(0, 60)
           .map((line, i) => (
             <p key={`${i}-${line}`} className={`mj-feed-line${line.startsWith('——') ? ' mark' : ''}`}>
               {line}

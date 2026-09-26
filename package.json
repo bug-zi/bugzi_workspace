@@ -36,6 +36,7 @@
     "marked": "^18.0.11",
     "material-symbols": "^0.47.0",
     "node-pty": "^1.1.0",
+    "opencc-js": "^1.4.2",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

@@ -19,6 +19,7 @@ import { applyDataDirAtStartup } from './services/storage'
 import { killAllTerminals } from './services/terminal'
 import './services/agent/bootstrap'
 import { startAgent } from './services/agent/engine'
+import { ensureScienceSimplified } from './services/agent/scienceSimplify'
 import { createTray } from './services/tray'
 import { initUpdater } from './services/updater'
 import { getSetting } from './db/settings'
@@ -100,6 +101,8 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     registerBzresProtocol()
     initDb()
+    // 科普存量繁→简一次性迁移（260927）：settings 旗标守卫、内部自 catch，失败下次启动重试
+    ensureScienceSimplified()
     registerIpc()
     startSchedulers()
     // 少数派图片 CDN 空 Referer 防盗链（问题疑惑区第12轮）：cdnfile/cdn.sspai.com 对无 Referer 请求一律 403，

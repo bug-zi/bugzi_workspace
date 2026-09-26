@@ -1617,6 +1617,42 @@ function migrate(): void {
     d.exec('ALTER TABLE podcast_episodes ADD COLUMN starred_at TEXT')
     d.exec('PRAGMA user_version = 61')
   }
+
+  if (version < 62) {
+    // v62：对弈社（2026-09-26-对弈社-design.md §4）——五种棋人机对弈单表留档：
+    // game 棋种（xiangqi|chess|shogi|gomoku|go）、每棋种至多一局 playing（开新局顶掉旧局置 abandoned）；
+    // state 进行中快照 JSON（中断续玩）、record 终局棋谱 JSON；战绩读时聚合不建汇总表。
+    d.exec(`CREATE TABLE duiyi_games (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game TEXT NOT NULL,
+      status TEXT NOT NULL,
+      difficulty INTEGER NOT NULL DEFAULT 2,
+      board_spec INTEGER,
+      result TEXT,
+      reason TEXT,
+      move_count INTEGER NOT NULL DEFAULT 0,
+      state TEXT,
+      record TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      duration_ms INTEGER,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    )`)
+    d.exec("CREATE INDEX idx_duiyi_games_game ON duiyi_games(game, status, deleted_at)")
+    d.exec('PRAGMA user_version = 62')
+  }
+
+  if (version < 63) {
+    // v63：论文库正式文献领域筛选（2026-09-27-发现箱与正式区领域筛选-design.md §二）——
+    // papers 补 domain_id（转正时自发现条目复制，存量按 discovery_id 回填；发现条目已删的
+    // 留 NULL 归「未分类」），删领域断链扩三表见 domains.ts。
+    d.exec('ALTER TABLE papers ADD COLUMN domain_id INTEGER')
+    d.prepare(
+      'UPDATE papers SET domain_id = (SELECT di.domain_id FROM discover_items di WHERE di.id = papers.discovery_id) WHERE domain_id IS NULL AND discovery_id IS NOT NULL'
+    ).run()
+    d.exec('PRAGMA user_version = 63')
+  }
 }
 
 // ---------- 通用工具 ----------

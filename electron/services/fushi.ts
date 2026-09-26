@@ -67,26 +67,30 @@ export function fushiDailyView(): FushiDailyView {
   return { date: row.date, keyword: row.keyword, done: !!row.done, streak: fushiStreak(), todayGameId: game?.id ?? null }
 }
 
-/** 飞花令终局落库：INSERT → 写留档 md → 回填 md_path；daily 局回写当日 done=1 */
+/** 飞花令终局落库：INSERT → 写留档 md → 回填 md_path；daily 局回写 done=1。
+ *  startedDate（优化建议区第58轮）= 存档恢复局的开局日：留档 created_at 与打卡都归开局日，
+ *  跨日完成不误标今天（todayGameId 按 substr(created_at,1,10) 查当日局，日期归位才不串局） */
 export function saveFeihuaGame(input: {
   keyword: string
   daily: boolean
   result: FushiResult
   lines: FeihuaLine[]
+  startedDate?: string
 }): number {
   const d = getDb()
+  const createdAt = input.startedDate ? `${input.startedDate}T${localNowIso().slice(11)}` : localNowIso()
   const r = d
     .prepare(
       "INSERT INTO fushi_games (type, topic, genre, result, rounds, daily, md_path, created_at) VALUES ('feihua', ?, NULL, ?, ?, ?, '', ?)"
     )
-    .run(input.keyword, input.result, input.lines.length, input.daily ? 1 : 0, localNowIso())
+    .run(input.keyword, input.result, input.lines.length, input.daily ? 1 : 0, createdAt)
   const id = Number(r.lastInsertRowid)
   const md = [
     `# 飞花令 ·「${input.keyword}」`,
     '',
     `- 结果：**${input.result === 'win' ? '我胜' : '我负'}**（共 ${input.lines.length} 句）`,
     `- 类型：${input.daily ? '每日一令' : '自由练'}`,
-    `- 时间：${localNowIso().slice(0, 16).replace('T', ' ')}`,
+    `- 时间：${createdAt.slice(0, 16).replace('T', ' ')}`,
     '',
     '## 对局实录',
     '',
@@ -101,7 +105,7 @@ export function saveFeihuaGame(input: {
   mdWrite(path, md)
   d.prepare('UPDATE fushi_games SET md_path = ? WHERE id = ?').run(path, id)
   if (input.daily) {
-    d.prepare('UPDATE fushi_daily SET done = 1 WHERE date = ?').run(localDateStr())
+    d.prepare('UPDATE fushi_daily SET done = 1 WHERE date = ?').run(input.startedDate ?? localDateStr())
   }
   return id
 }

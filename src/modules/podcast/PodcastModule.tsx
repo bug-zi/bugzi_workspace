@@ -87,6 +87,8 @@ export default function PodcastModule(props: Props) {
   const [asrConfigOpen, setAsrConfigOpen] = useState(false)
   // 订阅筛选下拉锚定（ActionMenu anchorEl；点项时 ActionMenu 先 onClose 再 onClick，自动收起）
   const [filterMenuAnchor, setFilterMenuAnchor] = useState<HTMLElement | null>(null)
+  // 收件箱/查阅区计数（260926 查阅区：未读未收藏按转写完成与否拆分）
+  const [counts, setCounts] = useState<{ inbox: number; review: number }>({ inbox: 0, review: 0 })
 
   /** 需 ASR 的转写触发前校验：配置齐备返回 true，否则弹「去配置」返回 false（不入队空跑） */
   const ensureAsrOrDialog = async (): Promise<boolean> => {
@@ -115,9 +117,17 @@ export default function PodcastModule(props: Props) {
     []
   )
 
+  const loadCounts = useCallback(async (filter: number | null): Promise<void> => {
+    try {
+      setCounts(await window.api.podcast.viewCounts(filter))
+    } catch {
+      /* 静默 */
+    }
+  }, [])
+
   const load = useCallback(async (): Promise<void> => {
-    await Promise.all([loadFeeds(), loadEpisodes(feedFilter, view)])
-  }, [loadFeeds, loadEpisodes, feedFilter, view])
+    await Promise.all([loadFeeds(), loadEpisodes(feedFilter, view), loadCounts(feedFilter)])
+  }, [loadFeeds, loadEpisodes, loadCounts, feedFilter, view])
 
   /** 进模块/手动刷新：拉全部源新集（auto_transcribe=1 的新集自动入队）+ 双列表刷新 */
   const refresh = useCallback(async (): Promise<void> => {
@@ -241,7 +251,6 @@ export default function PodcastModule(props: Props) {
   }
 
   const filterFeed = feeds.find((f) => f.id === feedFilter) ?? null
-  const inboxTotal = feeds.reduce((n, f) => n + f.unread, 0)
 
   // ----- 阅读视图（主栏整体切换） -----
   if (readingId != null) {
@@ -289,9 +298,16 @@ export default function PodcastModule(props: Props) {
               <button
                 className={`pc-filter-chip${view === 'inbox' ? ' active' : ''}`}
                 onClick={() => setView('inbox')}
-                title="未读单集（标已读即归档出流）"
+                title="新到的单集（转写完成后自动移入查阅区）"
               >
-                收件箱{inboxTotal > 0 ? ` ${inboxTotal}` : ''}
+                收件箱{counts.inbox > 0 ? ` ${counts.inbox}` : ''}
+              </button>
+              <button
+                className={`pc-filter-chip${view === 'review' ? ' active' : ''}`}
+                onClick={() => setView('review')}
+                title="转写完成、等你来读——读后自行收藏或归档"
+              >
+                查阅区{counts.review > 0 ? ` ${counts.review}` : ''}
               </button>
               <button
                 className={`pc-filter-chip${view === 'archived' ? ' active' : ''}`}
@@ -309,14 +325,14 @@ export default function PodcastModule(props: Props) {
               >
                 收藏
               </button>
-              {view === 'inbox' && inboxTotal > 0 && (
+              {(view === 'inbox' || view === 'review') && counts.inbox + counts.review > 0 && (
                 <button
                   className="btn"
                   onClick={() => void doMarkAllRead()}
-                  title="全部标已读（归档到「已归档」，可随时「再看看」恢复）"
+                  title="全部标已读（收件箱与查阅区一起归档，可随时「再看看」恢复）"
                 >
                   <span className="material-symbols-outlined">done_all</span>
-                  清空收件箱
+                  全部标已读
                 </button>
               )}
             </div>
@@ -361,12 +377,14 @@ export default function PodcastModule(props: Props) {
                 {feeds.length === 0
                   ? '还没有订阅，点「添加订阅」开始'
                   : view === 'inbox'
-                    ? '收件箱已清空——新到的单集会自动进这里'
-                    : view === 'archived'
-                      ? '还没有归档的单集（标已读即归档）'
-                      : view === 'starred'
-                        ? '还没有收藏的单集——点单集行内的星标收藏'
-                        : feedFilter == null
+                    ? '收件箱已清空——新到的单集会自动进这里（转写完成移入查阅区）'
+                    : view === 'review'
+                      ? '查阅区是空的——单集转写完成后会出现在这里，点开阅读'
+                      : view === 'archived'
+                        ? '还没有归档的单集（阅读后点「归档」，或「全部标已读」）'
+                        : view === 'starred'
+                          ? '还没有收藏的单集——点单集行内的星标收藏'
+                          : feedFilter == null
                           ? '暂无单集'
                           : `「${filterFeed?.title ?? ''}」暂无单集`}
               </div>

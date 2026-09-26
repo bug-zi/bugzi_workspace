@@ -5,8 +5,21 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import MdDialog from '../../components/MdDialog'
 import { useToast } from '../../components/Toast'
 import FeihuaGame, { type FeihuaFinished } from './FeihuaGame'
-import { fushiNorm, FEIHUA_KEYWORDS } from '../../shared/types'
+import { fushiNorm, FEIHUA_KEYWORDS, SettingsKeys } from '../../shared/types'
 import type { FeihuaLine, FushiDailyView, FushiGameRow } from '../../shared/types'
+
+/** 本地日期 YYYY-MM-DD（与主进程 localDateStr 同口径，存档开局日/跨日判定用） */
+function todayStr(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+interface OngoingGame {
+  keyword: string
+  daily: boolean
+  startedDate: string
+}
 
 interface Props {
   onNeedConfig: () => void
@@ -16,11 +29,13 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
   const { toast } = useToast()
   const [daily, setDaily] = useState<FushiDailyView | null>(null)
   const [history, setHistory] = useState<FushiGameRow[]>([])
-  const [playing, setPlaying] = useState<{ keyword: string; daily: boolean } | null>(null)
+  const [playing, setPlaying] = useState<OngoingGame | null>(null)
   const [lines, setLines] = useState<FeihuaLine[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [finished, setFinished] = useState<FeihuaFinished | null>(null)
+  const [restored, setRestored] = useState(false)
+  const [dropOpen, setDropOpen] = useState(false)
   const [freeOpen, setFreeOpen] = useState(false)
   const [giveUpOpen, setGiveUpOpen] = useState(false)
   const [delQ, setDelQ] = useState<FushiGameRow | null>(null)
@@ -38,21 +53,74 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
     void load()
   }, [load])
 
+  // 存档恢复（仅挂载时一次；优化建议区第58轮）：有进行中对局即直接回到对局画面
+  useEffect(() => {
+    void (async () => {
+      const raw = await window.api.settings.get(SettingsKeys.FushiOngoing).catch(() => null)
+      if (!raw) return
+      const clear = (): void => {
+        void window.api.settings.set(SettingsKeys.FushiOngoing, '').catch(() => {})
+      }
+      try {
+        const o = JSON.parse(raw) as Partial<OngoingGame> & { lines?: unknown }
+        if (
+          typeof o.keyword === 'string' &&
+          o.keyword.trim() &&
+          typeof o.daily === 'boolean' &&
+          typeof o.startedDate === 'string' &&
+          /^\d{4}-\d{2}-\d{2}$/.test(o.startedDate) &&
+          Array.isArray(o.lines)
+        ) {
+          const savedLines = (o.lines as FeihuaLine[]).filter(
+            (l) => l && (l.side === 'me' || l.side === 'ai') && typeof l.line === 'string' && l.line.trim()
+          )
+          setPlaying({ keyword: o.keyword, daily: o.daily, startedDate: o.startedDate })
+          setLines(savedLines)
+          setRestored(true)
+        } else {
+          clear()
+        }
+      } catch {
+        clear()
+      }
+    })()
+  }, [])
+
+  /** 进行中对局写存档（我方出句后、AI 回复后各写一次；失败静默——存档尽力而为） */
+  const persistGame = (p: OngoingGame, ls: FeihuaLine[]): void => {
+    void window.api.settings
+      .set(
+        SettingsKeys.FushiOngoing,
+        JSON.stringify({ keyword: p.keyword, daily: p.daily, lines: ls, startedDate: p.startedDate, savedAt: new Date().toISOString() })
+      )
+      .catch(() => {})
+  }
+
+  /** 清存档（终局落库成功 / 放弃此局） */
+  const clearGame = (): void => {
+    void window.api.settings.set(SettingsKeys.FushiOngoing, '').catch(() => {})
+  }
+
   const usedNorms = (): Set<string> => new Set(lines.map((l) => fushiNorm(l.line)))
 
   const startGame = (keyword: string, isDaily: boolean): void => {
     setLines([])
     setError('')
     setFinished(null)
-    setPlaying({ keyword, daily: isDaily })
+    setRestored(false)
+    const p: OngoingGame = { keyword, daily: isDaily, startedDate: todayStr() }
+    setPlaying(p)
+    persistGame(p, [])
   }
 
-  const endGame = async (result: 'win' | 'lose'): Promise<void> => {
+  const endGame = async (result: 'win' | 'lose', ls: FeihuaLine[] = lines): Promise<void> => {
     if (!playing) return
     try {
-      const gameId = await window.api.fushi.feihuaEnd(playing.keyword, playing.daily, result, lines)
+      const gameId = await window.api.fushi.feihuaEnd(playing.keyword, playing.daily, result, ls, playing.startedDate)
+      clearGame()
       setFinished({ result, gameId })
       setPlaying(null)
+      setRestored(false)
       await load()
     } catch (e) {
       toast(`留档失败：${(e as Error).message}`)
@@ -74,6 +142,7 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
     const mine: FeihuaLine = { side: 'me', line: raw }
     const next = [...lines, mine]
     setLines(next)
+    persistGame(playing, next)
     setBusy(true)
     const usedLines = next.map((l) => l.line)
     const jobId = crypto.randomUUID()
@@ -81,11 +150,15 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
       .feihuaTurn(jobId, playing.keyword, usedLines)
       .then(async (r) => {
         if ('giveUp' in r) {
-          setLines([...next, { side: 'ai', line: '（AI 想不出含这句的新句了）' }])
-          await endGame('win')
+          const finalLines: FeihuaLine[] = [...next, { side: 'ai', line: '（AI 想不出含这句的新句了）' }]
+          setLines(finalLines)
+          persistGame(playing, finalLines)
+          await endGame('win', finalLines)
           return
         }
-        setLines([...next, { side: 'ai', line: r.line, note: r.note }])
+        const withAi: FeihuaLine[] = [...next, { side: 'ai', line: r.line, note: r.note }]
+        setLines(withAi)
+        persistGame(playing, withAi)
       })
       .catch((e: unknown) => {
         const msg = String((e as Error).message)
@@ -137,6 +210,18 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
         </div>
       )}
 
+      {/* 存档恢复横幅（优化建议区第58轮） */}
+      {playing && restored && !finished && (
+        <div className="fushi-restore-bar">
+          <span className="material-symbols-outlined">history</span>
+          <span className="module-sub">已恢复上次对局（{lines.length} 句）——接着玩，或放弃此局</span>
+          <button className="btn" onClick={() => setDropOpen(true)}>
+            <span className="material-symbols-outlined">delete_sweep</span>
+            放弃此局
+          </button>
+        </div>
+      )}
+
       {/* 对局视图 */}
       {playing && (
         <FeihuaGame
@@ -148,10 +233,14 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
           finished={finished}
           onSubmit={submit}
           onGiveUp={() => setGiveUpOpen(true)}
-          onReviewArchive={(gid) => void openArchive(gid, `飞花令 ·「${playing.keyword}」`)}
+          onReviewArchive={(gid) => {
+            const g = history.find((x) => x.id === gid)
+            void openArchive(gid, `飞花令 ·「${g?.topic ?? ''}」`)
+          }}
           onExit={() => {
             setFinished(null)
             setPlaying(null)
+            setRestored(false)
           }}
         />
       )}
@@ -220,7 +309,31 @@ export default function FeihuaPanel({ onNeedConfig }: Props) {
         }}
         onCancel={() => setGiveUpOpen(false)}
       >
-        确定认负？本局将判负并留档{playing?.daily ? '，今日打卡记为未胜' : ''}。
+        确定认负？本局将判负并留档
+        {playing?.daily
+          ? playing.startedDate === todayStr()
+            ? '，今日打卡记为未胜'
+            : '，打卡记在开局日'
+          : ''}
+        。
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={dropOpen}
+        title="放弃此局"
+        danger
+        confirmText="放弃"
+        onConfirm={() => {
+          setDropOpen(false)
+          clearGame()
+          setPlaying(null)
+          setLines([])
+          setError('')
+          setRestored(false)
+          toast('已放弃该对局（未留档）')
+        }}
+        onCancel={() => setDropOpen(false)}
+      >
+        确定放弃这局？对局记录不会留档、也不入回收站，无法找回。
       </ConfirmDialog>
       <ConfirmDialog
         open={delQ != null}

@@ -50,6 +50,9 @@ export default function LiteraturePanel({
   const [items, setItems] = useState<DiscoverItemRow[]>([])
   const [papers, setPapers] = useState<PaperRow[]>([])
   const [domains, setDomains] = useState<AgentDomainRow[]>([])
+  // 领域筛选（260927）：domainsAll=deep 轨全量（tab 数据源，含停用），domains=启用中（海选下拉）
+  const [domainsAll, setDomainsAll] = useState<AgentDomainRow[]>([])
+  const [domainFilter, setDomainFilter] = useState<'all' | number | 'none'>('all')
   const [collectDomain, setCollectDomain] = useState<number | null>(null)
   const [collecting, setCollecting] = useState(false)
   const [detail, setDetail] = useState<PaperDetail | null>(null)
@@ -69,9 +72,11 @@ export default function LiteraturePanel({
   }, [])
   const loadDomains = useCallback((): void => {
     void window.api.agent.domains().then((ds) => {
-      const deep = ds.filter((d) => d.track === 'deep' && d.enabled)
-      setDomains(deep)
-      setCollectDomain((cur) => cur ?? deep[0]?.id ?? null)
+      const deep = ds.filter((d) => d.track === 'deep')
+      setDomainsAll(deep)
+      const deepEnabled = deep.filter((d) => d.enabled)
+      setDomains(deepEnabled)
+      setCollectDomain((cur) => cur ?? deepEnabled[0]?.id ?? null)
     })
   }, [])
 
@@ -119,7 +124,20 @@ export default function LiteraturePanel({
   }, [openPaperId])
 
   // 信息源·发现箱只呈论文候选（260923 开发者反馈：科普候选归万象库科普页签）
-  const discovered = items.filter((i) => i.status === 'discovered' && i.source_type !== 'article')
+  // 领域筛选（260927）：domain_id 为 NULL 或不在现存领域集合的条目一律归「未分类」
+  const isUncategorized = (id: number | null): boolean => id == null || !domainsAll.some((d) => d.id === id)
+  const matchDomain = (id: number | null): boolean => {
+    if (domainFilter === 'all') return true
+    if (domainFilter === 'none') return isUncategorized(id)
+    return id === domainFilter
+  }
+  const discoveredAll = items.filter((i) => i.status === 'discovered' && i.source_type !== 'article')
+  const discovered = discoveredAll.filter((i) => matchDomain(i.domain_id))
+  const papersFiltered = papers.filter((p) => matchDomain(p.domain_id))
+  // tab 计数口径：当前子页签筛选前列表；发现箱/正式文献共用同一筛选状态
+  const scopeList: { domain_id: number | null }[] = subTab === 'discover' ? discoveredAll : papers
+  const domainCount = (id: number): number => scopeList.filter((it) => it.domain_id === id).length
+  const uncategorizedCount = scopeList.filter((it) => isUncategorized(it.domain_id)).length
   const acceptedCount = items.filter((i) => i.status === 'accepted').length
   const rejectedCount = items.filter((i) => i.status === 'rejected').length
 
@@ -281,7 +299,7 @@ export default function LiteraturePanel({
             className={`recycle-tab${subTab === 'discover' ? ' active' : ''}`}
             onClick={() => setSubTab('discover')}
           >
-            发现箱{discovered.length > 0 ? `（${discovered.length}）` : ''}
+            发现箱{discoveredAll.length > 0 ? `（${discoveredAll.length}）` : ''}
           </button>
           <button
             className={`recycle-tab${subTab === 'papers' ? ' active' : ''}`}
@@ -290,6 +308,32 @@ export default function LiteraturePanel({
             正式文献{papers.length > 0 ? `（${papers.length}）` : ''}
           </button>
         </div>
+        {/* 领域筛选行（260927）：两子页签共用，切换子页签保持所选领域 */}
+        {scopeList.length > 0 && (
+          <div className="recycle-tabs domain-tabs">
+            <button
+              className={`recycle-tab${domainFilter === 'all' ? ' active' : ''}`}
+              onClick={() => setDomainFilter('all')}
+            >
+              全部（{scopeList.length}）
+            </button>
+            {domainsAll.map((d) => (
+              <button
+                key={d.id}
+                className={`recycle-tab${domainFilter === d.id ? ' active' : ''}`}
+                onClick={() => setDomainFilter(d.id)}
+              >
+                {d.name}（{domainCount(d.id)}）
+              </button>
+            ))}
+            <button
+              className={`recycle-tab${domainFilter === 'none' ? ' active' : ''}`}
+              onClick={() => setDomainFilter('none')}
+            >
+              未分类（{uncategorizedCount}）
+            </button>
+          </div>
+        )}
       </div>
 
       {subTab === 'discover' && (
@@ -297,7 +341,9 @@ export default function LiteraturePanel({
           {discovered.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">inbox</span>
-              发现箱空空的——点「跑一轮海选」，AI 找到的论文候选会先出现在这里，由你决定是否入库
+              {domainFilter === 'all'
+                ? '发现箱空空的——点「跑一轮海选」，AI 找到的论文候选会先出现在这里，由你决定是否入库'
+                : '该领域下暂无候选'}
             </div>
           )}
           {discovered.map((it) => (
@@ -336,13 +382,15 @@ export default function LiteraturePanel({
 
       {subTab === 'papers' && (
         <div className="lit-list">
-          {papers.length === 0 && (
+          {papersFiltered.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">auto_stories</span>
-              还没有正式文献——在发现箱「接受」候选后，论文会入库到这里
+              {domainFilter === 'all'
+                ? '还没有正式文献——在发现箱「接受」候选后，论文会入库到这里'
+                : '该领域下暂无文献'}
             </div>
           )}
-          {papers.map((p) => (
+          {papersFiltered.map((p) => (
             <div className="lit-item" key={p.id}>
               <div className="row-main" onClick={() => void openDetail(p.id)}>
                 <div className="row-title">{p.title}</div>

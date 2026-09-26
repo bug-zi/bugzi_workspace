@@ -5,6 +5,7 @@
 import { getDb, nowIso } from '../../db/db'
 import { chatCompletion } from '../../ai/llm'
 import { isLlmConfigured } from '../../ai/services'
+import { toSimplified } from '../t2s'
 import { registerTask } from './queue'
 import { collectionAllowed } from './budget'
 import { wrapMaterial } from './guardrails'
@@ -35,6 +36,26 @@ const CHANNELS: ((keywords: string[], signal?: AbortSignal) => Promise<Candidate
 
 function ensureAlive(ctx: TaskContext): void {
   if (ctx.signal.aborted) throw new Error('已取消')
+}
+
+/** 视频页直拒（prompt 已排除、LLM 偶发漏排时的代码兜底；平台 hostname 白名单，误伤面极小） */
+const VIDEO_HOSTS = new Set([
+  'youtube.com',
+  'm.youtube.com',
+  'youtu.be',
+  'bilibili.com',
+  'b23.tv',
+  'voicetube.com',
+  'vimeo.com'
+])
+
+function isVideoPageUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, '').toLowerCase()
+    return VIDEO_HOSTS.has(h)
+  } catch {
+    return false
+  }
 }
 
 /** 从渠道原始文本抽取 url 白名单（防编造：origin+path 归一，同 collectDeep 口径） */
@@ -95,8 +116,8 @@ export async function runCollectScience(domainId: number, ctx: TaskContext): Pro
 
 以下是检索资料。请从中挑选最值得阅读的科普文章，要求：
 1. 最多 8 条，宁缺毋滥；没有合适结果就输出空数组，不要硬凑。
-2. 只选大众可读的科普向内容；**排除学术论文（含 preprint/期刊原文）、纯新闻稿、营销/推广软文**。
-3. 每条输出：source_type 固定为 "article"、title（原题）、authors（数组，可空）、year、summary（120 字内中文概括）、tags（1-3 个）、language（"zh" 或 "en"，按文章语言判定）、length_est（篇幅估计如「6 分钟」）、url（必须与资料原文完全一致，禁止编造或改写）、source（资料中标注的渠道标识）、reason（一句话中文推荐理由：与领域的相关性 + 价值）。
+2. 只选大众可读的科普向内容；**排除学术论文（含 preprint/期刊原文）、纯新闻稿、营销/推广软文、视频页（YouTube/Bilibili/VoiceTube 等视频平台与纯视频聚合页，无正文可抓）**。
+3. 每条输出：source_type 固定为 "article"、title（原题；中文原题一律转写为简体字）、authors（数组，可空）、year、summary（120 字内简体中文概括）、tags（1-3 个，简体）、language（"zh" 或 "en"，按文章语言判定）、length_est（篇幅估计如「6 分钟」）、url（必须与资料原文完全一致，禁止编造或改写）、source（资料中标注的渠道标识）、reason（一句话简体中文推荐理由：与领域的相关性 + 价值）。
 4. 仅输出 JSON 对象：{"items":[...]}，不要任何其他文字。
 
 ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
@@ -132,6 +153,10 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
   let added = 0
   for (const it of items) {
     if (!it.title?.trim() || !it.url?.trim()) continue
+    if (isVideoPageUrl(it.url)) {
+      console.info(`[agent:collect:s] 跳过视频页候选：${it.title}`)
+      continue
+    }
     if (!matchesWhitelist(it.url, whitelist)) {
       console.warn(`[agent:collect:s] 丢弃编造 url 候选：${it.title}`)
       continue
@@ -139,8 +164,12 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
     const hash = urlHash(it.url)
     const dup = d.prepare('SELECT id FROM discover_items WHERE url_hash = ?').get(hash)
     if (dup) continue
-    if (await isNearDuplicate(it.title, it.summary ?? '')) {
-      console.info(`[agent:collect:s] 近重复跳过：${it.title}`)
+    const title = toSimplified(it.title.trim())
+    const summary = toSimplified(it.summary ?? '')
+    const tags = JSON.stringify((it.tags ?? []).slice(0, 5).map((t) => toSimplified(String(t))))
+    const reason = toSimplified(it.reason ?? '')
+    if (await isNearDuplicate(title, summary)) {
+      console.info(`[agent:collect:s] 近重复跳过：${title}`)
       continue
     }
     try {
@@ -150,23 +179,23 @@ ${wrapMaterial('科普检索原始结果', material.slice(0, 30000))}`
           "INSERT INTO discover_items (source_type, title, authors, year, date, summary, tags, language, length_est, url, source, reason, status, url_hash, domain_id, created_at) VALUES ('article', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?)"
         )
         .run(
-          it.title.trim(),
+          title,
           JSON.stringify((it.authors ?? []).slice(0, 12)),
           typeof it.year === 'number' ? it.year : null,
           it.date ?? null,
-          it.summary ?? '',
-          JSON.stringify((it.tags ?? []).slice(0, 5)),
+          summary,
+          tags,
           it.language === 'zh' ? 'zh' : 'en',
           it.length_est ?? '',
           it.url.trim(),
           it.source || 'mcp',
-          it.reason ?? '',
+          reason,
           hash,
           domainId,
           now
         )
       added++
-      const vec = await embedDiscoverVector(it.title, it.summary ?? '')
+      const vec = await embedDiscoverVector(title, summary)
       if (vec) {
         const { storeEmbedding } = await import('./embedding')
         storeEmbedding('discover', Number(r.lastInsertRowid), vec)

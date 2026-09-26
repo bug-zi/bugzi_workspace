@@ -1,11 +1,15 @@
-// 回收站模块（回收站 specs 全量）：五板块页签、恢复/彻底删除、剩余存活时间
+// 回收站模块（回收站 specs 全量）：恢复/彻底删除、剩余存活时间。
+// 260926 优化建议区第58轮：15 个来源页签行删除，改「全部」时间倒序混排 + 头部来源筛选下拉（每项带计数）。
+// 260927 模式视图：再叠学习/生活两档（常驻来源双视图都显示），默认跟随左栏模式、页内分段可切换。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { RecycleRow } from '../../renderer/api'
+import type { ModuleMode } from '../../shared/types'
+import ActionMenu from '../../components/ActionMenu'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 
-// 页签 key：单一来源用 source 值；「推理角」为组页签（reasoning_soup 汤 + reasoning_game
+// 筛选 key：单一来源用 source 值；「推理角」为组筛选（reasoning_soup 汤 + reasoning_game
 // 对局记录混排一页，specs §5）。260908 辩真阁并入万象库：verify 来源聚合进「万象库」块，页签九块变八块；
 // 其后画布（canvases）加入回九块；260911 学习库接入：learn 块居首（位次随左栏），页签九块变十块；
 // 260917 AI 会话归档（优化建议区第47轮）：跨模块块置末位。
@@ -24,6 +28,7 @@ const TABS: { key: string; label: string }[] = [
   { key: 'wenbi', label: '文笔坊' },
   { key: 'ledger', label: '记账本' },
   { key: 'fushi', label: '赋诗苑' },
+  { key: 'duiyi', label: '对弈社' },
   { key: 'ai', label: 'AI 会话' }
 ]
 
@@ -40,6 +45,26 @@ function tabOf(source: RecycleRow['source']): string {
   if (source === 'prophet' || source === 'twelve_question') return 'zhijiji'
   if (source === 'ai_session') return 'ai'
   return source
+}
+
+/** 来源组 → 模式归属（260927 模式视图）：'both' = 常驻来源（上固定/右栏模块产物，学习/生活两档视图都显示） */
+const GROUP_MODE: Record<string, 'learn' | 'life' | 'both'> = {
+  learn: 'learn',
+  interview: 'learn',
+  wiki: 'learn',
+  inspirations: 'learn',
+  zhijiji: 'learn',
+  reasoning: 'life',
+  fuben: 'life',
+  yule: 'life',
+  ledger: 'life',
+  fushi: 'life',
+  duiyi: 'life',
+  mottos: 'both',
+  wenbi: 'both',
+  drafts: 'both',
+  canvases: 'both',
+  ai: 'both'
 }
 
 /** 恢复去向文案（specs §5：汤回汤库、对局记录回记录列表） */
@@ -95,6 +120,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '娱乐城塔罗记录列表'
     case 'yule_poker':
       return '娱乐城对局记录列表'
+    case 'duiyi':
+      return '对弈社记录列表'
     default:
       return '推理角对局记录列表'
   }
@@ -119,10 +146,20 @@ function srcTag(source: RecycleRow['source']): string {
   if (source === 'fushi_game') return '对局 · '
   if (source === 'yule_taro') return '塔罗解读 · '
   if (source === 'yule_poker') return '德扑对局 · '
+  if (source === 'duiyi') return '对局 · '
   return ''
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** 对弈社棋种中文名（回收站摘要用） */
+const DUIYI_GAME_ZH: Record<string, string> = {
+  xiangqi: '中国象棋',
+  chess: '国际象棋',
+  shogi: '日本将棋',
+  gomoku: '五子棋',
+  go: '围棋'
+}
 
 /** 彻底删除时间点 = 入站时间 + 3 天（与 recycle.cleanupExpired 的清理口径一致） */
 function purgeTime(createdAt: string): string {
@@ -168,6 +205,11 @@ function summaryOf(row: RecycleRow): string {
       const rank = ['冠军', '亚军', '季军', '第四名'][Number(p.my_rank ?? 4) - 1] ?? '第四名'
       return `${rank} · 奖励 ${Number(p.prize ?? 0)} · ${Number(p.hands_count ?? 0)} 手`
     }
+    if (row.source === 'duiyi') {
+      const gameZh = DUIYI_GAME_ZH[String(p.game ?? '')] ?? String(p.game ?? '')
+      const res = p.result === 'win' ? '胜' : p.result === 'loss' ? '负' : p.result === 'draw' ? '和' : ''
+      return `${gameZh} · ${res}${p.reason ? ` · ${String(p.reason)}` : ''} · ${Number(p.move_count ?? 0)} 手`
+    }
     if (row.source === 'drafts') return String(p.title ?? '')
     if (row.source === 'canvases') return String(p.title ?? '')
     if (row.source === 'wenbi_journal') {
@@ -192,10 +234,12 @@ function summaryOf(row: RecycleRow): string {
   }
 }
 
-export default function RecycleModule() {
+export default function RecycleModule({ appMode }: { appMode: ModuleMode }) {
   const { toast } = useToast()
   const [rows, setRows] = useState<RecycleRow[]>([])
-  const [tab, setTab] = useState<string>('mottos')
+  const [filter, setFilter] = useState<string>('all')
+  const [viewMode, setViewMode] = useState<ModuleMode>('learn')
+  const [filterMenuAnchor, setFilterMenuAnchor] = useState<HTMLElement | null>(null)
   const [delTarget, setDelTarget] = useState<RecycleRow | null>(null)
   // 刷新信号（其他模块丢弃时 recycle:changed 推送）
   const [version, setVersion] = useState(0)
@@ -219,16 +263,38 @@ export default function RecycleModule() {
   // keep-alive：切回回收站时刷新（剩余天数文案需要随时间更新）
   useModuleActivated('recycle', () => void load())
 
+  // 视图跟随左栏当前模式（keep-alive 下 prop 变化即跟随，启动恢复 life 也走这里）；页内分段切换只改本页显示、不动全局
+  useEffect(() => {
+    setViewMode(appMode)
+  }, [appMode])
+
+  // 当前视图可见行：按模式归属过滤，常驻组双视图都显示（260927 模式视图）
+  const viewRows = useMemo(
+    () =>
+      rows.filter((r) => {
+        const g = tabOf(r.source)
+        return GROUP_MODE[g] === 'both' || GROUP_MODE[g] === viewMode
+      }),
+    [rows, viewMode]
+  )
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
-    for (const r of rows) {
+    for (const r of viewRows) {
       const k = tabOf(r.source)
       c[k] = (c[k] ?? 0) + 1
     }
     return c
-  }, [rows])
+  }, [viewRows])
 
-  const tabRows = rows.filter((r) => tabOf(r.source) === tab)
+  // 残留筛选容错：切视图后原筛选组不在当前视图时按「全部」处理（切回原视图时该选择自动恢复）
+  const effFilter =
+    filter === 'all' || GROUP_MODE[filter] === 'both' || GROUP_MODE[filter] === viewMode
+      ? filter
+      : 'all'
+
+  const filteredRows = effFilter === 'all' ? viewRows : viewRows.filter((r) => tabOf(r.source) === effFilter)
+  const activeFilterLabel = effFilter === 'all' ? '全部来源' : (TABS.find((t) => t.key === effFilter)?.label ?? '全部来源')
 
   const doRestore = async (row: RecycleRow): Promise<void> => {
     const backTo = backToOf(row.source)
@@ -250,31 +316,66 @@ export default function RecycleModule() {
       <div className="module-header">
         <span className="material-symbols-outlined">delete</span>
         <span className="module-title">回收站</span>
-        <span className="module-sub">存放 3 天后自动彻底删除</span>
       </div>
 
-      <div className="recycle-tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={`recycle-tab${tab === t.key ? ' active' : ''}`}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-            <span className="zone-count">{counts[t.key] ?? 0}</span>
+      {/* 工具条：视图范围计数 + 模式分段切换（260927 模式视图）+ 来源筛选下拉（260926 第58轮） */}
+      <div className="recycle-toolbar">
+        <span className="module-sub">共 {viewRows.length} 条 · 存放 3 天后自动彻底删除</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="recycle-tabs">
+            <button
+              className={`recycle-tab${viewMode === 'learn' ? ' active' : ''}`}
+              onClick={() => setViewMode('learn')}
+              title="学习模式相关来源"
+            >
+              学习
+            </button>
+            <button
+              className={`recycle-tab${viewMode === 'life' ? ' active' : ''}`}
+              onClick={() => setViewMode('life')}
+              title="生活模式相关来源"
+            >
+              生活
+            </button>
+          </div>
+          <button className="btn" onClick={(e) => setFilterMenuAnchor(e.currentTarget)} title="按来源筛选">
+            <span className="material-symbols-outlined">filter_list</span>
+            {activeFilterLabel}
+            <span className="material-symbols-outlined">expand_more</span>
           </button>
-        ))}
+        </div>
       </div>
+
+      {filterMenuAnchor && (
+        <ActionMenu
+          anchorEl={filterMenuAnchor}
+          onClose={() => setFilterMenuAnchor(null)}
+          items={[
+            {
+              key: 'all',
+              icon: effFilter === 'all' ? 'check' : undefined,
+              label: `全部来源（${viewRows.length}）`,
+              onClick: () => setFilter('all')
+            },
+            ...TABS.filter((t) => GROUP_MODE[t.key] === 'both' || GROUP_MODE[t.key] === viewMode).map((t) => ({
+              key: t.key,
+              icon: effFilter === t.key ? 'check' : undefined,
+              label: `${t.label}（${counts[t.key] ?? 0}）`,
+              onClick: () => setFilter(t.key)
+            }))
+          ]}
+        />
+      )}
 
       <section className="zone">
         <div className="zone-body">
-          {tabRows.length === 0 && (
+          {filteredRows.length === 0 && (
             <div className="empty-state">
               <span className="material-symbols-outlined">delete</span>
-              暂无内容
+              {effFilter === 'all' ? '回收站是空的' : '该来源暂无内容'}
             </div>
           )}
-          {tabRows.map((r) => (
+          {filteredRows.map((r) => (
             <div className="row-item" key={r.id} style={{ cursor: 'default' }}>
               <div className="row-main">
                 <div className="row-title" title={summaryOf(r)}>{summaryOf(r)}</div>

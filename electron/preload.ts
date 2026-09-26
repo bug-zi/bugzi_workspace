@@ -1000,6 +1000,48 @@ const api = {
     blackjackStats: (): Promise<import('../src/shared/types').BlackjackStatsView> =>
       ipcRenderer.invoke('yule:blackjack:stats')
   },
+  duiyi: {
+    /** 开局（同棋种旧 playing 局自动置 abandoned；initialState 为引擎快照 JSON） */
+    start: (
+      game: import('../src/shared/types').DuiyiGameKey,
+      difficulty: number,
+      boardSpec: number | null,
+      initialState: string
+    ): Promise<import('../src/shared/types').DuiyiGameRow> =>
+      ipcRenderer.invoke('duiyi:start', game, difficulty, boardSpec, initialState),
+    /** 进行中对局（无则 null，恢复续玩） */
+    playing: (
+      game: import('../src/shared/types').DuiyiGameKey
+    ): Promise<import('../src/shared/types').DuiyiGameRow | null> =>
+      ipcRenderer.invoke('duiyi:playing', game),
+    /** 快照回写（节流调用；局已终态则静默丢弃） */
+    saveState: (
+      game: import('../src/shared/types').DuiyiGameKey,
+      id: number,
+      state: string,
+      moveCount: number
+    ): Promise<boolean> => ipcRenderer.invoke('duiyi:saveState', game, id, state, moveCount),
+    /** 终局落库（仅 playing 生效；result 我方视角） */
+    finish: (
+      id: number,
+      result: 'win' | 'loss' | 'draw',
+      reason: string,
+      record: string,
+      moveCount: number,
+      durationMs: number
+    ): Promise<import('../src/shared/types').DuiyiGameRow> =>
+      ipcRenderer.invoke('duiyi:finish', id, result, reason, record, moveCount, durationMs),
+    /** 终局记录列表（finished） */
+    list: (
+      game?: import('../src/shared/types').DuiyiGameKey
+    ): Promise<import('../src/shared/types').DuiyiGameRow[]> =>
+      ipcRenderer.invoke('duiyi:list', game),
+    stats: (): Promise<
+      Record<import('../src/shared/types').DuiyiGameKey | 'total', { win: number; loss: number; draw: number }>
+    > => ipcRenderer.invoke('duiyi:stats'),
+    /** 移入回收站（需前端二次确认） */
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('duiyi:discard', id)
+  },
   profile: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('profile:list'),
     /** source: manual（手填，默认）| ai（对话中提炼经确认入档） */
@@ -1217,6 +1259,8 @@ const api = {
     }> => ipcRenderer.invoke('agent:scienceDetail', id),
     delete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceDelete', id),
     retryFetch: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceRetryFetch', id),
+    /** 原文全文缓存（science/{id}.txt；meta_only 或文件缺失返回 null） */
+    fulltext: (id: number): Promise<string | null> => ipcRenderer.invoke('agent:scienceFulltext', id),
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
     interpret: (
       id: number,
@@ -1292,6 +1336,9 @@ const api = {
     episodeDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('podcast:episodeDelete', id),
     /** 收件箱一键清空（feedId=null 全部节目；返回归档条数） */
     markAllRead: (feedId: number | null): Promise<number> => ipcRenderer.invoke('podcast:markAllRead', feedId),
+    /** 视图计数（260926 查阅区）：收件箱/查阅区 chips 徽标 */
+    viewCounts: (feedId: number | null): Promise<{ inbox: number; review: number }> =>
+      ipcRenderer.invoke('podcast:viewCounts', feedId),
     /** 拉全部源新集，返回总新增 */
     fetchAll: (): Promise<number> => ipcRenderer.invoke('podcast:fetchAll'),
     /** 手动转写触发（入队；状态流转经 onTaskChanged 渐进刷新） */
@@ -1331,13 +1378,14 @@ const api = {
       usedLines: string[]
     ): Promise<import('../src/shared/types').FeihuaTurnResult> =>
       ipcRenderer.invoke('fushi:feihuaTurn', jobId, keyword, usedLines),
-    /** 终局落库留档（daily 局回写当日打卡）；返回 gameId */
+    /** 终局落库留档（daily 局回写打卡；startedDate=存档恢复局的开局日，留档与打卡归开局日）；返回 gameId */
     feihuaEnd: (
       keyword: string,
       daily: boolean,
       result: import('../src/shared/types').FushiResult,
-      lines: import('../src/shared/types').FeihuaLine[]
-    ): Promise<number> => ipcRenderer.invoke('fushi:feihuaEnd', keyword, daily, result, lines),
+      lines: import('../src/shared/types').FeihuaLine[],
+      startedDate?: string
+    ): Promise<number> => ipcRenderer.invoke('fushi:feihuaEnd', keyword, daily, result, lines, startedDate),
     /** 斗诗出题（主题 + 体裁） */
     doushiNew: (jobId: string): Promise<{ topic: string; genre: import('../src/shared/types').FushiGenre }> =>
       ipcRenderer.invoke('fushi:doushiNew', jobId),

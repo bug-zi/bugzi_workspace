@@ -31,6 +31,7 @@ export type RecycleSource =
   | 'yule_taro'
   | 'yule_poker'
   | 'fuben'
+  | 'duiyi'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -58,7 +59,8 @@ const TABLES: Record<RecycleSource, string> = {
   ai_session: 'ai_sessions',
   yule_taro: 'taro_records',
   yule_poker: 'poker_games',
-  fuben: 'copies'
+  fuben: 'copies',
+  duiyi: 'duiyi_games'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -90,7 +92,8 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   prophet: 'analysis_md_path',
   twelve_question: null, // 想法为 DB 行，hardDelete 特判清理
   yule_taro: 'md_path',
-  yule_poker: 'review_md_path' // 手牌流水在行内 JSON，不随删（specs §6）
+  yule_poker: 'review_md_path', // 手牌流水在行内 JSON，不随删（specs §6）
+  duiyi: null // 棋谱在行内 JSON，无 md 附属
 }
 
 export interface RecycleRow {
@@ -271,6 +274,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'fuben':
       // 回收藏库：state 原样保留（副本库 specs §5）
       d.prepare('UPDATE copies SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'duiyi':
+      // 回对弈社记录列表：仅清标记（棋谱快照原样保留，2026-09-26 对弈社 design §4）
+      d.prepare('UPDATE duiyi_games SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
   }
   d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)

@@ -58,6 +58,7 @@ function hydratePaper(r: Record<string, unknown>): PaperRow {
     fulltext_path: (r.fulltext_path as string | null) ?? null,
     digest_md: (r.digest_md as string | null) ?? null,
     glossary: (r.glossary as string | null) ?? null,
+    domain_id: (r.domain_id as number | null) ?? null,
     discovery_id: (r.discovery_id as number | null) ?? null,
     created_at: String(r.created_at),
     updated_at: String(r.updated_at)
@@ -89,7 +90,7 @@ export function acceptDiscover(id: number): { paperId: number } | { scienceId: n
   const now = nowIso()
   const r = d
     .prepare(
-      "INSERT INTO papers (title, authors, year, date, summary, tags, language, url, source, status, discovery_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?)"
+      "INSERT INTO papers (title, authors, year, date, summary, tags, language, url, source, status, domain_id, discovery_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)"
     )
     .run(
       String(row.title),
@@ -101,6 +102,7 @@ export function acceptDiscover(id: number): { paperId: number } | { scienceId: n
       String(row.language ?? 'en'),
       String(row.url),
       String(row.source ?? ''),
+      (row.domain_id as number | null) ?? null,
       id,
       now,
       now

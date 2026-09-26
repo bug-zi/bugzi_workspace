@@ -1,0 +1,443 @@
+/* 对弈社样式（2026-09-26 对弈社 design §7）：棋盘/棋子/控件全部走主题变量派生的低饱和色系，
+   禁彩亮；浅色 = 樱花粉系纸感棋盘，深色 = 宝蓝墨系。 */
+
+/* ---------- 头部战绩角标 / 布局 ---------- */
+.dy-total-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.88em;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-border);
+}
+.dy-total-badge .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--color-primary-deep);
+}
+
+.dy-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0;
+  align-items: center;
+}
+.dy-pane > .zone {
+  width: 100%;
+}
+
+.dy-board-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.dy-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 0.92em;
+}
+.dy-status-right {
+  margin-left: auto;
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+}
+
+.dy-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.dy-stats-row {
+  width: 100%;
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.dy-stats-item b.win { color: var(--color-primary-deep); }
+.dy-stats-item b.loss { color: var(--color-danger-deep); }
+.dy-stats-item b.draw { color: var(--color-text-secondary); }
+.dy-stats-item.dim { color: var(--color-text-secondary); font-size: 0.88em; }
+
+.dy-res-badge {
+  display: inline-block;
+  min-width: 22px;
+  text-align: center;
+  margin-right: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  background: var(--color-primary-soft);
+}
+.dy-res-badge.win { background: var(--color-primary-soft); color: var(--color-primary-deep); }
+.dy-res-badge.loss { background: var(--color-danger); color: var(--color-surface-strong); }
+.dy-res-badge.draw { background: var(--color-border); }
+
+/* ---------- 棋盘通用 ---------- */
+.dy-xq-board,
+.dy-gm-board,
+.dy-go-board {
+  position: relative;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface-strong));
+}
+.dy-xq-grid,
+.dy-gm-board > svg,
+.dy-go-board > svg {
+  position: absolute;
+  inset: 0;
+}
+.dy-grid-line {
+  stroke: color-mix(in srgb, var(--color-text) 45%, transparent);
+  stroke-width: 1;
+}
+.dy-grid-line.thin {
+  stroke-width: 0.8;
+}
+.dy-grid-dot {
+  fill: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+/* ---------- 中国象棋 ---------- */
+.dy-xq-piece {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: default;
+  z-index: 2;
+  font-family: var(--font-family);
+}
+.dy-xq-piece.red {
+  background: color-mix(in srgb, var(--color-primary) 16%, var(--color-surface-strong));
+  border-color: color-mix(in srgb, #a8503f 70%, var(--color-primary));
+  color: #a8503f;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.dy-xq-piece.black {
+  background: color-mix(in srgb, var(--color-text) 14%, var(--color-surface-strong));
+  border-color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.dy-xq-piece.sel {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.dy-xq-clicks {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+}
+.dy-xq-hit {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.dy-xq-hit.target {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 55%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+}
+.dy-xq-hit.sel {
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* ---------- 国际象棋 ---------- */
+.dy-cs-board {
+  display: grid;
+  grid-template-columns: repeat(8, 48px);
+  grid-template-rows: repeat(8, 48px);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.dy-cs-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.dy-cs-cell.light {
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface-strong));
+}
+.dy-cs-cell.dark {
+  background: color-mix(in srgb, var(--color-primary) 34%, var(--color-surface-strong));
+}
+.dy-cs-cell.target {
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--color-primary) 60%, transparent);
+}
+.dy-cs-cell.sel {
+  box-shadow: inset 0 0 0 3px var(--color-primary);
+}
+.dy-cs-piece {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  user-select: none;
+}
+.dy-cs-piece.white {
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface-strong));
+  color: #6b4a3d;
+  border: 1.5px solid color-mix(in srgb, #6b4a3d 55%, transparent);
+}
+.dy-cs-piece.black {
+  background: color-mix(in srgb, var(--color-text) 80%, var(--color-surface-strong));
+  color: var(--color-surface-strong);
+  border: 1.5px solid color-mix(in srgb, var(--color-text) 90%, transparent);
+}
+.dy-promo-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.dy-promo-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 64px;
+}
+
+/* ---------- 日本将棋 ---------- */
+.dy-sg-board {
+  display: grid;
+  grid-template-columns: repeat(9, 46px);
+  grid-template-rows: repeat(9, 46px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface-strong));
+}
+.dy-sg-cell {
+  border: none;
+  border-right: 1px solid color-mix(in srgb, var(--color-text) 30%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 30%, transparent);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: transparent;
+}
+.dy-sg-cell.target {
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+.dy-sg-cell.sel {
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+.dy-sg-piece {
+  width: 36px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  border-radius: 4px;
+  user-select: none;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface-strong));
+  border: 1px solid color-mix(in srgb, var(--color-text) 35%, transparent);
+}
+.dy-sg-piece.theirs {
+  transform: rotate(180deg);
+  background: color-mix(in srgb, var(--color-text) 12%, var(--color-surface-strong));
+}
+.dy-sg-hand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  width: 100%;
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--color-border);
+}
+.dy-sg-hand-label {
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+  margin-right: 4px;
+}
+.dy-sg-hand-piece {
+  position: relative;
+  width: 36px;
+  height: 38px;
+  font-size: 18px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--color-text) 35%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface-strong));
+  cursor: default;
+}
+.dy-sg-hand-piece.pickable {
+  cursor: pointer;
+}
+.dy-sg-hand-piece.sel {
+  outline: 2px solid var(--color-primary);
+}
+.dy-sg-hand-piece i {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  font-style: normal;
+  font-size: 0.7em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-border);
+}
+
+/* ---------- 五子棋 / 围棋共用棋子 ---------- */
+.dy-stone {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  z-index: 2;
+  pointer-events: auto;
+}
+.dy-stone.black {
+  background: radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--color-text) 85%, #fff), var(--color-text));
+  border: 1px solid color-mix(in srgb, var(--color-text) 90%, transparent);
+}
+.dy-stone.white {
+  background: radial-gradient(circle at 34% 30%, var(--color-surface-strong), color-mix(in srgb, var(--color-text) 16%, var(--color-surface-strong)));
+  border: 1px solid color-mix(in srgb, var(--color-text) 40%, transparent);
+}
+.dy-stone.last {
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+.dy-stone.markable {
+  cursor: pointer;
+}
+.dy-stone.dead {
+  opacity: 0.35;
+}
+.dy-gm-hit {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.dy-go-hits {
+  position: absolute;
+  inset: 0;
+}
+.dy-go-hits .dy-gm-hit {
+  z-index: 1;
+}
+
+/* ---------- 开局面板 ---------- */
+.dy-setup {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 18px 0;
+}
+.dy-setup-card {
+  width: min(460px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.dy-setup-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.15em;
+  font-weight: 600;
+}
+.dy-setup-title .material-symbols-outlined {
+  color: var(--color-primary-deep);
+}
+.dy-setup-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dy-setup-label {
+  font-size: 0.9em;
+  color: var(--color-text-secondary);
+}
+.dy-diff-btn.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+.dy-start-btn {
+  justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------- 终局 ---------- */
+.dy-over-icon .material-symbols-outlined {
+  font-size: 44px;
+}
+.dy-over-icon.win .material-symbols-outlined {
+  color: var(--color-primary-deep);
+}
+.dy-over-icon.loss .material-symbols-outlined {
+  color: var(--color-danger-deep);
+}
+.dy-over-icon.draw .material-symbols-outlined {
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 帮助 ---------- */
+.dy-help-sec {
+  font-weight: 600;
+  margin: 8px 0 4px;
+  color: var(--color-primary-deep);
+}
+.dy-help-p {
+  margin: 4px 0;
+  font-size: 0.92em;
+}

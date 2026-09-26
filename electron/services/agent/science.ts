@@ -7,6 +7,7 @@ import { Readability } from '@mozilla/readability'
 import { parseHTML } from 'linkedom'
 import { getDb, nowIso, userDataDir } from '../../db/db'
 import { mdDelete } from '../files'
+import { simplifyJsonStrArray, toSimplified } from '../t2s'
 import { politeFetch } from './guardrails'
 import { enqueue, registerTask } from './queue'
 import type { TaskContext } from './queue'
@@ -100,12 +101,12 @@ export function scienceAcceptRow(row: Record<string, unknown>): { scienceId: num
       "INSERT INTO science_articles (title, authors, year, date, summary, tags, language, url, source, domain_id, status, discovery_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'meta_only', ?, ?, ?)"
     )
     .run(
-      String(row.title),
+      toSimplified(String(row.title)),
       String(row.authors ?? '[]'),
       (row.year as number | null) ?? null,
       (row.date as string | null) ?? null,
-      String(row.summary ?? ''),
-      String(row.tags ?? '[]'),
+      toSimplified(String(row.summary ?? '')),
+      simplifyJsonStrArray(String(row.tags ?? '[]')),
       row.language === 'en' ? 'en' : 'zh',
       String(row.url),
       String(row.source ?? ''),
@@ -177,6 +178,7 @@ function enqueueAutoInterpret(articleId: number): void {
 async function scienceFetchRunner(ctx: TaskContext): Promise<void> {
   const article = getScienceArticle(ctx.refId ?? 0)
   if (!article) throw new Error('NOT_FOUND')
+  ctx.progress('抓取全文中…')
   await ensureScienceFulltext(article)
   enqueueAutoInterpret(article.id)
 }

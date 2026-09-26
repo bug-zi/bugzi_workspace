@@ -22,6 +22,7 @@ import { chatCompletion, notifyActivityChanged, registerLlmActivityProvider } fr
 import { isLlmConfigured } from '../ai/services'
 import { beginJob, cancelJob, endJob } from '../ai/jobs'
 import { stripTags } from './feed'
+import { sliceAudioForAsr } from './audioChunk'
 
 /** 常规浏览器 UA（feed.ts 同款） */
 const UA =
@@ -38,9 +39,6 @@ const ASR_TIMEOUT_MS = 10 * 60_000
 
 /** 音频 ≤ 此字节数整文件直传，超限分片（design §五） */
 const ASR_DIRECT_MAX = 45 * 1024 * 1024
-
-/** 分片目标大小（~40MB） */
-const CHUNK_TARGET = 40 * 1024 * 1024
 
 /** 首次订阅入库存量集数上限（想读哪集手点哪集，防一订阅就烧 10 集 ASR 费用） */
 const FIRST_PULL_LIMIT = 10
@@ -84,6 +82,7 @@ function toIso(s: string): string | null {
 /** 网络/解析错误 → 可读中文（feed.ts 同款文案口径） */
 function friendlyError(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e)
+  if (msg.includes('AUDIO_SEGMENT_PARSE_FAILED')) return '音频容器解析失败，无法分段转写（可换源或反馈）'
   if (/timeout|aborted|signal is aborted/i.test(msg)) return '网络请求超时（应用自动跟随系统代理，可检查网络后重试）'
   if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ERR_/i.test(msg)) return `网络请求失败：${msg}`
   return msg
@@ -445,14 +444,17 @@ function mapEpisodeSummary(r: FeedRow): PodcastEpisodeSummary {
  *  starred 收藏（按收藏时间倒序）/ all 全部含收藏。发布倒序，无日期退 fetched_at。
  *  归档/收藏只动视图分类，转写状态/文字稿不受影响 */
 export function listPodcastEpisodes(feedId: number | null, view: PodcastEpisodeView = 'all'): PodcastEpisodeSummary[] {
+  // 查阅区（260926）：未读未收藏且转写完成——转写完自动自收件箱出流至此，读后由用户自行收藏/归档
   const cond =
     view === 'inbox'
-      ? 'AND e.read_at IS NULL AND e.starred_at IS NULL'
-      : view === 'archived'
-        ? 'AND e.read_at IS NOT NULL AND e.starred_at IS NULL'
-        : view === 'starred'
-          ? 'AND e.starred_at IS NOT NULL'
-          : ''
+      ? "AND e.read_at IS NULL AND e.starred_at IS NULL AND e.transcript_state != 'done'"
+      : view === 'review'
+        ? "AND e.read_at IS NULL AND e.starred_at IS NULL AND e.transcript_state = 'done'"
+        : view === 'archived'
+          ? 'AND e.read_at IS NOT NULL AND e.starred_at IS NULL'
+          : view === 'starred'
+            ? 'AND e.starred_at IS NOT NULL'
+            : ''
   const order =
     view === 'starred'
       ? 'e.starred_at DESC, e.id DESC'
@@ -469,7 +471,7 @@ export function listPodcastEpisodes(feedId: number | null, view: PodcastEpisodeV
   return rows.map(mapEpisodeSummary)
 }
 
-/** 收件箱一键清空：全部（或指定节目）未读置为已读 = 归档（已转写与否无关；收藏的集不动） */
+/** 收件箱一键清空：全部（或指定节目）未读置为已读 = 归档（260926 改名「全部标已读」，收件箱与查阅区一起清；收藏的集不动） */
 export function markAllEpisodesRead(feedId: number | null): number {
   const r = getDb()
     .prepare(
@@ -477,6 +479,20 @@ export function markAllEpisodesRead(feedId: number | null): number {
     )
     .run(nowIso(), feedId, feedId)
   return Number(r.changes)
+}
+
+/** 视图计数（260926 查阅区）：收件箱/查阅区 chips 徽标（未读未收藏按转写完成与否拆分） */
+export function getViewCounts(feedId: number | null): { inbox: number; review: number } {
+  const base = 'read_at IS NULL AND starred_at IS NULL AND (? IS NULL OR feed_id = ?)'
+  const n = (ready: boolean): number => {
+    const row = getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM podcast_episodes WHERE ${base} AND transcript_state ${ready ? '=' : '!='} 'done'`
+      )
+      .get(feedId, feedId) as { n: number }
+    return row.n
+  }
+  return { inbox: n(false), review: n(true) }
 }
 
 /** 标已读/未读切换 */
@@ -608,21 +624,35 @@ function splitForPolish(text: string, max = POLISH_CHUNK_CHARS): string[] {
   return out
 }
 
-/** 逐块排版（串行；单块失败/返回空 → 回退原块，排版永不让文字变少） */
+/** 逐块排版（并发执行、按序拼接；单块失败/空返回 → 回退原块，排版永不让文字变少）。
+ *  thinking disabled（优化建议区第58轮）：glm 默认深度思考实测 165s/块、为单集转写 10 分钟的主因——
+ *  排版是纯格式整理，不需要思维链 */
 async function polishTranscript(text: string, signal?: AbortSignal): Promise<string> {
   if (!isLlmConfigured()) return text
   const chunks = splitForPolish(text)
-  const out: string[] = []
-  for (let i = 0; i < chunks.length; i++) {
-    const res = await chatCompletion({
-      messages: [{ role: 'user', content: `${POLISH_PROMPT}\n${chunks[i]}` }],
-      temperature: 0.1,
-      scene: 'podcast:polish',
-      signal
+  const out = await Promise.all(
+    chunks.map(async (chunk, i) => {
+      try {
+        const res = await chatCompletion({
+          messages: [{ role: 'user', content: `${POLISH_PROMPT}\n${chunk}` }],
+          temperature: 0.1,
+          thinking: 'disabled',
+          scene: 'podcast:polish',
+          signal
+        })
+        const trimmed = res.content.trim()
+        console.info(
+          `[podcast] 排版 ${i + 1}/${chunks.length}（原 ${chunk.length} 字 → 出 ${trimmed.length} 字）`
+        )
+        return trimmed || chunk
+      } catch (e) {
+        // 取消原样上抛中止整集；其余单块失败回退原块（已完成的块成果不丢）
+        if (signal?.aborted || String((e as Error).message) === '已取消') throw e
+        console.warn(`[podcast] 排版块 ${i + 1} 失败，回退原文：`, (e as Error).message)
+        return chunk
+      }
     })
-    out.push(res.content.trim() || chunks[i])
-    console.info(`[podcast] 排版 ${i + 1}/${chunks.length}（原 ${chunks[i].length} 字 → 出 ${res.content.trim().length} 字）`)
-  }
+  )
   return out.join('\n\n')
 }
 
@@ -691,13 +721,19 @@ export function resumePodcastTranscribes(): void {
   void pumpTranscribeQueue()
 }
 
-/** 处理一集：RSS 文字稿直抓优先，否则下载音频走 ASR（≤45MB 整传 / 超限 mp3 帧对齐分片）。
+/** 处理一集：RSS 文字稿直抓优先，否则下载音频走 ASR（≤45MB 且 ≤55min 整传 / 超限按容器分片）。
  *  全程登记 AI 面板活动（可经面板取消；取消回退 none 态可重试） */
 async function processTranscribe(id: number): Promise<void> {
   const d = getDb()
   const ep = d
-    .prepare('SELECT id, title, enclosure_url, transcript_url FROM podcast_episodes WHERE id = ?')
-    .get(id) as { id: number; title: string; enclosure_url: string; transcript_url: string | null } | undefined
+    .prepare('SELECT id, title, enclosure_url, transcript_url, duration_sec FROM podcast_episodes WHERE id = ?')
+    .get(id) as {
+    id: number
+    title: string
+    enclosure_url: string
+    transcript_url: string | null
+    duration_sec: number | null
+  } | undefined
   if (!ep) return // 行已删（退订竞态），静默自灭
   const jobId = `podcast-asr-${id}`
   const cancelAc = beginJob(jobId)
@@ -729,10 +765,11 @@ async function processTranscribe(id: number): Promise<void> {
     try {
       const buf = await downloadAudio(ep.enclosure_url, tmpPath, id, cancelAc.signal)
       setTranscribeState(id, 'transcribing')
-      const text =
-        buf.length <= ASR_DIRECT_MAX
-          ? await transcribeBuffer(buf, cfg, cancelAc.signal)
-          : await transcribeChunked(buf, cfg, cancelAc.signal)
+      // 直传守卫：≤45MB 且已知时长 ≤55 分钟（硅基流动单请求上限 50MB/1h——低码率长音频虽小也须分片）
+      const direct = buf.length <= ASR_DIRECT_MAX && (ep.duration_sec == null || ep.duration_sec <= 55 * 60)
+      const text = direct
+        ? await transcribeBuffer(buf, cfg, cancelAc.signal)
+        : await transcribeChunked(buf, cfg, cancelAc.signal)
       const out = normalizeParagraphs(text)
       if (!out.trim()) throw new Error('转写结果为空')
       // 原始转写先落库（state=polishing）——排版中断/失败/取消时已有产物在库不丢
@@ -868,34 +905,53 @@ async function downloadAudio(
   return buf
 }
 
-/** mp3 帧同步字节（0xFF + 次字节高 5 位全 1）向后查找，分片切在帧边界上 */
-function findFrameSync(buf: Buffer, from: number): number {
-  for (let i = Math.max(0, from); i < buf.length - 1; i++) {
-    if (buf[i] === 0xff && (buf[i + 1] & 0xe0) === 0xe0) return i
-  }
-  return buf.length
+/** 分片并发上限（优化建议区第58轮：原串行逐片、大文件耗时按片数线性叠加；限 3 防 ASR 服务商限流） */
+const ASR_CHUNK_CONCURRENCY = 3
+
+/** 简易并发池：最多 limit 个在途，结果按 items 序返回；任一 reject 即整体 reject */
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++
+        results[i] = await fn(items[i], i)
+      }
+    })
+  )
+  return results
 }
 
+/** 按真实容器切片后并发转写（优化建议区第58轮反馈修复）：mp3 帧对齐 / m4a→ADTS 重封装，
+ *  中段切片必须自含可解码内容——此前 mp3 式乱切 m4a 产出无效容器碎片，服务端解码 500 */
 async function transcribeChunked(buf: Buffer, cfg: AsrConfig, cancel?: AbortSignal): Promise<string> {
-  const parts: string[] = []
-  let offset = 0
-  let idx = 0
-  while (offset < buf.length) {
-    let end = Math.min(offset + CHUNK_TARGET, buf.length)
-    if (end < buf.length) end = findFrameSync(buf, end)
-    if (end <= offset) end = buf.length // 防御：帧同步找不到时剩余全切
-    const chunk = buf.subarray(offset, end)
-    idx++
-    console.info(`[podcast] 分片转写 #${idx}（${(chunk.length / 1024 / 1024).toFixed(1)}MB）`)
-    parts.push((await transcribeBuffer(chunk, cfg, cancel)).trim())
-    offset = end
-  }
+  const plan = sliceAudioForAsr(buf)
+  console.info(
+    `[podcast] 分片转写：${plan.chunks.length} 片（.${plan.ext}，共 ${(buf.length / 1024 / 1024).toFixed(1)}MB）`
+  )
+  const parts = await mapPool(plan.chunks, ASR_CHUNK_CONCURRENCY, (chunk, i) =>
+    transcribeBuffer(chunk, cfg, cancel, plan.mime, plan.ext).then((t) => {
+      console.info(`[podcast] 分片 #${i + 1} 转写完成`)
+      return t.trim()
+    })
+  )
   return parts.filter((p) => p.length > 0).join('\n\n')
 }
 
-async function transcribeBuffer(data: Buffer, cfg: AsrConfig, cancel?: AbortSignal): Promise<string> {
+async function transcribeBuffer(
+  data: Buffer,
+  cfg: AsrConfig,
+  cancel?: AbortSignal,
+  mime = 'audio/mpeg',
+  ext = 'mp3'
+): Promise<string> {
   const form = new FormData()
-  form.append('file', new Blob([new Uint8Array(data)], { type: 'audio/mpeg' }), 'audio.mp3')
+  form.append('file', new Blob([new Uint8Array(data)], { type: mime }), `audio.${ext}`)
   form.append('model', cfg.model)
   // 中文标点引导（agent-reach #291 实证：whisper 对中文输出几乎无标点，prompt 偏置显著改善可读性；多余字段被服务端忽略无副作用）
   form.append('prompt', '以下是普通话的播客内容，请输出带标点的简体中文文字稿。')

@@ -10,7 +10,6 @@ import FileExplorerSidebar from './components/FileExplorerSidebar'
 import OverviewModule from './modules/zonglan/OverviewModule'
 import LearnModule from './modules/learn/LearnModule'
 import WikiModule from './modules/wiki/WikiModule'
-import InspirationsModule from './modules/inspirations/InspirationsModule'
 import ZhijijiModule from './modules/zhijiji/ZhijijiModule'
 import AnswersModule from './modules/answers/AnswersModule'
 import ReasoningModule from './modules/reasoning/ReasoningModule'
@@ -21,6 +20,7 @@ import FeedModule from './modules/feed/FeedModule'
 import LiteratureModule from './modules/literature/LiteratureModule'
 import PodcastModule from './modules/podcast/PodcastModule'
 import FushiModule from './modules/fushi/FushiModule'
+import DuiyiModule from './modules/duiyi/DuiyiModule'
 import FubenModule from './modules/fuben/FubenModule'
 import LedgerModule from './modules/ledger/LedgerModule'
 import YuleModule from './modules/yule/YuleModule'
@@ -44,7 +44,8 @@ import './App.css'
 // 左栏模块顺序（260924 侧边栏新布局：三段式——top 上固定 / learn|life 模式区 / bottom 下固定，
 // 渲染顺序 = top → 当前模式区 → bottom，各组内保持数组相对顺序；设计正本 docs/project/全局/2026-09-24-侧边栏新布局-design.md）
 // 拆分新模块：literature 论文库（自信息源）/ answers 答疑店（问答|辩真|预言家）/ favorites 收藏夹（自图书馆）
-// 归属变化：文笔坊升常驻(top)、致知己 life→learn、灵感泉留生活区（顶替已删除的惊喜林规划）
+// 归属变化：文笔坊升常驻(top)、致知己 life→learn、灵感泉迁入致知己为页签（260926，左栏入口删除）、
+// 对弈社 life 段新增（260926，赋诗苑与推理角之间）
 // pending 占位：无（播客台/副本库/赋诗苑/娱乐城 260925 全部转正；新占位出现时在此注记）
 const MODULES: {
   id: ModuleId
@@ -68,10 +69,10 @@ const MODULES: {
   { id: 'zangyue', label: '图书馆', icon: 'menu_book', seg: 'life' },
   { id: 'fuben', label: '副本库', icon: 'collections_bookmark', seg: 'life' },
   { id: 'fushi', label: '赋诗苑', icon: 'brush', seg: 'life' },
+  { id: 'duiyi', label: '对弈社', icon: 'chess', seg: 'life' },
   { id: 'reasoning', label: '推理角', icon: 'psychology', seg: 'life' },
   { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', seg: 'life' },
-  { id: 'inspirations', label: '灵感泉', icon: 'lightbulb', seg: 'life' },
   // —— 下固定 ——
   { id: 'favorites', label: '收藏夹', icon: 'bookmarks', seg: 'bottom' },
   { id: 'recycle', label: '回收站', icon: 'delete', seg: 'bottom' },
@@ -415,7 +416,6 @@ function Shell() {
               {m.id === 'wiki' && (
                 <WikiModule onOpenAi={openAiWith} bumpAi={() => setAiVersion((v) => v + 1)} />
               )}
-              {m.id === 'inspirations' && <InspirationsModule onOpenAi={openAiWith} />}
               {m.id === 'zhijiji' && (
                 <ZhijijiModule
                   onNavigateToProfile={() => activateModule('profile')}
@@ -448,7 +448,8 @@ function Shell() {
               {m.id === 'ledger' && <LedgerModule />}
               {m.id === 'yule' && <YuleModule />}
               {m.id === 'fushi' && <FushiModule />}
-              {m.id === 'recycle' && <RecycleModule />}
+              {m.id === 'duiyi' && <DuiyiModule />}
+              {m.id === 'recycle' && <RecycleModule appMode={appMode} />}
               {m.id === 'profile' && <ProfileModule onOpenWorkspace={openAgentCenter} />}
             </div>
           ))}

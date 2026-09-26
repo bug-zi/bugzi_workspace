@@ -180,7 +180,7 @@
   font-size: 0.7em;
   padding: 0 6px;
 }
-/* 灵感泉卡片正文预览（优化建议区：md 正文预览灰色小字，最多 3 行；字数上限见 InspirationsModule load） */
+/* 灵感泉卡片正文预览（优化建议区：md 正文预览灰色小字，最多 3 行；字数上限见 InspirationsPanel load） */
 .row-preview {
   margin-top: 2px;
   font-size: 0.82em;
@@ -677,7 +677,17 @@
   scroll-margin-top: 50px;
 }
 
-/* ===== 回收站页签 ===== */
+/* ===== 回收站 ===== */
+/* 工具条（260926 优化建议区第58轮：页签行删除，全部混排 + 来源筛选下拉） */
+.recycle-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.recycle-toolbar .btn .material-symbols-outlined:last-child {
+  margin-left: 2px;
+}
 .recycle-tabs {
   display: flex;
   gap: 6px;
@@ -702,6 +712,12 @@
   background: transparent;
   border: none;
   padding: 0;
+}
+/* 领域筛选行小号变体（260927 论文库/科普：两子页签共用一行领域 tab） */
+.domain-tabs .recycle-tab {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 14px;
 }
 
 /* ===== 首次引导 ===== */
@@ -2063,6 +2079,23 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+/* 存档恢复横幅（优化建议区第58轮） */
+.fushi-restore-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+}
+.fushi-restore-bar .material-symbols-outlined {
+  color: var(--color-primary-deep);
+  font-size: 18px;
+}
+.fushi-restore-bar .btn {
+  margin-left: auto;
 }
 .fushi-game-card {
   display: flex;

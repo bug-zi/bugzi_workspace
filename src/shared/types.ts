@@ -8,7 +8,6 @@ export type ModuleId =
   | 'zonglan'
   | 'learn'
   | 'wiki'
-  | 'inspirations'
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
@@ -23,6 +22,7 @@ export type ModuleId =
   | 'podcast'
   | 'fuben'
   | 'fushi'
+  | 'duiyi'
   | 'yule'
 
 // 模块深链导航事件 detail（260912 总导览）：App.tsx MODULE_NAVIGATE_EVENT 的载荷，
@@ -150,6 +150,8 @@ export const SettingsKeys = {
   /** 播客台「播客·追问」场景激活会话（260925 播客台） */
   AiActiveSessionPodcast: 'ai_active_session_podcast',
   /** ASR（语音转写）配置 JSON AsrConfig（个人档「ASR 配置」区，260925 播客台） */
+  // 飞花令进行中对局存档（优化建议区第58轮）：JSON { keyword, daily, lines, startedDate, savedAt }
+  FushiOngoing: 'fushi_ongoing',
   AsrConfig: 'asr_config'
 } as const
 
@@ -353,6 +355,9 @@ export const LLM_SCENE_LABELS: Record<string, string> = {
   'agent:digest': '工作台·导读卡',
   'agent:lecture': '工作台·精讲',
   'agent:translate': '工作台·精译',
+  'agent:s-translate': '工作台·科普解读',
+  'agent:s-light': '工作台·科普加注',
+  'agent:s-lecture': '工作台·科普精讲',
   'fushi:feihua': '赋诗苑·飞花令',
   'fushi:doushi': '赋诗苑·斗诗台',
   'fushi:copilot': '赋诗苑·诗友',
@@ -929,8 +934,10 @@ export interface PodcastFeed {
   rss_transcripts: number
 }
 
-/** 单集流视图（260925 收件箱制；260926 增收藏）：inbox=未读未收藏（默认），archived=已读未收藏，all=全部含收藏，starred=收藏（按收藏时间倒序） */
-export type PodcastEpisodeView = 'inbox' | 'archived' | 'all' | 'starred'
+/** 单集流视图（260925 收件箱制；260926 增收藏；同日增查阅区）：
+ *  inbox=未读未收藏且转写未完成（新到/排队/失败），review=未读未收藏且转写完成（阅读队列，读后自行收藏/归档），
+ *  archived=已读未收藏，all=全部含收藏，starred=收藏（按收藏时间倒序） */
+export type PodcastEpisodeView = 'inbox' | 'review' | 'archived' | 'all' | 'starred'
 
 /** 播客单集列表轻量行（单集流；不含 shownotes/transcript_text/summary_md 大字段） */
 export interface PodcastEpisodeSummary {
@@ -1454,6 +1461,8 @@ export interface PaperRow {
   digest_md: string | null
   /** 精译术语表 JSON */
   glossary: string | null
+  /** 归属领域（agent_domains.id；DB v63 起转正时自发现条目复制，NULL 或领域已删归「未分类」） */
+  domain_id: number | null
   discovery_id: number | null
   created_at: string
   updated_at: string
@@ -1539,6 +1548,8 @@ export interface AgentStatusSnapshot {
   budgetUsedToday: number
   /** 在跑任务类型列表 */
   runningTypes: string[]
+  /** 在跑任务明细（260927：refId + 进度文本，科普面板按文章精确显示生成态） */
+  runningTasks: { runId: number; type: string; refId: number | null; progress: string | null }[]
   /** 最近一次队列事件（enqueued=入队 done/failed/skipped=终态；渲染层增量刷新依据） */
   lastEvent: { type: string; status: string } | null
 }
@@ -1702,4 +1713,34 @@ export interface BlackjackStatsView {
   losses: number
   pushes: number
   net: number
+}
+
+// ---------- 对弈社（2026-09-26 对弈社 design：五种棋人机对弈留档） ----------
+
+export type DuiyiGameKey = 'xiangqi' | 'chess' | 'shogi' | 'gomoku' | 'go'
+
+/** 对弈对局行（duiyi_games；state 进行中快照 JSON、record 终局棋谱 JSON） */
+export interface DuiyiGameRow {
+  id: number
+  game: DuiyiGameKey
+  status: 'playing' | 'finished' | 'abandoned'
+  difficulty: number
+  board_spec: number | null
+  result: 'win' | 'loss' | 'draw' | null
+  reason: string | null
+  move_count: number
+  state: string | null
+  record: string | null
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 对弈战绩（读时聚合） */
+export interface DuiyiStats {
+  win: number
+  loss: number
+  draw: number
 }

@@ -3,7 +3,6 @@ export type ModuleId =
   | 'zonglan'
   | 'learn'
   | 'wiki'
-  | 'inspirations'
   | 'zhijiji'
   | 'reasoning'
   | 'wenbi'
@@ -18,6 +17,7 @@ export type ModuleId =
   | 'podcast'
   | 'fuben'
   | 'fushi'
+  | 'duiyi'
   | 'yule'
 
 /** AI 边栏频道（DB v9 频道制；260911 新增 learn，260912 新增 prophet，2.0 批次C 新增 literature，260925 新增 podcast） */
@@ -699,6 +699,7 @@ export interface RecycleRow {
     | 'yule_taro'
     | 'yule_poker'
     | 'fuben'
+    | 'duiyi'
   item_id: number
   payload: string
   created_at: string
@@ -991,6 +992,8 @@ export interface AgentStatusSnapshot {
   memTotalBytes: number
   budgetUsedToday: number
   runningTypes: string[]
+  /** 在跑任务明细（260927：refId + 进度文本，科普面板按文章精确显示生成态） */
+  runningTasks: { runId: number; type: string; refId: number | null; progress: string | null }[]
   /** 最近一次队列事件（渲染层增量刷新依据） */
   lastEvent: { type: string; status: string } | null
 }
@@ -1044,6 +1047,8 @@ export interface PaperRow {
   fulltext_path: string | null
   digest_md: string | null
   glossary: string | null
+  /** 归属领域（agent_domains.id；DB v63 起转正时自发现条目复制，NULL 或领域已删归「未分类」） */
+  domain_id: number | null
   discovery_id: number | null
   created_at: string
   updated_at: string
@@ -1623,6 +1628,28 @@ export interface Api {
     ): Promise<{ balance: number; stats: BlackjackStatsView }>
     blackjackStats(): Promise<BlackjackStatsView>
   }
+  duiyi: {
+    /** 开局（同棋种旧 playing 局自动置 abandoned；initialState 引擎快照 JSON） */
+    start(game: DuiyiGameKey, difficulty: number, boardSpec: number | null, initialState: string): Promise<DuiyiGameRow>
+    /** 进行中对局（无则 null） */
+    playing(game: DuiyiGameKey): Promise<DuiyiGameRow | null>
+    /** 快照回写（节流；局已终态静默丢弃） */
+    saveState(game: DuiyiGameKey, id: number, state: string, moveCount: number): Promise<boolean>
+    /** 终局落库（仅 playing 生效；result 我方视角） */
+    finish(
+      id: number,
+      result: 'win' | 'loss' | 'draw',
+      reason: string,
+      record: string,
+      moveCount: number,
+      durationMs: number
+    ): Promise<DuiyiGameRow>
+    /** 终局记录列表（finished） */
+    list(game?: DuiyiGameKey): Promise<DuiyiGameRow[]>
+    stats(): Promise<Record<DuiyiGameKey | 'total', DuiyiStats>>
+    /** 移入回收站（需前端二次确认） */
+    discard(id: number): Promise<boolean>
+  }
   mottos: {
     list(status?: string): Promise<MottoRecord[]>
     create(content: string, source: string, status: string, tags?: string[]): Promise<number>
@@ -1978,6 +2005,8 @@ export interface Api {
     delete(id: number): Promise<boolean>
     /** meta_only「重试抓取」：成功自动入队解读 */
     retryFetch(id: number): Promise<boolean>
+    /** 原文全文缓存（science/{id}.txt；meta_only 或文件缺失返回 null） */
+    fulltext(id: number): Promise<string | null>
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
     interpret(id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean): Promise<number>
     highlightAdd(articleId: number, text: string): Promise<boolean>
@@ -2016,8 +2045,10 @@ export interface Api {
     feedsUpdate(id: number, patch: { auto_transcribe?: boolean; title?: string }): Promise<boolean>
     /** 退订连删该节目全部单集（前端二次确认后调用） */
     feedsDelete(id: number): Promise<boolean>
-    /** 单集流（feedId=null 全部订阅；view=inbox 未读收件箱 / archived 已读归档 / all 全部 / starred 收藏，缺省 all） */
+    /** 单集流（feedId=null 全部订阅；view=inbox 未读未转写完成 / review 查阅区未读转写完成 / archived 已读归档 / all 全部 / starred 收藏，缺省 all） */
     episodes(feedId: number | null, view?: import('../shared/types').PodcastEpisodeView): Promise<import('../shared/types').PodcastEpisodeSummary[]>
+    /** 视图计数（260926 查阅区）：收件箱/查阅区 chips 徽标 */
+    viewCounts(feedId: number | null): Promise<{ inbox: number; review: number }>
     /** 标已读/未读切换 */
     episodeRead(id: number, read: boolean): Promise<boolean>
     /** 删单集（前端二次确认后调用） */
@@ -2057,7 +2088,9 @@ export interface Api {
       keyword: string,
       daily: boolean,
       result: import('../shared/types').FushiResult,
-      lines: import('../shared/types').FeihuaLine[]
+      lines: import('../shared/types').FeihuaLine[],
+      /** 存档恢复局传开局日（YYYY-MM-DD）：留档与打卡归开局日，跨日完成不误标今天 */
+      startedDate?: string
     ): Promise<number>
     /** 斗诗出题（主题 + 体裁） */
     doushiNew(jobId: string): Promise<{ topic: string; genre: import('../shared/types').FushiGenre }>
@@ -2163,6 +2196,36 @@ export interface BlackjackStatsView {
   losses: number
   pushes: number
   net: number
+}
+
+// ---------- 对弈社（2026-09-26 对弈社 design） ----------
+
+export type DuiyiGameKey = 'xiangqi' | 'chess' | 'shogi' | 'gomoku' | 'go'
+
+/** 对弈对局行（duiyi_games；state 进行中快照 JSON、record 终局棋谱 JSON） */
+export interface DuiyiGameRow {
+  id: number
+  game: DuiyiGameKey
+  status: 'playing' | 'finished' | 'abandoned'
+  difficulty: number
+  board_spec: number | null
+  result: 'win' | 'loss' | 'draw' | null
+  reason: string | null
+  move_count: number
+  state: string | null
+  record: string | null
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
+  updated_at: string
+  deleted_at: string | null
+}
+
+/** 对弈战绩（读时聚合） */
+export interface DuiyiStats {
+  win: number
+  loss: number
+  draw: number
 }
 
 declare global {

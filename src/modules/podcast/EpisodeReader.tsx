@@ -42,6 +42,7 @@ export default function EpisodeReader(props: Props) {
   const [goConfig, setGoConfig] = useState(false)
   const [asrConfigOpen, setAsrConfigOpen] = useState(false)
   const [read, setRead] = useState(false)
+  const [starred, setStarred] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
@@ -50,6 +51,7 @@ export default function EpisodeReader(props: Props) {
       setDetail(d)
       setSummary(d.summary_md)
       setRead(d.read_at != null)
+      setStarred(d.starred_at != null)
       setGenError('')
     } catch (e) {
       toast(`读取单集失败：${(e as Error).message}`)
@@ -61,14 +63,7 @@ export default function EpisodeReader(props: Props) {
     void load()
   }, [load])
 
-  // 打开即标已读（一次；可手动切回「再看看」）
-  useEffect(() => {
-    void window.api.podcast
-      .episodeRead(props.episodeId, true)
-      .then(() => props.onChanged())
-      .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.episodeId])
+  // 260926 查阅区：打开不再自动标已读——读后由用户在底部操作条自行「收藏 / 归档」
 
   /** 发起导读卡生成（自动 + 缓存：无缓存才跑） */
   const runSummary = useCallback(
@@ -153,11 +148,25 @@ export default function EpisodeReader(props: Props) {
     )
   }
 
-  const toggleRead = async (): Promise<void> => {
+  /** 底部操作条（260926 查阅区）：读后自行收藏/归档；已读集可移回查阅区再读 */
+  const toggleStar = async (): Promise<void> => {
     try {
-      await window.api.podcast.episodeRead(detail.id, !read)
-      setRead(!read)
+      await window.api.podcast.episodeStar(detail.id, !starred)
+      setStarred(!starred)
       props.onChanged()
+      toast(!starred ? '已收藏（移入收藏页签）' : '已取消收藏')
+    } catch (e) {
+      toast(`操作失败：${(e as Error).message}`)
+    }
+  }
+
+  const setArchived = async (next: boolean): Promise<void> => {
+    try {
+      await window.api.podcast.episodeRead(detail.id, next)
+      setRead(next)
+      props.onChanged()
+      toast(next ? '已归档' : '已移回查阅区')
+      props.onBack()
     } catch (e) {
       toast(`操作失败：${(e as Error).message}`)
     }
@@ -204,10 +213,6 @@ export default function EpisodeReader(props: Props) {
         </div>
         <button className="btn btn-primary" onClick={askFollowUp}>
           <span className="material-symbols-outlined">forum</span>追问本集
-        </button>
-        <button className="btn" onClick={() => void toggleRead()}>
-          <span className="material-symbols-outlined">{read ? 'move_to_inbox' : 'mark_email_read'}</span>
-          {read ? '再看看' : '已读'}
         </button>
       </div>
 
@@ -279,6 +284,23 @@ export default function EpisodeReader(props: Props) {
             </div>
           )}
         </article>
+      </div>
+
+      {/* 底部决策条（260926 查阅区）：读后自行收藏 / 归档；已读集可移回查阅区 */}
+      <div className="pc-reader-actions">
+        <button className="btn" onClick={() => void toggleStar()} title="收藏后移入「收藏」页签">
+          <span
+            className="material-symbols-outlined"
+            style={starred ? { fontVariationSettings: "'FILL' 1", color: 'var(--color-primary)' } : undefined}
+          >
+            star
+          </span>
+          {starred ? '已收藏' : '收藏'}
+        </button>
+        <button className="btn btn-primary" onClick={() => void setArchived(!read)}>
+          <span className="material-symbols-outlined">{read ? 'undo' : 'archive'}</span>
+          {read ? '移回查阅区' : '归档'}
+        </button>
       </div>
 
       <GoConfigDialog

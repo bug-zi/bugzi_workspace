@@ -151,6 +151,7 @@ export function getStatus(): AgentStatusSnapshot {
     memTotalBytes: s.memTotalBytes,
     budgetUsedToday: agentTokensToday(),
     runningTypes: running.map((r) => r.type),
+    runningTasks: running.map((r) => ({ runId: r.runId, type: r.type, refId: r.refId, progress: r.progress })),
     lastEvent: lastQueueEvent
   }
 }
