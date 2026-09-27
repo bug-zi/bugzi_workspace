@@ -1089,6 +1089,16 @@ const api = {
       return () => ipcRenderer.removeListener('llm:activity', listener)
     }
   },
+  notify: {
+    /** 主进程轻提示（定时格言生成完成/失败等后台事件） */
+    onToast: (cb: (payload: { text: string }) => void): (() => void) => {
+      const listener = (_e: unknown, payload: { text: string }): void => {
+        cb(payload)
+      }
+      ipcRenderer.on('notify:toast', listener)
+      return () => ipcRenderer.removeListener('notify:toast', listener)
+    }
+  },
   mcp: {
     listEnabled: (): Promise<{ name: string; url: string; enabled: boolean }[]> =>
       ipcRenderer.invoke('mcp:listEnabled'),
@@ -1240,7 +1250,14 @@ const api = {
       interpretations: import('../src/shared/types').InterpretationRow[]
       /** 双向合并相关内容（批次F：peer 标题已解析） */
       related: { link_id: number; peer_type: string; peer_id: number; title: string; origin: string; score: number }[]
+      /** 该文献在队/在跑任务类型（「抓取中/生成中」派生态，260928） */
+      active: string[]
     }> => ipcRenderer.invoke('agent:paperDetail', id),
+    /** 在队/在跑任务快照（列表「抓取中」徽章派生用；含排队未派发项） */
+    activeTasks: (): Promise<{ type: string; refId: number | null }[]> =>
+      ipcRenderer.invoke('agent:activeTasks'),
+    /** 重试抓取全文（meta_only 时可调）；成功后照常入链导读卡管道 */
+    paperRetryFetch: (id: number): Promise<void> => ipcRenderer.invoke('agent:paperRetryFetch', id),
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect: (domainId: number): Promise<number> => ipcRenderer.invoke('agent:runCollect', domainId),
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
@@ -1276,6 +1293,8 @@ const api = {
       highlights: import('../src/shared/types').ScienceHighlightRow[]
       /** 双向合并相关内容（批次F：peer 标题已解析） */
       related: { link_id: number; peer_type: string; peer_id: number; title: string; origin: string; score: number }[]
+      /** 该文章在队/在跑任务类型（「抓取中/生成中」派生态，260928） */
+      active: string[]
     }> => ipcRenderer.invoke('agent:scienceDetail', id),
     delete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceDelete', id),
     retryFetch: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceRetryFetch', id),

@@ -19,8 +19,9 @@ export interface MdDialogProps {
   content?: string
   /** 纯查看模式：不显示「双击正文编辑」、双击不进编辑态（内容数据源不在文件） */
   readOnly?: boolean
-  /** 头部「关闭」旁动作按钮（书架笔记总览：导出） */
-  headerAction?: { label: string; icon?: string; onClick: () => void }
+  /** 头部「关闭」旁动作按钮（书架笔记总览：导出；学习库卡片：复制 Markdown）。
+   *  onClick 回传当前正文 md 源文（编辑态传未保存草稿） */
+  headerAction?: { label: string; icon?: string; onClick: (content: string) => void }
   /** 关闭弹窗（关闭键/遮罩调用；若正处于编辑态会先保存） */
   onClose: () => void
   onChanged?: () => void
@@ -323,7 +324,11 @@ export default function MdDialog(props: MdDialogProps) {
           ) : review ? null : (
             <>
               {headerAction && (
-                <button className="btn btn-ghost" onClick={headerAction.onClick} title={headerAction.label}>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => headerAction.onClick(editing ? draft : content)}
+                  title={headerAction.label}
+                >
                   {headerAction.icon && <span className="material-symbols-outlined">{headerAction.icon}</span>}
                   {headerAction.label}
                 </button>

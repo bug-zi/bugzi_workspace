@@ -1909,6 +1909,10 @@ export interface Api {
     /** AI 实时活动（在途调用起止广播；空闲 items 为空数组；260912 面板扩展含时长与 jobId） */
     onActivity(cb: (payload: { items: import('../shared/types').LlmActivityItem[] }) => void): () => void
   }
+  notify: {
+    /** 主进程轻提示（定时格言生成完成/失败等后台事件） */
+    onToast(cb: (payload: { text: string }) => void): () => void
+  }
   mcp: {
     listEnabled(): Promise<{ name: string; url: string; enabled: boolean }[]>
     /** AI 辅助配置：研究 MCP 配置元数据（Registry/文档/LLM 三步降级） */
@@ -1976,7 +1980,13 @@ export interface Api {
       interpretations: InterpretationRow[]
       /** 双向合并相关内容（批次F：peer 标题已解析） */
       related: RelatedLink[]
+      /** 该文献在队/在跑任务类型（「抓取中/生成中」派生态，260928） */
+      active: string[]
     }>
+    /** 在队/在跑任务快照（列表「抓取中」徽章派生用；含排队未派发项） */
+    activeTasks(): Promise<{ type: string; refId: number | null }[]>
+    /** 重试抓取全文（meta_only 时可调）；成功后照常入链导读卡管道 */
+    paperRetryFetch(id: number): Promise<void>
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect(domainId: number): Promise<number>
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
@@ -2012,6 +2022,8 @@ export interface Api {
       highlights: ScienceHighlightRow[]
       /** 双向合并相关内容（批次F：peer 标题已解析） */
       related: RelatedLink[]
+      /** 该文章在队/在跑任务类型（「抓取中/生成中」派生态，260928） */
+      active: string[]
     }>
     /** 彻底删除科普文章（连带解读 md/全文缓存/高光/链接/向量，二次确认由渲染层负责） */
     delete(id: number): Promise<boolean>

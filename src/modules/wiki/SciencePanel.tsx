@@ -38,9 +38,15 @@ export default function SciencePanel(props: SciencePanelProps) {
   // 主栏阅读视图（260927 长文阅读视图化）：阅读对象 articleId；null=列表态
   const [readingId, setReadingId] = useState<number | null>(null)
   const [delTarget, setDelTarget] = useState<ScienceArticleRow | null>(null)
+  // 抓取中文章 id 集（science_fetch 在队/在跑派生，260928 三态化）
+  const [fetchingIds, setFetchingIds] = useState<Set<number>>(new Set())
 
   const loadArticles = useCallback((): void => {
     void window.api.science.list().then(setArticles)
+    // 抓取中派生态（260928 三态化）：science_fetch 在队/在跑的文章 id 集
+    void window.api.agent.activeTasks().then((rows) => {
+      setFetchingIds(new Set(rows.filter((t) => t.type === 'science_fetch' && t.refId != null).map((t) => t.refId as number)))
+    })
   }, [])
   // 发现箱（260923 修订：科普候选自信息源文献页签迁入本页签，接受/拒绝在此完成）
   const loadCandidates = useCallback((): void => {
@@ -68,7 +74,12 @@ export default function SciencePanel(props: SciencePanelProps) {
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       const ev = s.lastEvent
-      if (!ev || ev.status === 'enqueued') return
+      if (!ev) return
+      // 入队事件也要刷「抓取中」徽章（260928 三态化）
+      if (ev.status === 'enqueued') {
+        if (ev.type === 'science_fetch') loadArticles()
+        return
+      }
       if (ev.type === 'collect_science') {
         loadArticles()
         loadCandidates()
@@ -316,7 +327,7 @@ export default function SciencePanel(props: SciencePanelProps) {
             <div className="row-actions" onClick={(e) => e.stopPropagation()}>
               {a.domain_name && <span className="badge">{a.domain_name}</span>}
               <span className={`badge ${a.status === 'ready' ? 'primary' : ''}`}>
-                {a.status === 'ready' ? '全文就绪' : '仅元信息'}
+                {a.status === 'ready' ? '全文就绪' : fetchingIds.has(a.id) ? '抓取中…' : '仅元信息'}
               </span>
               <button className="icon-btn danger" title="彻底删除" onClick={() => setDelTarget(a)}>
                 <span className="material-symbols-outlined">delete</span>

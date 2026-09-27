@@ -35,6 +35,8 @@ export default function LiteraturePanel({
   const [subTab, setSubTab] = useState<SubTab>('discover')
   const [items, setItems] = useState<DiscoverItemRow[]>([])
   const [papers, setPapers] = useState<PaperRow[]>([])
+  // 抓取中文献 id 集（make_digest 在队/在跑派生，260928 三态化）
+  const [fetchingIds, setFetchingIds] = useState<Set<number>>(new Set())
   const [domains, setDomains] = useState<AgentDomainRow[]>([])
   // 领域筛选（260927）：domainsAll=deep 轨全量（tab 数据源，含停用），domains=启用中（海选下拉）
   const [domainsAll, setDomainsAll] = useState<AgentDomainRow[]>([])
@@ -51,6 +53,10 @@ export default function LiteraturePanel({
   }, [])
   const loadPapers = useCallback((): void => {
     void window.api.agent.papers().then(setPapers)
+    // 抓取中派生态（260928 三态化）：make_digest 在队/在跑的文献 id 集
+    void window.api.agent.activeTasks().then((rows) => {
+      setFetchingIds(new Set(rows.filter((t) => t.type === 'make_digest' && t.refId != null).map((t) => t.refId as number)))
+    })
   }, [])
   const loadDomains = useCallback((): void => {
     void window.api.agent.domains().then((ds) => {
@@ -72,7 +78,12 @@ export default function LiteraturePanel({
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       const ev = s.lastEvent
-      if (!ev || ev.status === 'enqueued') return
+      if (!ev) return
+      // 入队事件也要刷「抓取中」徽章（260928 三态化）；其余终态照旧
+      if (ev.status === 'enqueued') {
+        if (ev.type === 'make_digest') loadPapers()
+        return
+      }
       if (ev.type === 'collect_deep') {
         loadDiscover()
         toast(ev.status === 'done' ? '海选完成，发现箱已更新' : '海选任务失败，详见控制台 [agent] 日志')
@@ -334,7 +345,7 @@ export default function LiteraturePanel({
               </div>
               <div className="row-actions">
                 <span className={`badge ${p.status === 'ready' ? 'primary' : ''}`}>
-                  {p.status === 'ready' ? '全文就绪' : '仅元信息'}
+                  {p.status === 'ready' ? '全文就绪' : fetchingIds.has(p.id) ? '抓取中…' : '仅元信息'}
                 </span>
                 <button className="icon-btn danger" title="彻底删除文献" onClick={() => setDelPaper(p)}>
                   <span className="material-symbols-outlined">delete</span>

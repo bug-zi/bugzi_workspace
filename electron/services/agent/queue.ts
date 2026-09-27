@@ -214,6 +214,14 @@ export function runningRuns(): { runId: number; type: string; refId: number | nu
   return [...running.entries()].map(([runId, r]) => ({ runId, type: r.type, refId: r.refId, progress: r.progress }))
 }
 
+/** 在队/在跑任务快照（渲染层「抓取中/生成中」派生显示用）：enqueue 即插 running 行，
+ *  排队未派发的项也含在内（与 runningRuns 只含在飞项不同） */
+export function activeTasks(): { type: string; refId: number | null }[] {
+  return getDb()
+    .prepare("SELECT task_type AS type, ref_id AS refId FROM task_runs WHERE status = 'running'")
+    .all() as { type: string; refId: number | null }[]
+}
+
 /** 取消在跑任务（任务中心批次 C 用） */
 export function cancelRun(runId: number): boolean {
   const r = running.get(runId)

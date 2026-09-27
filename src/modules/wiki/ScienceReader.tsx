@@ -24,6 +24,8 @@ interface ScienceDetail {
   interpretations: InterpretationRow[]
   highlights: ScienceHighlightRow[]
   related: RelatedLink[]
+  /** 该文章在队/在跑任务类型（含排队未派发项，260928） */
+  active: string[]
 }
 
 /** 解读版产物（按语言自动分流：en=translation 全文解读 / zh=light 轻加工） */
@@ -87,24 +89,30 @@ export default function ScienceReader(props: {
   const interpOf = (kind: 'translation' | 'light' | 'lecture'): InterpretationRow | undefined =>
     detail?.interpretations.find((i) => i.kind === kind && i.status === 'done')
 
-  const busyTaskOf = (taskType: string): { progress: string | null } | null =>
+  const runningOf = (taskType: string): { progress: string | null } | null =>
     detail ? (runningTasks.find((t) => t.type === taskType && t.refId === detail.article.id) ?? null) : null
+  // 忙判定（260928）：在飞 + 排队未派发都算忙（runningTasks 只含在飞项，排队段此前无提示）
+  const busyOf = (taskType: string): { progress: string | null } | null =>
+    runningOf(taskType) ?? (detail?.active.includes(taskType) ? { progress: null } : null)
   const autoKind = detail ? autoKindOf(detail.article) : 'light'
   const autoRow = detail ? interpOf(autoKind) : undefined
   const lectureRow = detail ? interpOf('lecture') : undefined
-  const autoBusy = busyTaskOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
-  const lectureBusy = busyTaskOf('science_lecture')
+  const autoBusy = busyOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
+  const autoRunning = runningOf(autoKind === 'translation' ? 'science_translate' : 'science_light')
+  const lectureBusy = busyOf('science_lecture')
   const busyHere = !!autoBusy || !!lectureBusy
+  const fetching = detail ? detail.article.status !== 'ready' && detail.active.includes('science_fetch') : false
   const currentRow = view === 'source' ? undefined : view === 'lecture' ? lectureRow : autoRow
 
-  // 生成中实时围观：done 台账未落也按约定路径读半成品 md（产物逐部分落盘，读到的永远是已完成部分）
+  // 生成中实时围观：done 台账未落也按约定路径读半成品 md（产物逐部分落盘，读到的永远是已完成部分）。
+  // 仅在飞任务读半成品路径——排队任务文件尚未产生，走「排队生成中」占位
   const autoPath =
     detail
       ? autoRow?.md_path ??
-        (autoBusy ? `md/interpretations/sa-${detail.article.id}-${autoKind === 'translation' ? 'translate' : 'light'}.md` : undefined)
+        (autoRunning ? `md/interpretations/sa-${detail.article.id}-${autoKind === 'translation' ? 'translate' : 'light'}.md` : undefined)
       : undefined
   const lecturePath = detail
-    ? lectureRow?.md_path ?? (lectureBusy ? `md/interpretations/sa-${detail.article.id}-lecture.md` : undefined)
+    ? lectureRow?.md_path ?? (runningOf('science_lecture') ? `md/interpretations/sa-${detail.article.id}-lecture.md` : undefined)
     : undefined
   const readingContent = view === 'lecture' ? lecturePath : autoPath
 
@@ -115,12 +123,12 @@ export default function ScienceReader(props: {
     return () => clearInterval(t)
   }, [busyHere, load])
 
-  // 队列事件：本文相关任务终态 → 即时刷新详情
+  // 队列事件：本文相关任务（入队/终态都刷，260928 排队段也要点亮生成中）→ 即时刷新详情
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       setRunningTasks(s.runningTasks ?? [])
       const ev = s.lastEvent
-      if (!ev || ev.status === 'enqueued') return
+      if (!ev) return
       if (ev.type === 'science_fetch' || ev.type === 'science_translate' || ev.type === 'science_light' || ev.type === 'science_lecture') {
         void load()
       }
@@ -147,7 +155,8 @@ export default function ScienceReader(props: {
     return () => {
       cancelled = true
     }
-  }, [view, detail?.article.id])
+    // status 变化也要重读（260928：抓取完成 ready 后原文视图自动出内容）
+  }, [view, detail?.article.id, detail?.article.status])
 
   // 内容装载：原文用 sourceMd；解读产物读 md 文件（mdVersion 变化重读，替代原 MdDialog key 重挂）
   useEffect(() => {
@@ -311,9 +320,11 @@ export default function ScienceReader(props: {
   const langLabel = article?.language === 'en' ? '英文' : '中文'
   const metaMd = article
     ? `# ${article.title}\n\n> ${langLabel}${article.domain_name ? ' · ' + article.domain_name : ''}${article.date ? ' · ' + article.date : article.year != null ? ' · ' + article.year : ''} · ${article.source}\n\n${article.summary || '（暂无摘要）'}\n\n${
-        article.status === 'meta_only'
-          ? '> ⚠ 全文尚未抓取到：可点顶栏「重试抓取」，成功后自动开始解读。'
-          : '> 全文已就绪，点页签行「生成解读版」开始解读。'
+        fetching
+          ? '> 全文抓取中…完成后自动开始解读；失败会降级为「仅元信息」，可点顶栏「重试抓取」。'
+          : article.status === 'meta_only'
+            ? '> ⚠ 全文尚未抓取到：可点顶栏「重试抓取」，成功后自动开始解读。'
+            : '> 全文已就绪，点页签行「生成解读版」开始解读。'
       }\n`
     : ''
 
@@ -372,6 +383,7 @@ export default function ScienceReader(props: {
         ) : (
           <button
             className="btn"
+            disabled={fetching}
             onClick={() => {
               if (!detail) return
               void window.api.science
@@ -379,7 +391,7 @@ export default function ScienceReader(props: {
                 .then(() => toast('重试抓取中，完成后自动解读'))
                 .catch((e) => toast(`重试失败：${(e as Error).message}`))
             }}
-            title="重新抓取全文；成功后自动入队解读"
+            title={fetching ? '抓取任务进行中，请稍候' : '重新抓取全文；成功后自动入队解读'}
           >
             <span className="material-symbols-outlined">cloud_download</span>
             重试抓取
@@ -414,7 +426,13 @@ export default function ScienceReader(props: {
         <button
           className={`recycle-tab${view === 'source' ? ' active' : ''}`}
           onClick={() => setView('source')}
-          title={article?.status === 'ready' ? '在 App 内阅读原文全文' : '全文未抓取到，可「重试抓取」'}
+          title={
+            article?.status === 'ready'
+              ? '在 App 内阅读原文全文'
+              : fetching
+                ? '全文抓取中，完成后可读'
+                : '全文未抓取到，可「重试抓取」'
+          }
         >
           原文
         </button>
@@ -498,7 +516,28 @@ export default function ScienceReader(props: {
                 </button>
               </div>
             </div>
-          ) : view !== 'source' && metaMd ? (
+          ) : view === 'source' ? (
+            fetching ? (
+              <div className="empty-state">
+                <span className="material-symbols-outlined spin">progress_activity</span>
+                全文抓取中…（抓取任务在队列中进行，完成后自动就绪；失败会降级为「仅元信息」）
+              </div>
+            ) : mdText ? (
+              <MdView md={mdText} />
+            ) : (
+              <div className="empty-state">
+                <span className="material-symbols-outlined spin">progress_activity</span>
+                加载中…
+              </div>
+            )
+          ) : mdText ? (
+            <MdView md={mdText} bodyRef={bodyRef} />
+          ) : busyHere ? (
+            <div className="empty-state">
+              <span className="material-symbols-outlined spin">progress_activity</span>
+              已入队，排队生成中——轮到后自动开始，完成后自动更新
+            </div>
+          ) : metaMd ? (
             <MdView md={metaMd} />
           ) : (
             <div className="empty-state">

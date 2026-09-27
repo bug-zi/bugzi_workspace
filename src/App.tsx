@@ -158,6 +158,18 @@ function Shell() {
     return () => window.removeEventListener(TURTLE_GAME_EVENT, onTurtleGame)
   }, [])
 
+  // 主进程轻提示（notify:toast，260928）：定时格言生成完成/失败；完成条点击直达文笔坊·格言库
+  useEffect(() => {
+    return window.api.notify.onToast(({ text }) => {
+      toast(text, {
+        onClick: () =>
+          window.dispatchEvent(
+            new CustomEvent(MODULE_NAVIGATE_EVENT, { detail: { module: 'wenbi', target: 'mottos' } })
+          )
+      })
+    })
+  }, [])
+
   // 启动恢复上次展开的面板（默认 debugzi，与既有行为一致）
   useEffect(() => {
     void window.api.settings.get(SettingsKeys.RightPanelExpanded).then((v) => {

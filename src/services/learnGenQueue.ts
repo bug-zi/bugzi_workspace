@@ -101,6 +101,22 @@ export function enqueueLearnGen(item: { id: number; title: string }): void {
   pump()
 }
 
+/** 置顶排队项（AI 调用面板用）：移到等待队列队首，下一波派发最先跑；生成中项不可调 */
+export function topLearnGen(id: number): void {
+  const wi = waiting.findIndex((w) => w.id === id)
+  if (wi <= 0) return
+  const [w] = waiting.splice(wi, 1)
+  waiting.unshift(w)
+  const idx = items.findIndex((i) => i.id === id && i.phase === 'queued')
+  if (idx >= 0) {
+    const [it] = items.splice(idx, 1)
+    // 只在 queued 段内前插，不越过多条已在生成的项
+    const firstQueued = items.findIndex((i) => i.phase === 'queued')
+    items.splice(firstQueued === -1 ? items.length : firstQueued, 0, it)
+  }
+  rebuild()
+}
+
 /** 取消单项：排队中直接移出；生成中经 ai:cancel 中止（Promise 拒绝后泵 finally 统一清理） */
 export function cancelLearnGen(id: number): void {
   const jobId = jobIds.get(id)

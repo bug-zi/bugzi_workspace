@@ -89,9 +89,10 @@ export function acceptDiscover(id: number): { paperId: number } | { scienceId: n
   // 科普分流（批次D）：article 条目转正入 science_articles，主进程路由、渲染层零分支
   if (row.source_type === 'article') return scienceAcceptRow(row)
   const now = nowIso()
+  // 转正即 meta_only（全文未抓不标就绪，260928 三态化）；抓取中由 task_runs 派生显示
   const r = d
     .prepare(
-      "INSERT INTO papers (title, authors, year, date, summary, tags, language, url, source, status, domain_id, discovery_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)"
+      "INSERT INTO papers (title, authors, year, date, summary, tags, language, url, source, status, domain_id, discovery_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'meta_only', ?, ?, ?, ?)"
     )
     .run(
       String(row.title),
@@ -117,6 +118,18 @@ export function acceptDiscover(id: number): { paperId: number } | { scienceId: n
 
 export function listPapers(): PaperRow[] {
   const rows = getDb().prepare('SELECT * FROM papers ORDER BY id DESC').all() as unknown as Record<string, unknown>[]
+  // 自愈（260928 三态化）：标 ready 但缓存文件缺失 → 回 meta_only 并重新入队抓取
+  // （治「转正后抓取中途退出 App，启动恢复把任务终态化，论文永远就绪却读不出」的死状态）
+  const d = getDb()
+  for (const r of rows) {
+    const id = Number(r.id)
+    if (r.status === 'ready' && !existsSync(txtPath(id))) {
+      d.prepare("UPDATE papers SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), id)
+      r.status = 'meta_only'
+      enqueue('make_digest', { refId: id, trigger: 'auto' })
+      logWarn('agent', `[agent:papers] #${id}《${String(r.title)}》就绪但缓存缺失，已自动重抓`)
+    }
+  }
   return rows.map(hydratePaper)
 }
 
@@ -272,6 +285,16 @@ export async function importManualPdf(paperId: number, srcAbsPath: string): Prom
   } catch (e) {
     logWarn('agent', `[agent:papers] 手动 PDF 抽取失败：${(e as Error).message}`)
     throw e
+  }
+}
+
+/** 重试抓取（260928 三态化，与科普 retryScienceFetch 同口径）：成功后照常入链导读卡管道 */
+export async function retryPaperFetch(paperId: number): Promise<void> {
+  const paper = getPaper(paperId)
+  if (!paper) throw new Error('NOT_FOUND')
+  await ensureFulltext(paper)
+  if (getPaper(paperId)?.status === 'ready') {
+    enqueue('make_digest', { refId: paperId, trigger: 'auto' })
   }
 }
 

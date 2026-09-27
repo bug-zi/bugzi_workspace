@@ -1062,6 +1062,13 @@ export default function LearnModule() {
         filePath={card ? `md/learn/${card.id}.md` : ''}
         onClose={() => setCard(null)}
         onChanged={() => setMdVersion((v) => v + 1)}
+        headerAction={{
+          label: '复制为 Markdown',
+          icon: 'content_copy',
+          onClick: (md) => {
+            void window.api.clipboard.writeText(md).then(() => toast('已复制为 Markdown，可粘贴到你的笔记'))
+          }
+        }}
         selectionActions={{
           onHighlight: (t) => void onHighlight(t),
           onUnhighlight: (t) => void onUnhighlight(t),

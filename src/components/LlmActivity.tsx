@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { LLM_SCENE_LABELS } from '../shared/types'
 import type { LlmActivityItem } from '../shared/types'
-import { cancelAllLearnGen, cancelLearnGen, useLearnQueue } from '../services/learnGenQueue'
+import { cancelAllLearnGen, cancelLearnGen, topLearnGen, useLearnQueue } from '../services/learnGenQueue'
 import { useToast } from './Toast'
 
 export default function LlmActivity() {
@@ -112,6 +112,18 @@ export default function LlmActivity() {
                     <div className="llm-panel-title">{q.title}</div>
                     <div className="module-sub">学习库 · 排队中</div>
                   </div>
+                  {q.id !== waitingItems[0]?.id && (
+                    <button
+                      className="icon-btn"
+                      title="置顶：下一个生成"
+                      onClick={() => {
+                        topLearnGen(q.id)
+                        toast('已置顶，将下一个生成')
+                      }}
+                    >
+                      <span className="material-symbols-outlined">vertical_align_top</span>
+                    </button>
+                  )}
                   <button
                     className="icon-btn"
                     title="移出队列"

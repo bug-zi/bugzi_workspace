@@ -76,6 +76,17 @@ const SCIENCE_SELECT = 'SELECT s.*, d.name AS domain_name FROM science_articles 
 
 export function listScienceArticles(): ScienceArticleRow[] {
   const rows = getDb().prepare(`${SCIENCE_SELECT} ORDER BY s.id DESC`).all() as unknown as Record<string, unknown>[]
+  // 自愈（260928 三态化，listPapers 同款）：标 ready 但缓存文件缺失 → 回 meta_only 并重新入队抓取
+  const d = getDb()
+  for (const r of rows) {
+    const id = Number(r.id)
+    if (r.status === 'ready' && !existsSync(txtPath(id))) {
+      d.prepare("UPDATE science_articles SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), id)
+      r.status = 'meta_only'
+      enqueue('science_fetch', { refId: id, trigger: 'auto' })
+      logWarn('agent', `[agent:science] #${id}《${String(r.title)}》就绪但缓存缺失，已自动重抓`)
+    }
+  }
   return rows.map(hydrateScience)
 }
 

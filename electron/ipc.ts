@@ -53,7 +53,8 @@ import {
   pendingDiscoverCount,
   deletePaper,
   deleteDiscover,
-  readFulltext
+  readFulltext,
+  retryPaperFetch
 } from './services/agent/papers'
 import { runInterpret } from './services/agent/interpret'
 import { runScienceInterpret } from './services/agent/interpretScience'
@@ -74,7 +75,7 @@ import {
   addLink,
   deleteLink
 } from './services/agent/science'
-import { enqueue } from './services/agent/queue'
+import { enqueue, activeTasks } from './services/agent/queue'
 import { listRuns, dayStats } from './services/agent/center'
 import { startLiteratureAsk } from './services/agent/ask'
 import {
@@ -4019,12 +4020,23 @@ export function registerIpc(): void {
     return true
   })
   ipcMain.handle('agent:papers', () => listPapers())
+  // 该 owner 在队/在跑的任务类型去重集（「抓取中/生成中」派生态，260928 三态化）
+  const activeTypesFor = (types: string[], refId: number): string[] => [
+    ...new Set(activeTasks().filter((t) => t.refId === refId && types.includes(t.type)).map((t) => t.type))
+  ]
   ipcMain.handle('agent:paperDetail', (_e, id: number) => {
     const paper = getPaper(id)
     if (!paper) throw new Error('NOT_FOUND')
     // 相关内容统一走 listLinks（批次F：双向合并 + link_id/origin，peer 标题已解析）
-    return { paper, interpretations: listInterpretations(id), related: listLinks('paper', id) }
+    return {
+      paper,
+      interpretations: listInterpretations(id),
+      related: listLinks('paper', id),
+      active: activeTypesFor(['make_digest', 'lecture', 'translate'], id)
+    }
   })
+  ipcMain.handle('agent:activeTasks', () => activeTasks())
+  ipcMain.handle('agent:paperRetryFetch', (_e, id: number) => retryPaperFetch(id))
   // 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null；260927 阅读视图化）
   ipcMain.handle('agent:paperFulltext', (_e, id: number) => readFulltext(id))
   ipcMain.handle('agent:runCollect', (_e, domainId: number) => {
@@ -4090,7 +4102,8 @@ export function registerIpc(): void {
         )
         .all('science_article', id),
       highlights: listScienceHighlights(id),
-      related: scienceRelated(id)
+      related: scienceRelated(id),
+      active: activeTypesFor(['science_fetch', 'science_translate', 'science_light', 'science_lecture'], id)
     }
   })
   ipcMain.handle('agent:scienceDelete', (_e, id: number) => {

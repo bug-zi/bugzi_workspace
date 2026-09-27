@@ -11,6 +11,8 @@ import { ensureLearnStock } from './learnStock'
 import { ensureInterviewDaily } from './interviewBank'
 import { ensureFushiDaily } from './fushi'
 import { ensureWhoamiDaily } from './whoami'
+import { isLlmConfigured } from '../ai/services'
+import { notifyToast } from './notify'
 
 let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
@@ -60,17 +62,20 @@ export function scheduleMottoTask(): void {
   mottoTimer.unref?.()
 }
 
-/** 到点执行：失败静默记录日志（格言库 specs §3.3），下次定时再试 */
+/** 到点执行：完成/失败经 notify:toast 轻提示（优化建议区第60轮：凡 AI 生成都要有轻提示；
+ *  LLM 未配置仍静默——定时任务不弹配置引导，格言库 specs §3.3） */
 async function runScheduledMottos(): Promise<void> {
   try {
     const schedule = getSetting(SettingsKeys.MottoSchedule) ?? '22:00'
     if (alreadyRanToday(schedule)) return
-    await generateMottos()
+    const r = await generateMottos()
     setSetting(SettingsKeys.LastMottoRun, new Date().toISOString())
     logInfo('scheduler', `[scheduler] 定时格言生成完成 ${new Date().toISOString()}`)
+    notifyToast(`今晚的格言已生成：入库 ${r.inserted} 条（生成 ${r.generated}），已放草稿区`)
   } catch (e) {
-    // LLM 未配置也静默（定时任务不弹窗）
-    logWarn('scheduler', `[scheduler] 定时格言生成失败：${(e as Error).message}`)
+    const msg = (e as Error).message
+    logWarn('scheduler', `[scheduler] 定时格言生成失败：${msg}`)
+    if (isLlmConfigured()) notifyToast(`定时格言生成失败：${msg.slice(0, 80)}`)
   }
 }
 

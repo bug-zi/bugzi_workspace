@@ -17,6 +17,8 @@ interface PaperDetail {
   paper: PaperRow
   interpretations: InterpretationRow[]
   related: RelatedLink[]
+  /** 该文献在队/在跑任务类型（含排队未派发项，260928） */
+  active: string[]
 }
 
 type ReadView = 'digest' | 'lecture' | 'translate' | 'source'
@@ -83,12 +85,18 @@ export default function PaperReader(props: {
 
   const busyOf = (task: string): { progress: string | null } | null =>
     detail ? (runningTasks.find((t) => t.type === task && t.refId === detail.paper.id) ?? null) : null
+  // 排队未派发任务也算忙（260928）：runningTasks 只含在飞项，排队段此前无任何提示
+  const queuedBusyOf = (task: string): boolean => detail?.active.includes(task) ?? false
 
   const kindMeta = KINDS.find((k) => k.kind === view)
-  const busy = kindMeta ? busyOf(kindMeta.task) : null
+  const busy = kindMeta ? (busyOf(kindMeta.task) ?? (queuedBusyOf(kindMeta.task) ? { progress: null } : null)) : null
+  const fetching = detail ? detail.paper.status !== 'ready' && queuedBusyOf('make_digest') : false
   const row = kindMeta ? interpOf(kindMeta.kind) : undefined
-  // 生成中围观半成品：done 台账未落也按约定路径读（lecture/translate 逐章落盘；digest 完成时一次落盘）
-  const contentPath = kindMeta ? (row?.md_path ?? (busy ? kindMeta.pathOf(detail?.paper.id ?? 0) : undefined)) : undefined
+  // 生成中围观半成品：done 台账未落也按约定路径读（lecture/translate 逐章落盘；digest 完成时一次落盘）。
+  // 仅在飞任务读半成品路径——排队任务文件尚未产生，走占位提示
+  const contentPath = kindMeta
+    ? (row?.md_path ?? (busyOf(kindMeta.task) ? kindMeta.pathOf(detail?.paper.id ?? 0) : undefined))
+    : undefined
 
   // 生成中每 5s 刷新（逐章落盘实时可见；任务终态事件另有即时刷新）
   useEffect(() => {
@@ -97,12 +105,12 @@ export default function PaperReader(props: {
     return () => clearInterval(t)
   }, [busy, load])
 
-  // 队列事件：本文解读产物终态 → 即时刷新详情
+  // 队列事件：本文解读产物相关任务（入队/终态都刷，260928 排队段也要点亮生成中）→ 即时刷新详情
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       setRunningTasks(s.runningTasks ?? [])
       const ev = s.lastEvent
-      if (!ev || ev.status === 'enqueued') return
+      if (!ev) return
       if (ev.type === 'make_digest' || ev.type === 'lecture' || ev.type === 'translate') void load()
     })
     return off
@@ -151,7 +159,7 @@ export default function PaperReader(props: {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, detail?.paper.id, contentPath, mdVersion])
+  }, [view, detail?.paper.id, detail?.paper.status, contentPath, mdVersion])
 
   /** 生成/重生成解读；done 且未 force 的先弹确认 */
   const generate = (kind: 'digest' | 'lecture' | 'translate', force = false): void => {
@@ -224,7 +232,9 @@ export default function PaperReader(props: {
     view === 'source' ? null : busy ? (
       <div className="empty-state">
         <span className="material-symbols-outlined spin">progress_activity</span>
-        {`${kindMeta?.label ?? ''}生成中${busy?.progress ? ` · ${busy.progress}` : ''}——逐章落盘，已生成部分可直接阅读；本视图每 5 秒自动刷新`}
+        {busy.progress
+          ? `${kindMeta?.label ?? ''}生成中 · ${busy.progress}——逐章落盘，已生成部分可直接阅读；本视图每 5 秒自动刷新`
+          : `${kindMeta?.label ?? ''}已入队，排队生成中——轮到后自动开始，完成后自动更新`}
       </div>
     ) : (
       <div className="empty-state">
@@ -306,7 +316,13 @@ export default function PaperReader(props: {
         <button
           className={`recycle-tab${view === 'source' ? ' active' : ''}`}
           onClick={() => setView('source')}
-          title={paper?.status === 'ready' ? '在 App 内阅读原文全文' : '全文未抓取到，可手动传 PDF'}
+          title={
+            paper?.status === 'ready'
+              ? '在 App 内阅读原文全文'
+              : fetching
+                ? '全文抓取中，完成后可读'
+                : '全文未抓取到，可重试抓取或手动传 PDF'
+          }
         >
           原文
         </button>
@@ -335,7 +351,7 @@ export default function PaperReader(props: {
               {dateLabel(paper) ? ` · ${dateLabel(paper)}` : ''}
               {` · ${langLabel}`}
               <span className={`badge ${paper.status === 'ready' ? 'primary' : ''}`} style={{ marginLeft: 8 }}>
-                {paper.status === 'ready' ? '全文就绪' : '仅元信息'}
+                {paper.status === 'ready' ? '全文就绪' : fetching ? '抓取中…' : '仅元信息'}
               </span>
               <span className="badge" style={{ marginLeft: 6 }}>{sourceBadge(paper.source)}</span>
             </div>
@@ -360,13 +376,35 @@ export default function PaperReader(props: {
               </div>
             </div>
           ) : view === 'source' && paper?.status !== 'ready' ? (
-            <div className="empty-state">
-              <span className="material-symbols-outlined">upload_file</span>
-              全文尚未抓取到（仅元信息）——可手动传 PDF 补全文后重试
-              <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => void importPdf()}>
-                手动传 PDF
-              </button>
-            </div>
+            fetching ? (
+              <div className="empty-state">
+                <span className="material-symbols-outlined spin">progress_activity</span>
+                全文抓取中…（抓取任务在队列中进行，完成后自动就绪；失败会降级为「仅元信息」）
+              </div>
+            ) : (
+              <div className="empty-state">
+                <span className="material-symbols-outlined">upload_file</span>
+                全文尚未抓取到（仅元信息）——可重试抓取，或手动传 PDF 补全文
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      if (!detail) return
+                      void window.api.agent
+                        .paperRetryFetch(detail.paper.id)
+                        .then(() => toast('重试抓取中，成功后自动生成导读卡'))
+                        .catch((e) => toast(`重试失败：${(e as Error).message}`))
+                    }}
+                  >
+                    <span className="material-symbols-outlined">cloud_download</span>
+                    重试抓取
+                  </button>
+                  <button className="btn btn-primary" onClick={() => void importPdf()}>
+                    手动传 PDF
+                  </button>
+                </div>
+              </div>
+            )
           ) : mdText ? (
             <MdView md={mdText} bodyRef={bodyRef} />
           ) : (
