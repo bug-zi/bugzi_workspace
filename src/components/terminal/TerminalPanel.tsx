@@ -6,6 +6,7 @@ import type { Terminal } from '@xterm/xterm'
 import TerminalTab, { type TerminalTabData } from './TerminalTab'
 import ConfirmDialog from '../ConfirmDialog'
 import { useToast } from '../Toast'
+import { useShortcutLabel } from '../../services/keybindings'
 import { SettingsKeys, TERMINAL_DEFAULTS, parseTerminalSettings } from '../../shared/types'
 import type { TerminalShell, TerminalSettings } from '../../shared/types'
 
@@ -33,7 +34,7 @@ interface Props {
   open: boolean
   theme: 'light' | 'dark'
   fontSize: number
-  /** App 层 Ctrl+Shift+J 信号：值变更即新建标签 */
+  /** App 层「新建终端」快捷键信号（组合见个人档快捷键栏）：值变更即新建标签 */
   newTabSignal: number
   onClose: () => void
   /** 预填文本送右栏助手频道（App 层 openAiWith 钉 channel: 'assistant'） */
@@ -44,6 +45,9 @@ let tabSeq = 0
 
 export default function TerminalPanel(props: Props) {
   const { open, theme, fontSize, newTabSignal, onClose, onAskAi } = props
+  // 快捷键组合动态读取（个人档「快捷键」栏重设后 title/空态提示不失配）
+  const toggleAcc = useShortcutLabel('terminal.toggle')
+  const newTabAcc = useShortcutLabel('terminal.newTab')
   const [tabs, setTabs] = useState<TerminalTabData[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [height, setHeight] = useState(TERMINAL_DEFAULTS.height)
@@ -266,11 +270,11 @@ export default function TerminalPanel(props: Props) {
           <button
             className="terminal-action-btn"
             onClick={() => void createTab(tabs.length)}
-            title="新建终端标签 (Ctrl+Shift+J)"
+            title={`新建终端标签 (${newTabAcc})`}
           >
             <span className="material-symbols-outlined">add</span>
           </button>
-          <button className="terminal-action-btn" onClick={onClose} title="收起 (Ctrl+J)">
+          <button className="terminal-action-btn" onClick={onClose} title={`收起 (${toggleAcc})`}>
             <span className="material-symbols-outlined">keyboard_arrow_down</span>
           </button>
         </div>
@@ -289,7 +293,7 @@ export default function TerminalPanel(props: Props) {
           />
         ))}
         {tabs.length === 0 && (
-          <div className="terminal-empty">按 Ctrl+Shift+J 或点 + 新建终端</div>
+          <div className="terminal-empty">按 {newTabAcc} 或点 + 新建终端</div>
         )}
       </div>
       <div

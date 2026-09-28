@@ -9,10 +9,14 @@ import type { AgentDayStats, AgentStatusSnapshot, TaskRunRow } from '../../rende
 const TYPE_LABEL: Record<string, string> = {
   collect_deep: '深读海选',
   collect_science: '科普海选',
+  paper_fetch: '论文抓取',
+  science_fetch: '科普抓取',
   make_digest: '导读卡',
-  lecture: '精讲',
-  translate: '精译',
+  science_digest: '科普导读',
+  paper_deepread: '精读',
+  science_deepread: '科普精读',
   embed_index: '向量索引',
+  embed_science: '科普向量',
   book_digest: '书籍解读',
   load_pause: '负载暂停',
   load_resume: '负载恢复'

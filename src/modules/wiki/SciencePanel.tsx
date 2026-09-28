@@ -84,12 +84,9 @@ export default function SciencePanel(props: SciencePanelProps) {
         loadArticles()
         loadCandidates()
         toast(ev.status === 'done' ? '科普海选完成，发现箱已更新' : '科普海选失败，详见控制台 [agent] 日志')
-      } else if (
-        ev.type === 'science_fetch' ||
-        ev.type === 'science_translate' ||
-        ev.type === 'science_light' ||
-        ev.type === 'science_lecture'
-      ) {
+      } else if (ev.type === 'science_fetch') {
+        loadArticles()
+      } else if (ev.type === 'science_digest' || ev.type === 'science_deepread') {
         loadArticles()
         if (ev.status === 'failed') toast('解读任务失败，详见控制台 [agent] 日志')
       }
@@ -141,7 +138,7 @@ export default function SciencePanel(props: SciencePanelProps) {
   const acceptCandidate = async (id: number): Promise<void> => {
     try {
       await window.api.agent.discoverAccept(id)
-      toast('已转正，全文抓取与解读生成中（完成后入库下方正式列表）')
+      toast('已转正，全文抓取中（就绪后可打开）')
       loadCandidates()
       loadArticles()
     } catch (e) {
@@ -307,34 +304,58 @@ export default function SciencePanel(props: SciencePanelProps) {
                 : '该领域下暂无文章'}
             </div>
           )}
-          {articlesFiltered.map((a) => (
-          <div
-            className="sci-item"
-            key={a.id}
-            title="点击进入阅读视图"
-            onClick={() => setReadingId(a.id)}
-          >
-            <div className="row-main">
-              <div className="row-title">{a.title}</div>
-              <div className="row-sub">
-                {a.domain_name ?? ''}
-                {a.domain_name ? ' · ' : ''}
-                {a.language === 'en' ? '英文' : '中文'}
-                {a.date ? ` · ${a.date}` : a.year != null ? ` · ${a.year}` : ''}
-                {` · ${a.concepts.length} 个关联词条`}
+          {articlesFiltered.map((a) => {
+            const fetching = fetchingIds.has(a.id)
+            return (
+              <div
+                className="sci-item"
+                key={a.id}
+                title={a.status === 'ready' ? '点击进入阅读视图' : fetching ? '抓取中，暂不可打开' : '抓取失败，可重试抓取'}
+                onClick={() => {
+                  if (a.status !== 'ready') {
+                    toast(fetching ? '全文抓取中，就绪后即可打开' : '全文尚未就绪——可先在行内「重试抓取」')
+                    return
+                  }
+                  setReadingId(a.id)
+                }}
+              >
+                <div className="row-main">
+                  <div className="row-title">{a.title}</div>
+                  <div className="row-sub">
+                    {a.domain_name ?? ''}
+                    {a.domain_name ? ' · ' : ''}
+                    {a.language === 'en' ? '英文' : '中文'}
+                    {a.date ? ` · ${a.date}` : a.year != null ? ` · ${a.year}` : ''}
+                    {` · ${a.concepts.length} 个关联词条`}
+                  </div>
+                </div>
+                <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                  {a.domain_name && <span className="badge">{a.domain_name}</span>}
+                  <span className={`badge ${a.status === 'ready' ? 'primary' : ''}`}>
+                    {a.status === 'ready' ? '全文就绪' : fetching ? '抓取中…' : '抓取失败'}
+                  </span>
+                  {a.status !== 'ready' && (
+                    <button
+                      className="btn"
+                      disabled={fetching}
+                      title={fetching ? '抓取任务进行中' : '重新抓取全文；英文文章会自动翻译成中文'}
+                      onClick={() =>
+                        void window.api.science
+                          .retryFetch(a.id)
+                          .then(() => toast('重试抓取中，就绪后可打开'))
+                          .catch((e) => toast(`重试失败：${(e as Error).message}`))
+                      }
+                    >
+                      重试抓取
+                    </button>
+                  )}
+                  <button className="icon-btn danger" title="彻底删除" onClick={() => setDelTarget(a)}>
+                    <span className="material-symbols-outlined">delete</span>
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-              {a.domain_name && <span className="badge">{a.domain_name}</span>}
-              <span className={`badge ${a.status === 'ready' ? 'primary' : ''}`}>
-                {a.status === 'ready' ? '全文就绪' : fetchingIds.has(a.id) ? '抓取中…' : '仅元信息'}
-              </span>
-              <button className="icon-btn danger" title="彻底删除" onClick={() => setDelTarget(a)}>
-                <span className="material-symbols-outlined">delete</span>
-              </button>
-            </div>
-          </div>
-        ))}
+            )
+          })}
         </div>
       )}
 

@@ -1,4 +1,4 @@
-// 定时任务（主进程）：格言定时生成 + 回收站每日零点清理 + 信息源 30 天已读文章清理
+// 定时任务（主进程）：格言启动生成（每日最多两次，260929 自每晚定时改为启动触发）+ 回收站每日零点清理 + 信息源 30 天已读文章清理
 // 规则（总需求文档第 10 条）：App 未运行时错过即跳过，不补生成
 import { getSetting, setSetting } from '../db/settings'
 import { SettingsKeys } from '../../src/shared/types'
@@ -14,19 +14,7 @@ import { ensureWhoamiDaily } from './whoami'
 import { isLlmConfigured } from '../ai/services'
 import { notifyToast } from './notify'
 
-let mottoTimer: NodeJS.Timeout | null = null
 let midnightTimer: NodeJS.Timeout | null = null
-
-/** 计算距下一个 HH:mm 的毫秒数 */
-export function msUntilNext(hhmm: string): number {
-  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/)
-  const h = m ? Number(m[1]) : 22
-  const min = m ? Number(m[2]) : 0
-  const now = new Date()
-  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, min, 0, 0)
-  if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1)
-  return target.getTime() - now.getTime()
-}
 
 /** 距下一个零点的毫秒数 */
 function msUntilMidnight(): number {
@@ -35,47 +23,41 @@ function msUntilMidnight(): number {
   return next.getTime() - now.getTime()
 }
 
-/** 今天是否已执行过定时生成（按本地日期记 last_motto_run） */
-function alreadyRanToday(schedule: string): boolean {
-  const last = getSetting(SettingsKeys.LastMottoRun)
-  if (!last) return false
-  const now = new Date()
-  const lastDate = new Date(last)
-  // 同一本地日且在排程时间之后跑过 → 已执行
-  return (
-    lastDate.getFullYear() === now.getFullYear() &&
-    lastDate.getMonth() === now.getMonth() &&
-    lastDate.getDate() === now.getDate()
-  )
+/** 每日启动生成次数上限（260929：同日多次重启不重复刷库） */
+const MOTTO_RUNS_PER_DAY = 2
+
+/** 本地日期键 YYYY-MM-DD */
+function localDayKey(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** 排程下一次格言生成 */
-export function scheduleMottoTask(): void {
-  if (mottoTimer) clearTimeout(mottoTimer)
-  const schedule = getSetting(SettingsKeys.MottoSchedule) ?? '22:00'
-  const delay = msUntilNext(schedule)
-  mottoTimer = setTimeout(() => {
-    void runScheduledMottos()
-    // 执行后重排（跨天）
-    scheduleMottoTask()
-  }, delay)
-  mottoTimer.unref?.()
+/** 今天启动生成已执行次数（motto_run_mark = "YYYY-MM-DD|count"，跨日归零；仅成功计数，失败下次启动重试） */
+function todayRunCount(): number {
+  const mark = getSetting(SettingsKeys.MottoRunMark)
+  if (!mark) return 0
+  const [day, count] = mark.split('|')
+  return day === localDayKey(new Date()) ? Number(count) || 0 : 0
 }
 
-/** 到点执行：完成/失败经 notify:toast 轻提示（优化建议区第60轮：凡 AI 生成都要有轻提示；
- *  LLM 未配置仍静默——定时任务不弹配置引导，格言库 specs §3.3） */
-async function runScheduledMottos(): Promise<void> {
+/** 启动执行（每次启动触发，每日最多 MOTTO_RUNS_PER_DAY 次）：完成/失败经 notify:toast 轻提示
+ *  （优化建议区第60轮：凡 AI 生成都要有轻提示）；LLM 未配置仍静默——后台生成不弹配置引导
+ *  （原定时任务口径，格言库 specs §3.3） */
+async function runStartupMottos(): Promise<void> {
   try {
-    const schedule = getSetting(SettingsKeys.MottoSchedule) ?? '22:00'
-    if (alreadyRanToday(schedule)) return
+    const ran = todayRunCount()
+    if (ran >= MOTTO_RUNS_PER_DAY) {
+      logInfo('scheduler', `[scheduler] 今日格言启动生成已达 ${ran} 次上限，跳过`)
+      return
+    }
     const r = await generateMottos()
-    setSetting(SettingsKeys.LastMottoRun, new Date().toISOString())
-    logInfo('scheduler', `[scheduler] 定时格言生成完成 ${new Date().toISOString()}`)
-    notifyToast(`今晚的格言已生成：入库 ${r.inserted} 条（生成 ${r.generated}），已放草稿区`)
+    setSetting(SettingsKeys.MottoRunMark, `${localDayKey(new Date())}|${ran + 1}`)
+    logInfo('scheduler', `[scheduler] 启动格言生成完成 ${new Date().toISOString()}`)
+    notifyToast(`本次启动格言已生成：入库 ${r.inserted} 条（生成 ${r.generated}），已放草稿区`)
   } catch (e) {
     const msg = (e as Error).message
-    logWarn('scheduler', `[scheduler] 定时格言生成失败：${msg}`)
-    if (isLlmConfigured()) notifyToast(`定时格言生成失败：${msg.slice(0, 80)}`)
+    logWarn('scheduler', `[scheduler] 启动格言生成失败：${msg}`)
+    if (isLlmConfigured()) notifyToast(`启动格言生成失败：${msg.slice(0, 80)}`)
   }
 }
 
@@ -107,7 +89,7 @@ export function scheduleMidnightCleanup(): void {
   midnightTimer.unref?.()
 }
 
-/** main.ts 调用：启动时一次清理 + 两个排程 */
+/** main.ts 调用：启动时一次清理 + 格言启动生成 + 零点排程 */
 export function startSchedulers(): void {
   try {
     const n = cleanupExpired()
@@ -119,6 +101,6 @@ export function startSchedulers(): void {
   } catch (e) {
     logWarn('scheduler', `[scheduler] 启动清理失败：${(e as Error).message}`)
   }
-  scheduleMottoTask()
+  void runStartupMottos()
   scheduleMidnightCleanup()
 }

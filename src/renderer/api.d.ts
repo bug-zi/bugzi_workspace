@@ -1101,7 +1101,7 @@ export interface InterpretationRow {
   id: number
   owner_type: 'paper' | 'science_article' | 'book'
   owner_id: number
-  kind: 'digest' | 'lecture' | 'translation' | 'light' | 'book_digest'
+  kind: 'digest' | 'translation' | 'deepread' | 'book_digest'
   status: 'running' | 'done' | 'failed'
   md_path: string | null
   tokens_used: number
@@ -1910,7 +1910,7 @@ export interface Api {
     onActivity(cb: (payload: { items: import('../shared/types').LlmActivityItem[] }) => void): () => void
   }
   notify: {
-    /** 主进程轻提示（定时格言生成完成/失败等后台事件） */
+    /** 主进程轻提示（启动格言生成完成/失败等后台事件） */
     onToast(cb: (payload: { text: string }) => void): () => void
   }
   mcp: {
@@ -1985,15 +1985,15 @@ export interface Api {
     }>
     /** 在队/在跑任务快照（列表「抓取中」徽章派生用；含排队未派发项） */
     activeTasks(): Promise<{ type: string; refId: number | null }[]>
-    /** 重试抓取全文（meta_only 时可调）；成功后照常入链导读卡管道 */
+    /** 重试抓取（meta_only 时可调）：幂等入队 paper_fetch（抓缺 → 译缺 → 就绪） */
     paperRetryFetch(id: number): Promise<void>
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect(domainId: number): Promise<number>
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
-    runInterpret(paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number>
+    runInterpret(paperId: number, kind: 'digest' | 'deepread', force?: boolean): Promise<number>
     importPaperPdf(paperId: number): Promise<boolean>
-    /** 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null） */
-    paperFulltext(id: number): Promise<string | null>
+    /** 原文渲染源（HTML 抓取=保排版 Markdown isMd=true；PDF/存量=纯文本按行切段） */
+    paperFulltext(id: number): Promise<{ raw: string | null; isMd: boolean }>
     pendingCounts(): Promise<{ discovered: number }>
     /** 彻底删除正式文献（连带解读 md/全文缓存/向量/链接，二次确认由渲染层负责） */
     paperDelete(id: number): Promise<boolean>
@@ -2027,12 +2027,14 @@ export interface Api {
     }>
     /** 彻底删除科普文章（连带解读 md/全文缓存/高光/链接/向量，二次确认由渲染层负责） */
     delete(id: number): Promise<boolean>
-    /** meta_only「重试抓取」：成功自动入队解读 */
+    /** meta_only「重试抓取」：幂等入队 science_fetch（抓缺 → 译缺/概念建链 → 就绪） */
     retryFetch(id: number): Promise<boolean>
-    /** 原文全文缓存（science/{id}.txt；meta_only 或文件缺失返回 null） */
-    fulltext(id: number): Promise<string | null>
+    /** 原文渲染源（HTML 抓取=保排版 Markdown isMd=true；PDF/存量=纯文本按行切段） */
+    fulltext(id: number): Promise<{ raw: string | null; isMd: boolean }>
+    /** zh 原文 md 包装（划词高光载体，幂等）：返回 md 相对路径 */
+    ensureSource(id: number): Promise<string>
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
-    interpret(id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean): Promise<number>
+    interpret(id: number, kind: 'digest' | 'deepread', force?: boolean): Promise<number>
     highlightAdd(articleId: number, text: string): Promise<boolean>
     highlightRemove(articleId: number, text: string): Promise<boolean>
     /** 建词条成功回写（concepts.entry_id + manual 链接） */

@@ -140,7 +140,7 @@ async function embedScienceRunner(articleId: number, ctx: TaskContext): Promise<
   ctx.progress('向量化索引中…')
   const rows = getDb()
     .prepare(
-      "SELECT md_path FROM interpretations WHERE owner_type = 'science_article' AND owner_id = ? AND kind IN ('translation','light') AND status = 'done' ORDER BY CASE kind WHEN 'translation' THEN 0 ELSE 1 END LIMIT 1"
+      "SELECT md_path FROM interpretations WHERE owner_type = 'science_article' AND owner_id = ? AND kind = 'translation' AND status = 'done' ORDER BY id DESC LIMIT 1"
     )
     .all(articleId) as { md_path: string | null }[]
   const input = readMdSlice(rows[0]?.md_path, INPUT_SLICE) || article.summary

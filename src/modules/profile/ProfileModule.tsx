@@ -13,6 +13,7 @@ import type { AsrConfig, CustomFontInfo, LlmUsageRecord, LlmUsageStats, Terminal
 import BgLibraryDialog from './BgLibraryDialog'
 import WhoamiZone from './WhoamiZone'
 import AgentSettingsSection from './AgentSettingsSection'
+import ShortcutZone from './ShortcutZone'
 
 // 内置字体 FONT_FAMILIES 已迁共享模块 src/theme/fonts.ts（字体选择轮 §1.1，书架字体浮层反查全局名共用）
 
@@ -35,6 +36,7 @@ const PROFILE_NAV: { id: string; label: string }[] = [
   { id: 'facts', label: '我的画像' },
   { id: 'whoami', label: '我是谁' },
   { id: 'app', label: 'App 设置' },
+  { id: 'keys', label: '快捷键' },
   { id: 'terminal', label: '终端' },
   { id: 'boot', label: '启动与窗口' },
   { id: 'storage', label: '数据存储' },
@@ -873,6 +875,9 @@ export default function ProfileModule(props: { onOpenWorkspace?: () => void }) {
           </div>
         </div>
       </section>
+
+      {/* 快捷键（260929 新功能开发区）：应用内快捷键展示与按键重设 */}
+      <ShortcutZone />
 
       {/* 终端（260912 新功能开发区） */}
       <section id="profile-zone-terminal" className="zone">

@@ -142,7 +142,6 @@ function migrate(): void {
     // 默认设置
     const set = d.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)')
     set.run('theme', 'light')
-    set.run('motto_schedule', '22:00')
 
     d.exec('PRAGMA user_version = 1')
   }
@@ -1667,6 +1666,47 @@ function migrate(): void {
     d.exec('CREATE INDEX idx_app_logs_ts ON app_logs(ts)')
     d.exec('CREATE INDEX idx_app_logs_scope ON app_logs(scope)')
     d.exec('PRAGMA user_version = 64')
+  }
+
+  if (version < 65) {
+    // v65：抓取三页签阅读（2026-09-29-抓取三页签阅读-design.md §四）——interpretations kind
+    // CHECK 收敛为 digest/translation/deepread/book_digest（deepread=精读版新产物；lecture/light
+    // 退役），存量 lecture/light 旧行与对应 md 文件随迁移清理（translation 保留升格原文载体）。
+    d.exec('BEGIN')
+    try {
+      const legacy = d
+        .prepare("SELECT md_path FROM interpretations WHERE kind IN ('lecture','light')")
+        .all() as { md_path: string | null }[]
+      for (const r of legacy) {
+        if (!r.md_path) continue
+        try {
+          unlinkSync(join(userDataDir(), r.md_path))
+        } catch {
+          /* 文件已不存在 */
+        }
+      }
+      d.prepare("DELETE FROM interpretations WHERE kind IN ('lecture','light')").run()
+      d.exec(`CREATE TABLE interpretations_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('paper','science_article','book')),
+      owner_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('digest','translation','deepread','book_digest')),
+      status TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('running','done','failed')),
+      md_path TEXT,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+      d.exec('INSERT INTO interpretations_new SELECT * FROM interpretations')
+      d.exec('DROP TABLE interpretations')
+      d.exec('ALTER TABLE interpretations_new RENAME TO interpretations')
+      d.exec('CREATE INDEX IF NOT EXISTS idx_interpret_owner ON interpretations(owner_type, owner_id)')
+      d.exec('PRAGMA user_version = 65')
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
   }
 }
 

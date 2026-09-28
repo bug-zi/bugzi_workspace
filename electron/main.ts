@@ -1,5 +1,5 @@
-// 主进程入口：窗口创建、协议注册、IPC 注册、定时任务
-import { app, BrowserWindow, session, shell } from 'electron'
+// 主进程入口：窗口创建、协议注册、IPC 注册、定时清理与启动生成
+import { app, BrowserWindow, Menu, session, shell } from 'electron'
 import { join } from 'node:path'
 import { initDb } from './db/db'
 import { registerBzresProtocol, registerBzresSchemes } from './services/bzres'
@@ -41,6 +41,11 @@ const appIcon = app.isPackaged
   ? join(process.resourcesPath, 'app.png')
   : join(__dirname, '../../resources/app.png')
 
+// 置空应用菜单（260929 快捷键配置）：默认菜单在 autoHideMenuBar 隐藏态下仍注册加速器，且菜单
+// 加速器在主进程层抢先于渲染层 keydown——Ctrl+Q（Quit）/ Ctrl+A（selectAll）会被直接吞掉，
+// 应用内快捷键永远收不到。置空释放按键；DevTools（Ctrl+Shift+I / F12）经 before-input-event 保留
+Menu.setApplicationMenu(null)
+
 // 托盘「退出」走 app.quit() → 窗口 close 事件：quitting 放行真正销毁；平时点 × 仅隐藏
 let quitting = false
 
@@ -63,6 +68,19 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win.show())
+
+  // DevTools 快捷键兜底（菜单已置空，默认加速器失效）：Ctrl+Shift+I / F12 切换
+  win.webContents.on('before-input-event', (e, input) => {
+    if (
+      input.type === 'keyDown' &&
+      !input.alt &&
+      !input.meta &&
+      ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12')
+    ) {
+      win.webContents.toggleDevTools()
+      e.preventDefault()
+    }
+  })
 
   // 点 × 默认隐藏到托盘（settings close_action='exit' 时才真退出）；quitting 标志放行托盘「退出」路径
   win.on('close', (e) => {

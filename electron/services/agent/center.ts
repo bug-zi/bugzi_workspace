@@ -33,7 +33,7 @@ function doneCountSince(startIso: string, endIso: string, types: string[]): Reco
   return out
 }
 
-const STAT_TYPES = ['collect_deep', 'make_digest', 'lecture', 'translate']
+const STAT_TYPES = ['collect_deep', 'collect_science', 'make_digest', 'science_digest', 'paper_deepread', 'science_deepread']
 
 export interface AgentDayStats {
   enabled: boolean

@@ -1,13 +1,13 @@
 import { logInfo } from '../logger'
 // 书籍全文抽取（超级工作台 2.0 批次E spec §1）：epub（unzipSync → container.xml → OPF →
-// spine 顺序 xhtml 剥标签，spine 缺失兜底 manifest 全量）/ pdf（复用 papers.extractPdfText）
+// spine 顺序 xhtml 剥标签，spine 缺失兜底 manifest 全量）/ pdf（复用 docText.extractPdfText）
 // → books/{id}.txt 一次性缓存；<200 字符视为抽取失败抛错（扫描版/异构包），不炸其他功能。
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import { getDb, userDataDir } from '../../db/db'
-import { extractPdfText } from './papers'
+import { extractPdfText } from './docText'
 
 /** XML 解析器（OPF/container.xml；属性带 @_ 前缀，books.ts 同款） */
 const xml = new XMLParser({ ignoreAttributes: false })

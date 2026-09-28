@@ -1,28 +1,23 @@
 import { logWarn } from '../logger'
-// 解读产物（超级工作台 2.0 批次B spec §3）：导读卡（终选后自动）/ 精讲 / 精译（按需）。
-// 长文逐章落盘、按章幂等续跑；token 记账走 llm_usage 场景差值；不注入个人画像（白名单默认全关）。
+// 解读产物（260929 抓取三页签阅读改造）：抓取+翻译并入 paper_fetch 幂等管道（en 译文 kind=translation
+// 升格「原文（中文版）」载体）；导读卡（大致内容+文章脉络）/精读版（关键部分拆解）改按需，生成器
+// 参数化 owner 供论文/科普共用（原文统一简中后 prompt 一致）。逐章落盘、按章幂等续跑；token 记账走
+// llm_usage 场景差值；不注入个人画像（白名单默认全关）。
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDb, nowIso, userDataDir } from '../../db/db'
 import { chatCompletion } from '../../ai/llm'
 import { isLlmConfigured } from '../../ai/services'
 import { mdWrite } from '../files'
-import { registerTask } from './queue'
+import { registerTask, enqueue } from './queue'
 import { tokensSince } from './budget'
 import { wrapMaterial } from './guardrails'
-import {
-  ensureFulltext,
-  getPaper,
-  readFulltext,
-  upsertInterpretation,
-  writeInterpretationMd
-} from './papers'
-import { enqueue } from './queue'
+import { ensureFulltext, getPaper, readFulltext, upsertInterpretation, writeInterpretationMd } from './papers'
 import type { TaskContext } from './queue'
 import type { PaperRow } from '../../../src/shared/types'
 
 const DIGEST_INPUT_MAX = 60000
-const LECTURE_INPUT_MAX = 40000
+const GLOSSARY_INPUT_MAX = 40000
 const CHUNK_SIZE = 10000
 const MAX_CHUNKS = 20
 
@@ -60,111 +55,142 @@ function chunkText(text: string, size = CHUNK_SIZE): string[] {
   return chunks.slice(0, MAX_CHUNKS)
 }
 
-function requireFulltextOrThrow(paper: PaperRow): string {
-  const txt = readFulltext(paper.id)
+/** 中文原文守卫：全文缓存缺失/过短即抛（打开与生成同受 ready 门禁，正常不会命中） */
+function requireChineseFulltext(paperId: number): string {
+  const txt = readFulltext(paperId)
   if (txt && txt.length >= 200) return txt
-  throw new Error('全文缺失，无法生成（可手动传 PDF 后重试）')
+  throw new Error('中文原文未就绪（请先重试抓取或导入 PDF）')
 }
 
-function glossaryOf(paper: PaperRow): { en: string; zh: string }[] {
-  try {
-    const p = JSON.parse(String(paper.glossary ?? '[]'))
-    return Array.isArray(p) ? p.filter((x): x is { en: string; zh: string } => !!x?.en && !!x?.zh) : []
-  } catch {
-    return []
-  }
+/** 共用 owner 描述（论文/科普导读卡与精读版；原文统一为简体中文全文） */
+export interface InterpOwner {
+  ownerType: 'paper' | 'science_article'
+  ownerId: number
+  title: string
+  authors: string[]
+  url: string
+  dateText: string
+  /** 产物文件名前缀：论文 `${id}`、科普 `sa-${id}`（md/interpretations/ 同目录防撞） */
+  filePrefix: string
+  tags: string[]
 }
 
-// ---------- 导读卡 ----------
+function headOf(owner: InterpOwner, label: string, extra?: string): string {
+  const authors = owner.authors.length ? ` ｜ ${owner.authors.slice(0, 5).join(', ')}` : ''
+  return `# ${label}：${owner.title}\n\n> 来源：${owner.url}${authors}${owner.dateText ? ` ｜ ${owner.dateText}` : ''}${extra ?? ''}\n`
+}
 
-async function generateDigest(paper: PaperRow, ctx: TaskContext): Promise<string> {
-  const delta = tokenTracker('agent:digest', ctx)
-  const metaOnly = paper.status !== 'ready' || !readFulltext(paper.id)
-  const source = metaOnly
-    ? `（全文缺失，以下为摘要）\n${paper.summary}`
-    : `（全文）\n${(readFulltext(paper.id) ?? '').slice(0, DIGEST_INPUT_MAX)}`
+/** 该 owner 是否已有简中译文（paper_fetch / science_fetch 幂等判定共用） */
+export function hasTranslation(ownerType: InterpOwner['ownerType'], ownerId: number): boolean {
+  return !!getDb()
+    .prepare(
+      "SELECT id FROM interpretations WHERE owner_type = ? AND owner_id = ? AND kind = 'translation' AND status = 'done'"
+    )
+    .get(ownerType, ownerId)
+}
+
+// ---------- 导读卡（大致内容 + 文章脉络，两模块共用，单次调用） ----------
+
+export async function generateDigestFor(
+  owner: InterpOwner,
+  fulltext: string,
+  ctx: TaskContext,
+  scene: string
+): Promise<string> {
+  const delta = tokenTracker(scene, ctx)
   ensureAlive(ctx)
   const res = await chatCompletion({
     messages: [
       {
         role: 'user',
-        content: `你是论文导读助手。请为下面这篇论文生成中文导读卡，严格按以下骨架输出 Markdown（六个二级标题缺一不可，总长 500-900 字）：
+        content: `你是文章导读助手。请为下面这篇简体中文文章生成中文导读卡，严格按以下骨架输出 Markdown（两个二级标题缺一不可，总长 400-700 字）：
 
-# 定位
-# 它回答什么问题
-# 用什么方法
-# 得到什么结果
-# 局限与边界
-# 与你何干
+# 大致内容
+（200-400 字概括这篇内容：核心问题、主要观点或发现、最终结论）
 
-「与你何干」一节请结合研究领域关键词谈这篇工作对该领域读者的适用性与实际价值，不要编造读者个人信息。
+# 文章脉络
+（按原文行进顺序梳理结构，每个主要部分一行「部分主题——该部分讲了什么」，让读者不读原文也能看清行文骨架）
+
 只输出 Markdown 正文，不要开场白。
 
-领域关键词：${paper.tags.join('、') || '无'}
-论文标题：${paper.title}
+文章标题：${owner.title}
 
-${wrapMaterial('论文材料', source)}`
+${wrapMaterial('文章材料', fulltext.slice(0, DIGEST_INPUT_MAX))}`
       }
     ],
     temperature: 0.3,
-    scene: 'agent:digest',
+    scene,
     signal: ctx.signal
   })
   delta()
   ensureAlive(ctx)
   let md = res.content.trim()
   if (!md) throw new Error('LLM 未返回内容')
-  const head = `# 导读：${paper.title}\n\n> 来源：${paper.url}${paper.authors.length ? ` ｜ ${paper.authors.slice(0, 5).join(', ')}` : ''}${paper.year ? ` ｜ ${paper.year}` : ''}\n${metaOnly ? '> ⚠ 基于摘要生成（全文缺失，可手动传 PDF 后重生成）\n' : ''}\n`
   // 剥掉模型可能自带的一级标题行，统一用标准头
   md = md.replace(/^#\s+.*\n/, '').trim()
-  const rel = writeInterpretationMd(`${paper.id}-digest.md`, head + md + '\n')
-  upsertInterpretation('paper', paper.id, 'digest', rel, 0)
-  getDb().prepare('UPDATE papers SET digest_md = ?, updated_at = ? WHERE id = ?').run(rel, nowIso(), paper.id)
+  const rel = writeInterpretationMd(`${owner.filePrefix}-digest.md`, headOf(owner, '导读') + md + '\n')
+  upsertInterpretation(owner.ownerType, owner.ownerId, 'digest', rel, 0)
   return rel
 }
 
-// ---------- 精讲 / 精译（逐章 + 续跑） ----------
+// ---------- 精读版（关键部分/关键句拆解，逐章续跑，两模块共用） ----------
 
-function sectionCount(md: string, pattern: RegExp): number {
-  return (md.match(pattern) ?? []).length
-}
-
-async function runLecture(paper: PaperRow, ctx: TaskContext): Promise<string> {
-  const delta = tokenTracker('agent:lecture', ctx)
-  const text = requireFulltextOrThrow(paper)
-  const chunks = chunkText(text)
+export async function generateDeepreadFor(
+  owner: InterpOwner,
+  fulltext: string,
+  ctx: TaskContext,
+  scene: string
+): Promise<string> {
+  const delta = tokenTracker(scene, ctx)
+  const chunks = chunkText(fulltext)
   if (chunks.length === 0) throw new Error('全文为空')
-  const rel = `md/interpretations/${paper.id}-lecture.md`
+  const rel = `md/interpretations/${owner.filePrefix}-deepread.md`
   const abs = join(userDataDir(), rel)
   let md = existsSync(abs) ? readFileSync(abs, 'utf-8') : ''
   if (!md) {
-    md = `# 精讲：${paper.title}\n\n> 来源：${paper.url} ｜ 逐章中文重述讲解，保留关键术语并给出直觉解释\n\n`
+    md = headOf(owner, '精读', '\n> 对原文关键部分与关键句的逐段拆解分析（引用原句 → 论证/术语/隐含假设/与主线关系）\n')
   }
-  const done = sectionCount(md, /^## 第 \d+ 部分/gm)
+  const done = (md.match(/^## 第 \d+ 部分/gm) ?? []).length
   for (let i = done; i < chunks.length; i++) {
     ensureAlive(ctx)
     const res = await chatCompletion({
       messages: [
         {
           role: 'user',
-          content: `你是论文精讲老师。以下是论文《${paper.title}》的第 ${i + 1}/${chunks.length} 部分（可能从章节中间开始）。用中文重述讲解这部分内容：保留关键术语（英文原词可保留），解释方法与论证思路，给出直觉解释与必要例子；与论文其他部分衔接处以「（承前）」「（后文将）」轻量带过。只输出 Markdown 正文（不要一级标题，不要「好的」之类开场白）。\n\n${wrapMaterial(`论文第 ${i + 1} 部分`, chunks[i])}`
+          content: `你是文章精读助手。以下是《${owner.title}》的第 ${i + 1}/${chunks.length} 部分（简体中文全文的一部分，可能从章节中间开始）。请对本部分做精读拆解：
+1. 挑出本部分最关键的论述与关键句（以 Markdown 引用块 > 引用原句），逐条给出拆解分析：它在论证什么、关键术语的含义、隐含假设或前提、与全文主线的关系；
+2. 宁精勿多：每部分挑 3-6 处真正关键的内容，不要逐句复述原文。
+只输出 Markdown 正文（不要一级标题，不要开场白），全文简体中文。\n\n${wrapMaterial(`文章第 ${i + 1} 部分`, chunks[i])}`
         }
       ],
       temperature: 0.3,
-      scene: 'agent:lecture',
+      scene,
       signal: ctx.signal
     })
     delta()
     md += `## 第 ${i + 1} 部分\n\n${res.content.trim()}\n\n`
     mdWrite(rel, md)
   }
-  upsertInterpretation('paper', paper.id, 'lecture', rel, 0)
+  upsertInterpretation(owner.ownerType, owner.ownerId, 'deepread', rel, 0)
   return rel
 }
 
-async function runTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> {
+// ---------- 原文中文版翻译（paper_fetch 管道调用；kind=translation 即「原文」载体） ----------
+
+function glossaryOf(paper: PaperRow): { en: string; zh: string }[] {
+  try {
+    const parsed = JSON.parse(String(paper.glossary ?? '[]')) as { en?: unknown; zh?: unknown }[]
+    return Array.isArray(parsed)
+      ? parsed.filter((g): g is { en: string; zh: string } => typeof g?.en === 'string' && typeof g?.zh === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
+async function runPaperTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> {
   const delta = tokenTracker('agent:translate', ctx)
-  const text = requireFulltextOrThrow(paper)
+  const text = requireChineseFulltext(paper.id)
   const chunks = chunkText(text)
   if (chunks.length === 0) throw new Error('全文为空')
   // ① 术语表先行（已有则复用；保证全文一致定译）
@@ -175,7 +201,7 @@ async function runTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> 
       messages: [
         {
           role: 'user',
-          content: `从以下论文材料中提取需要统一翻译的英文术语（方法名、缩写、专业概念、人名系统等），给出全文统一的中文定译。10-30 条，仅输出 JSON：{"glossary":[{"en":"原文","zh":"定译"}]}，不要其他文字。\n\n${wrapMaterial('论文材料', text.slice(0, LECTURE_INPUT_MAX))}`
+          content: `从以下论文材料中提取需要统一翻译的英文术语（方法名、缩写、专业概念、人名系统等），给出全文统一的中文定译。10-30 条，仅输出 JSON：{"glossary":[{"en":"原文","zh":"定译"}]}，不要其他文字。\n\n${wrapMaterial('论文材料', text.slice(0, GLOSSARY_INPUT_MAX))}`
         }
       ],
       temperature: 0.2,
@@ -208,9 +234,9 @@ async function runTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> 
   let md = existsSync(abs) ? readFileSync(abs, 'utf-8') : ''
   if (!md) {
     const table = glossary.map((g) => `- ${g.en} → ${g.zh}`).join('\n')
-    md = `# 精译：${paper.title}\n\n> 来源：${paper.url}${glossary.length ? `\n\n## 术语表\n\n${table}\n` : '\n'}`
+    md = `# 原文（中文）：${paper.title}\n\n> 来源：${paper.url}${glossary.length ? `\n\n## 术语表\n\n${table}\n` : '\n'}`
   }
-  const done = sectionCount(md, /^## 第 \d+ 章/gm)
+  const done = (md.match(/^## 第 \d+ 章/gm) ?? []).length
   const glossaryJson = glossary.length ? JSON.stringify(glossary) : ''
   for (let i = done; i < chunks.length; i++) {
     ensureAlive(ctx)
@@ -241,51 +267,78 @@ async function runTranslate(paper: PaperRow, ctx: TaskContext): Promise<string> 
   return rel
 }
 
-// ---------- 入口与注册 ----------
+// ---------- paper_fetch 管道（幂等：抓缺 → 译缺 → ready → embed；接受/重试/导入 PDF 共用） ----------
 
-export type InterpretKind = 'digest' | 'lecture' | 'translate'
+async function paperFetchRunner(ctx: TaskContext): Promise<void> {
+  const paper = getPaper(ctx.refId ?? 0)
+  if (!paper) throw new Error('NOT_FOUND')
+  await ensureFulltext(paper)
+  const fresh = getPaper(paper.id)
+  if (!fresh) throw new Error('NOT_FOUND')
+  const txt = readFulltext(fresh.id)
+  if (!txt || txt.length < 200) throw new Error('全文抓取失败（缓存缺失）')
+  if (fresh.language === 'en' && !hasTranslation('paper', fresh.id)) {
+    if (!isLlmConfigured()) throw new Error('LLM 未配置，无法翻译为中文')
+    await runPaperTranslate(fresh, ctx)
+  }
+  getDb().prepare("UPDATE papers SET status = 'ready', updated_at = ? WHERE id = ?").run(nowIso(), fresh.id)
+  // 全文就绪后自动索引 + 相关推荐
+  enqueue('embed_index', { refId: fresh.id, trigger: 'auto' })
+}
 
-/** 按需触发生成；已有 running 抛错；已有 done 且未 force 抛「需确认」 */
-export async function runInterpret(paperId: number, kind: InterpretKind, force = false, trigger: 'manual' | 'auto' = 'manual'): Promise<number> {
-  const d = getDb()
-  const existing = d
-    .prepare('SELECT id, status FROM interpretations WHERE owner_type = ? AND owner_id = ? AND kind = ?')
-    .get('paper', paperId, kind === 'digest' ? 'digest' : kind === 'lecture' ? 'lecture' : 'translation') as
-    | { id: number; status: string }
-    | undefined
-  if (existing?.status === 'running') throw new Error('该解读任务正在进行中')
-  if (existing?.status === 'done' && !force) throw new Error('INTERPRET_EXISTS')
-  return enqueue(kind === 'digest' ? 'make_digest' : kind, { refId: paperId, trigger })
+// ---------- 导读卡 / 精读版 runners（按需） ----------
+
+function paperOwner(paper: PaperRow): InterpOwner {
+  return {
+    ownerType: 'paper',
+    ownerId: paper.id,
+    title: paper.title,
+    authors: paper.authors,
+    url: paper.url,
+    dateText: paper.date ?? (paper.year != null ? String(paper.year) : ''),
+    filePrefix: String(paper.id),
+    tags: paper.tags
+  }
 }
 
 async function makeDigestRunner(ctx: TaskContext): Promise<void> {
   const paper = getPaper(ctx.refId ?? 0)
   if (!paper) throw new Error('NOT_FOUND')
   if (!isLlmConfigured()) throw new Error('LLM 未配置')
-  await ensureFulltext(paper)
-  const fresh = getPaper(paper.id) ?? paper
-  await generateDigest(fresh, ctx)
-  // 全文就绪后自动索引 + 相关推荐
-  enqueue('embed_index', { refId: paper.id, trigger: 'auto' })
+  const txt = requireChineseFulltext(paper.id)
+  const rel = await generateDigestFor(paperOwner(paper), txt, ctx, 'agent:digest')
+  getDb().prepare('UPDATE papers SET digest_md = ?, updated_at = ? WHERE id = ?').run(rel, nowIso(), paper.id)
 }
 
-async function lectureRunner(ctx: TaskContext): Promise<void> {
+async function paperDeepreadRunner(ctx: TaskContext): Promise<void> {
   const paper = getPaper(ctx.refId ?? 0)
   if (!paper) throw new Error('NOT_FOUND')
   if (!isLlmConfigured()) throw new Error('LLM 未配置')
-  await ensureFulltext(paper)
-  await runLecture(getPaper(paper.id) ?? paper, ctx)
+  const txt = requireChineseFulltext(paper.id)
+  await generateDeepreadFor(paperOwner(paper), txt, ctx, 'agent:deepread')
 }
 
-async function translateRunner(ctx: TaskContext): Promise<void> {
-  const paper = getPaper(ctx.refId ?? 0)
-  if (!paper) throw new Error('NOT_FOUND')
-  if (!isLlmConfigured()) throw new Error('LLM 未配置')
-  await ensureFulltext(paper)
-  await runTranslate(getPaper(paper.id) ?? paper, ctx)
+// ---------- 按需入口 ----------
+
+export type InterpretKind = 'digest' | 'deepread'
+
+/** 按需触发生成；已有 running 抛错；已有 done 且未 force 抛「需确认」 */
+export async function runInterpret(
+  paperId: number,
+  kind: InterpretKind,
+  force = false,
+  trigger: 'manual' | 'auto' = 'manual'
+): Promise<number> {
+  const d = getDb()
+  const existing = d
+    .prepare('SELECT id, status FROM interpretations WHERE owner_type = ? AND owner_id = ? AND kind = ?')
+    .get('paper', paperId, kind) as { id: number; status: string } | undefined
+  if (existing?.status === 'running') throw new Error('该解读任务正在进行中')
+  if (existing?.status === 'done' && !force) throw new Error('INTERPRET_EXISTS')
+  return enqueue(kind === 'digest' ? 'make_digest' : 'paper_deepread', { refId: paperId, trigger })
 }
 
 // 任务注册（模块顶层；bootstrap.ts side-effect import）
+registerTask({ type: 'paper_fetch', priority: 10, singleton: true, maxRetries: 1 }, paperFetchRunner)
 registerTask({ type: 'make_digest', priority: 10, singleton: true, maxRetries: 1 }, makeDigestRunner)
-registerTask({ type: 'lecture', priority: 5, singleton: true, maxRetries: 0 }, lectureRunner)
-registerTask({ type: 'translate', priority: 5, singleton: true, maxRetries: 0 }, translateRunner)
+registerTask({ type: 'paper_deepread', priority: 5, singleton: true, maxRetries: 0 }, paperDeepreadRunner)

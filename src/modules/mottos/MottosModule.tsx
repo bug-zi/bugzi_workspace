@@ -7,7 +7,7 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
-import { SettingsKeys, type AiChannel } from '../../shared/types'
+import type { AiChannel } from '../../shared/types'
 
 export interface MottosModuleProps {
   /** 文笔坊 tab 激活态：从写作台/浮生记切回格言库 tab 时刷新列表 */
@@ -72,9 +72,6 @@ export default function MottosModule(props: MottosModuleProps) {
   // 批量导入
   const [importing, setImporting] = useState(false)
   const [importText, setImportText] = useState('')
-  // 定时设置
-  const [scheduleOpen, setScheduleOpen] = useState(false)
-  const [scheduleTime, setScheduleTime] = useState('22:00')
   // 丢弃确认
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
   // 直接删除二次确认（优化建议区：越过回收站彻底删除）
@@ -158,12 +155,9 @@ export default function MottosModule(props: MottosModuleProps) {
 
   useEffect(() => {
     void load()
-    void window.api.settings.get(SettingsKeys.MottoSchedule).then((t) => {
-      if (t) setScheduleTime(t)
-    })
   }, [load])
 
-  // keep-alive：格言库已并入文笔坊——切回文笔坊模块时刷新（定时任务可能在后台已生成）
+  // keep-alive：格言库已并入文笔坊——切回文笔坊模块时刷新（App 启动自动生成可能在后台已落库）
   useModuleActivated('wenbi', () => void load())
   // tab 激活：从写作台/浮生记切回格言库 tab 时刷新（与模块激活两路径重叠时幂等查询，无副作用）
   useEffect(() => {
@@ -331,16 +325,6 @@ export default function MottosModule(props: MottosModuleProps) {
     setImporting(false)
     setImportText('')
     await load()
-  }
-
-  const saveSchedule = async (): Promise<void> => {
-    if (!/^\d{1,2}:\d{2}$/.test(scheduleTime)) {
-      toast('时间格式：HH:mm')
-      return
-    }
-    await window.api.settings.set(SettingsKeys.MottoSchedule, scheduleTime)
-    toast('定时已保存')
-    setScheduleOpen(false)
   }
 
   /** 复制「格言 —— 出处」（无出处只复制正文） */
@@ -669,9 +653,6 @@ export default function MottosModule(props: MottosModuleProps) {
                         取消
                       </button>
                     )}
-                    <button className="icon-btn" title="定时设置" onClick={() => setScheduleOpen(true)}>
-                      <span className="material-symbols-outlined">schedule</span>
-                    </button>
                   </>
                 )}
                 {z.status === 'formal' && (
@@ -953,28 +934,6 @@ export default function MottosModule(props: MottosModuleProps) {
             <div className="dialog-footer">
               <button className="btn" onClick={() => setImporting(false)}>取消</button>
               <button className="btn btn-primary" onClick={() => void doImport()}>导入</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 定时设置 */}
-      {scheduleOpen && (
-        <div className="dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && setScheduleOpen(false)}>
-          <div className="dialog" style={{ width: 360 }}>
-            <div className="dialog-header">定时生成设置</div>
-            <div className="dialog-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div className="module-sub">每天到点自动生成 10 条（App 未运行时跳过）</div>
-              <input
-                className="field"
-                value={scheduleTime}
-                onChange={(e) => setScheduleTime(e.target.value)}
-                placeholder="HH:mm"
-              />
-            </div>
-            <div className="dialog-footer">
-              <button className="btn" onClick={() => setScheduleOpen(false)}>取消</button>
-              <button className="btn btn-primary" onClick={() => void saveSchedule()}>保存</button>
             </div>
           </div>
         </div>

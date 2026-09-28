@@ -1,17 +1,15 @@
 import { logWarn, logInfo } from '../logger'
-// 科普线服务（超级工作台 2.0 批次D spec §3/§5）：发现箱 article 条目转正分流、全文抓取
-// （网页 → readability 抽正文，失败降级 meta_only 不炸）、科普文章查询/删除、划词高光、
-// 概念自动建链（concepts → wiki_entries 精确/双向模糊）与 knowledge_links 通用增删查（批次 F 复用）。
+// 科普线服务（260929 抓取三页签阅读改造）：发现箱 article 条目转正分流（转正入队 science_fetch
+// 幂等管道）、全文抓取（管线在 docText：PDF 直链/网页自适应，失败降级 meta_only 不炸）、科普文章
+// 查询/删除、划词高光、zh 原文 md 包装（高光载体）、概念自动建链（concepts → wiki_entries）与
+// knowledge_links 通用增删查。
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Readability } from '@mozilla/readability'
-import { parseHTML } from 'linkedom'
 import { getDb, nowIso, userDataDir } from '../../db/db'
-import { mdDelete } from '../files'
+import { mdDelete, mdWrite } from '../files'
 import { simplifyJsonStrArray, toSimplified } from '../t2s'
-import { politeFetch } from './guardrails'
-import { enqueue, registerTask } from './queue'
-import type { TaskContext } from './queue'
+import { fetchDocText } from './docText'
+import { enqueue } from './queue'
 import type { ScienceArticleRow, ScienceConcept, ScienceHighlightRow } from '../../../src/shared/types'
 
 function parseJsonArr(raw: unknown): string[] {
@@ -80,7 +78,7 @@ export function listScienceArticles(): ScienceArticleRow[] {
   const d = getDb()
   for (const r of rows) {
     const id = Number(r.id)
-    if (r.status === 'ready' && !existsSync(txtPath(id))) {
+    if (r.status === 'ready' && !existsSync(mdPath(id)) && !existsSync(txtPath(id))) {
       d.prepare("UPDATE science_articles SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), id)
       r.status = 'meta_only'
       enqueue('science_fetch', { refId: id, trigger: 'auto' })
@@ -139,70 +137,108 @@ function txtPath(articleId: number): string {
   return join(userDataDir(), 'science', `${articleId}.txt`)
 }
 
-export function readScienceFulltext(articleId: number): string | null {
-  const p = txtPath(articleId)
-  if (!existsSync(p)) return null
-  try {
-    return readFileSync(p, 'utf-8')
-  } catch {
-    return null
-  }
+/** HTML 抓取缓存（保排版 Markdown）；.txt 为 PDF/存量纯文本 */
+function mdPath(articleId: number): string {
+  return join(userDataDir(), 'science', `${articleId}.md`)
 }
 
-/** 抓全文：成功置 ready 并落 science/{id}.txt；任一步失败置 meta_only（不抛错，降级合法） */
+export function readScienceFulltext(articleId: number): string | null {
+  for (const p of [mdPath(articleId), txtPath(articleId)]) {
+    if (existsSync(p)) {
+      try {
+        return readFileSync(p, 'utf-8')
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
+/** 原文渲染源（IPC agent:scienceFulltext）：isMd=true 直接按 Markdown 渲染；false 纯文本按行切段 */
+export function readScienceSource(articleId: number): { raw: string | null; isMd: boolean } {
+  const mdP = mdPath(articleId)
+  if (existsSync(mdP)) {
+    try {
+      return { raw: readFileSync(mdP, 'utf-8'), isMd: true }
+    } catch {
+      /* 落 txt 兜底 */
+    }
+  }
+  const txtP = txtPath(articleId)
+  if (existsSync(txtP)) {
+    try {
+      return { raw: readFileSync(txtP, 'utf-8'), isMd: false }
+    } catch {
+      return { raw: null, isMd: false }
+    }
+  }
+  return { raw: null, isMd: false }
+}
+
+/** 抓全文缓存（不置 ready——ready 由 science_fetch 管道在译文/概念建链后统一置）；
+ *  HTML 落保排版 .md、PDF/兜底落纯文本 .txt；缓存已可用（.md 存在，或 ≥200 字符）直接返回——
+ *  仅存量 .txt 亦重抓升级 .md（排版保留，260929），任一步失败置 meta_only（不抛错，降级合法） */
 export async function ensureScienceFulltext(article: ScienceArticleRow): Promise<void> {
-  if (article.status === 'ready' && existsSync(txtPath(article.id))) return
+  const cached = readScienceFulltext(article.id)
+  if (cached && cached.length >= 200 && existsSync(mdPath(article.id))) return
   const d = getDb()
   const fail = (reason: string): void => {
     d.prepare("UPDATE science_articles SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), article.id)
     logWarn('agent', `[agent:science] 《${article.title}》全文抓取失败（meta_only）：${reason}`)
   }
   try {
-    const { text: html } = await politeFetch(article.url)
-    const { document } = parseHTML(html)
-    const parsed = new Readability(document).parse()
-    const plain = (parsed?.textContent ?? '').replace(/\s+\n/g, '\n').trim()
-    if (plain.length < 200) throw new Error('正文过短')
-    writeFileSync(txtPath(article.id), plain, 'utf-8')
-    d.prepare("UPDATE science_articles SET status = 'ready', fulltext_path = ?, updated_at = ? WHERE id = ?").run(
-      `science/${article.id}.txt`,
+    const doc = await fetchDocText(article.url)
+    if (doc.text.length < 200) {
+      throw new Error(doc.kind === 'pdf' ? '抽取文本过短（扫描版 PDF 无文本层？）' : '正文过短')
+    }
+    const isMd = doc.kind === 'html' && !!doc.md
+    writeFileSync(isMd ? mdPath(article.id) : txtPath(article.id), isMd ? doc.md! : doc.text, 'utf-8')
+    d.prepare('UPDATE science_articles SET fulltext_path = ?, updated_at = ? WHERE id = ?').run(
+      `science/${article.id}${isMd ? '.md' : '.txt'}`,
       nowIso(),
       article.id
     )
-    logInfo('agent', `[agent:science] 《${article.title}》全文就绪（${Math.round(plain.length / 1000)}k 字符）`)
+    logInfo(
+      'agent',
+      `[agent:science] 《${article.title}》全文缓存就绪（${isMd ? 'Markdown 保排版' : '纯文本'}，${Math.round(doc.text.length / 1000)}k 字符）`
+    )
   } catch (e) {
     fail((e as Error).message)
   }
 }
 
-/** 按语言自动解读入队（已有同类产物/进行中则跳过）；en→全文解读、zh→轻加工 */
-function enqueueAutoInterpret(articleId: number): void {
-  const a = getScienceArticle(articleId)
-  if (!a) return
-  const kind = a.language === 'en' ? 'translation' : 'light'
-  const existing = getDb()
-    .prepare("SELECT id FROM interpretations WHERE owner_type = 'science_article' AND owner_id = ? AND kind = ?")
-    .get(articleId, kind)
-  if (existing) return
-  enqueue(a.language === 'en' ? 'science_translate' : 'science_light', { refId: articleId, trigger: 'auto' })
+/** meta_only/译文缺失「重试抓取」（260929 三页签改造）：幂等入队 science_fetch（抓缺 → 译缺/概念建链 →
+ *  ready；管道 runner 与注册在 interpretScience.ts，science.ts 只出队不出力避免循环依赖） */
+export function retryScienceFetch(id: number): void {
+  if (!getScienceArticle(id)) throw new Error('NOT_FOUND')
+  enqueue('science_fetch', { refId: id, trigger: 'manual' })
 }
 
-async function scienceFetchRunner(ctx: TaskContext): Promise<void> {
-  const article = getScienceArticle(ctx.refId ?? 0)
-  if (!article) throw new Error('NOT_FOUND')
-  ctx.progress('抓取全文中…')
-  await ensureScienceFulltext(article)
-  enqueueAutoInterpret(article.id)
-}
-
-registerTask({ type: 'science_fetch', priority: 10, singleton: true, maxRetries: 1 }, scienceFetchRunner)
-
-/** meta_only 条目「重试抓取」：成功后照常入队自动解读 */
-export async function retryScienceFetch(id: number): Promise<void> {
-  const article = getScienceArticle(id)
-  if (!article) throw new Error('NOT_FOUND')
-  await ensureScienceFulltext(article)
-  enqueueAutoInterpret(id)
+/** zh 原文 md 包装（划词高光载体）：不存在则由全文缓存生成 sa-{id}-source.md，返回相对路径（幂等）；
+ *  HTML 抓取缓存已是 Markdown，保排版直出，存量纯文本才按行切段 */
+export function ensureSourceMd(articleId: number): string {
+  const rel = `md/interpretations/sa-${articleId}-source.md`
+  const abs = join(userDataDir(), rel)
+  if (existsSync(abs)) return rel
+  const article = getScienceArticle(articleId)
+  const title = article ? toSimplified(article.title) : `#${articleId}`
+  const mdCache = join(userDataDir(), 'science', `${articleId}.md`)
+  if (existsSync(mdCache)) {
+    mdWrite(rel, `# 原文：${title}\n\n${readFileSync(mdCache, 'utf-8').trim()}\n`)
+    return rel
+  }
+  const raw = readScienceFulltext(articleId)
+  if (!raw) throw new Error('全文缓存缺失')
+  mdWrite(
+    rel,
+    `# 原文：${title}\n\n${raw
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join('\n\n')}\n`
+  )
+  return rel
 }
 
 // ---------- 删除（彻底删，不入回收站；先库后文件） ----------
@@ -222,10 +258,12 @@ export function deleteScienceArticle(id: number): void {
     .run(id, id)
   d.prepare('DELETE FROM science_articles WHERE id = ?').run(id)
   for (const it of interps) mdDelete(it.md_path)
-  try {
-    unlinkSync(txtPath(id))
-  } catch {
-    /* 无该文件 */
+  for (const suffix of ['.md', '.txt']) {
+    try {
+      unlinkSync(join(userDataDir(), 'science', `${id}${suffix}`))
+    } catch {
+      /* 无该文件 */
+    }
   }
   logInfo('agent', `[agent:science] 科普文章 #${id}《${article.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
 }

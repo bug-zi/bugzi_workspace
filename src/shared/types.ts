@@ -67,8 +67,8 @@ export const SettingsKeys = {
   LlmDefaultId: 'llm_default_id',
   McpConfigs: 'mcp_configs',
   McpEnabled: 'mcp_enabled',
-  MottoSchedule: 'motto_schedule',
-  LastMottoRun: 'last_motto_run',
+  /** 格言启动生成标记 "YYYY-MM-DD|count"（260929 自每晚定时改为 App 启动触发、每日最多两次） */
+  MottoRunMark: 'motto_run_mark',
   AiActiveSessionId: 'ai_active_session_id',
   // 频道制（DB v9）：各场景独立激活会话（assistant 沿用 AiActiveSessionId）。
   // 统一会话流（优化建议区第48轮）：新增全局键=边栏当前会话（启动恢复「最后聊过的会话」）；
@@ -106,6 +106,8 @@ export const SettingsKeys = {
   FilesWidth: 'explorer_width',
   // 日志库（260927 新功能开发区）：右栏第五面板宽度
   LogsWidth: 'logs_width',
+  // 快捷键配置（260929 新功能开发区）：应用内快捷键覆盖项 JSON { actionId: accelerator }
+  Keybindings: 'keybindings',
   // 书架优化第1轮（260908）：阅读模式（滚动/翻页）全局记忆
   BooksReadingMode: 'books_reading_mode',
   // 内置终端（260912 新功能开发区）：JSON { shell, cwd, height }
@@ -1470,12 +1472,12 @@ export interface PaperRow {
   updated_at: string
 }
 
-/** 解读产物登记（interpretations 表）：导读卡/精讲/精译/书籍解读的台账 */
+/** 解读产物登记（interpretations 表）：导读卡/原文中文版译文/精读版/书籍解读的台账 */
 export interface InterpretationRow {
   id: number
   owner_type: 'paper' | 'science_article' | 'book'
   owner_id: number
-  kind: 'digest' | 'lecture' | 'translation' | 'light' | 'book_digest'
+  kind: 'digest' | 'translation' | 'deepread' | 'book_digest'
   status: 'running' | 'done' | 'failed'
   md_path: string | null
   tokens_used: number

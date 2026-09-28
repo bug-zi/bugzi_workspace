@@ -1,7 +1,7 @@
-// 论文阅读视图（260927 长文阅读视图化，信息源 ArticleView 同款整页切换）：
-// 导读卡｜精讲｜精译｜原文四视图 + 顶栏动作（编辑/追问/关联知识/删除）+ 相关内容就地切换。
-// 默认只读 + 顶栏编辑钮；生成中按「任务类型+refId」精确匹配、可围观逐章落盘的半成品（5s 轮询）。
-// 划词仅「问 AI」（论文无高光载体）；原文视图读全文缓存、只读无划词。
+// 论文阅读视图（260929 抓取三页签阅读：原文｜导读卡｜精读版，默认原文）：
+// 原文 = 简体中文全文（zh 直读缓存；en 显示 translation 译文产物，缺译文静默补翻译管道）。
+// 导读卡（大致内容+文章脉络）/精读版（关键部分拆解）按需生成，空态给生成按钮；
+// 生成中按「任务类型+refId」精确匹配、可围观逐章落盘的半成品（5s 轮询）。划词仅「问 AI」（含原文）。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import KnowledgeLinksDialog, { type RelatedLink } from '../../components/KnowledgeLinksDialog'
@@ -21,7 +21,7 @@ interface PaperDetail {
   active: string[]
 }
 
-type ReadView = 'digest' | 'lecture' | 'translate' | 'source'
+type ReadView = 'source' | 'digest' | 'deepread'
 
 const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv' }
 
@@ -34,10 +34,27 @@ function dateLabel(row: { date: string | null; year: number | null }): string {
   return row.year != null ? String(row.year) : ''
 }
 
-const KINDS: { kind: 'digest' | 'lecture' | 'translate'; label: string; task: string; pathOf: (id: number) => string }[] = [
-  { kind: 'digest', label: '导读卡', task: 'make_digest', pathOf: (id) => `md/interpretations/${id}-digest.md` },
-  { kind: 'lecture', label: '精讲', task: 'lecture', pathOf: (id) => `md/interpretations/${id}-lecture.md` },
-  { kind: 'translate', label: '精译', task: 'translate', pathOf: (id) => `md/interpretations/${id}-trans.md` }
+const TABS: {
+  view: 'digest' | 'deepread'
+  label: string
+  task: string
+  kind: 'digest' | 'deepread'
+  pathOf: (id: number) => string
+}[] = [
+  {
+    view: 'digest',
+    label: '导读卡',
+    task: 'make_digest',
+    kind: 'digest',
+    pathOf: (id) => `md/interpretations/${id}-digest.md`
+  },
+  {
+    view: 'deepread',
+    label: '精读版',
+    task: 'paper_deepread',
+    kind: 'deepread',
+    pathOf: (id) => `md/interpretations/${id}-deepread.md`
+  }
 ]
 
 export default function PaperReader(props: {
@@ -52,15 +69,17 @@ export default function PaperReader(props: {
 }) {
   const { toast } = useToast()
   const [detail, setDetail] = useState<PaperDetail | null>(null)
-  const [view, setView] = useState<ReadView>('digest')
+  const [view, setView] = useState<ReadView>('source')
   const [mdText, setMdText] = useState('')
   const [mdVersion, setMdVersion] = useState(0)
   const [runningTasks, setRunningTasks] = useState<{ type: string; refId: number | null; progress: string | null }[]>([])
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
-  const [forceKind, setForceKind] = useState<'digest' | 'lecture' | 'translate' | null>(null)
+  const [forceKind, setForceKind] = useState<'digest' | 'deepread' | null>(null)
   const [linksOpen, setLinksOpen] = useState(false)
   const [delOpen, setDelOpen] = useState(false)
+  // 旧英文条目缺译文的补翻译只自动触发一次（防事件刷新重复入队；幂等管道本身也安全）
+  const autoTrigRef = useRef(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const { scrollRef, zoom, zoomBarVisible, resetZoom } = useReaderZoom()
   const { ref: rootRef, height: rootHeight } = useFillHeight()
@@ -78,64 +97,82 @@ export default function PaperReader(props: {
     void load()
   }, [load])
 
-  const interpOf = (kind: 'digest' | 'lecture' | 'translate'): InterpretationRow | undefined => {
-    const k: InterpretationRow['kind'] = kind === 'translate' ? 'translation' : kind
-    return detail?.interpretations.find((i) => i.kind === k && i.status === 'done')
-  }
+  const interpOf = (kind: 'digest' | 'deepread' | 'translation'): InterpretationRow | undefined =>
+    detail?.interpretations.find((i) => i.kind === kind && i.status === 'done')
 
   const busyOf = (task: string): { progress: string | null } | null =>
     detail ? (runningTasks.find((t) => t.type === task && t.refId === detail.paper.id) ?? null) : null
   // 排队未派发任务也算忙（260928）：runningTasks 只含在飞项，排队段此前无任何提示
   const queuedBusyOf = (task: string): boolean => detail?.active.includes(task) ?? false
 
-  const kindMeta = KINDS.find((k) => k.kind === view)
-  const busy = kindMeta ? (busyOf(kindMeta.task) ?? (queuedBusyOf(kindMeta.task) ? { progress: null } : null)) : null
-  const fetching = detail ? detail.paper.status !== 'ready' && queuedBusyOf('make_digest') : false
-  const row = kindMeta ? interpOf(kindMeta.kind) : undefined
-  // 生成中围观半成品：done 台账未落也按约定路径读（lecture/translate 逐章落盘；digest 完成时一次落盘）。
+  const tab = TABS.find((t) => t.view === view)
+  const busy = tab ? (busyOf(tab.task) ?? (queuedBusyOf(tab.task) ? { progress: null } : null)) : null
+  const fetching = detail ? (busyOf('paper_fetch') ?? (queuedBusyOf('paper_fetch') ? { progress: null } : null)) : null
+  const row = tab ? interpOf(tab.kind) : undefined
+  // 生成中围观半成品：done 台账未落也按约定路径读（精读版逐章落盘；导读卡完成时一次落盘）。
   // 仅在飞任务读半成品路径——排队任务文件尚未产生，走占位提示
-  const contentPath = kindMeta
-    ? (row?.md_path ?? (busyOf(kindMeta.task) ? kindMeta.pathOf(detail?.paper.id ?? 0) : undefined))
+  const contentPath = tab
+    ? (row?.md_path ?? (busyOf(tab.task) ? tab.pathOf(detail?.paper.id ?? 0) : undefined))
     : undefined
 
   // 生成中每 5s 刷新（逐章落盘实时可见；任务终态事件另有即时刷新）
   useEffect(() => {
-    if (!busy) return
+    if (!busy && !fetching) return
     const t = setInterval(() => void load(), 5000)
     return () => clearInterval(t)
-  }, [busy, load])
+  }, [busy, fetching, load])
 
-  // 队列事件：本文解读产物相关任务（入队/终态都刷，260928 排队段也要点亮生成中）→ 即时刷新详情
+  // 队列事件：本文相关任务（入队/终态都刷）→ 即时刷新详情
   useEffect(() => {
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       setRunningTasks(s.runningTasks ?? [])
       const ev = s.lastEvent
       if (!ev) return
-      if (ev.type === 'make_digest' || ev.type === 'lecture' || ev.type === 'translate') void load()
+      if (ev.type === 'paper_fetch' || ev.type === 'make_digest' || ev.type === 'paper_deepread') void load()
     })
     return off
   }, [load])
 
-  // 内容装载：原文读全文缓存（纯文本转 md 段落，只读）；解读产物读 md 文件
+  // 内容装载：原文 en=translation 译文（缺译文先读英文缓存并静默补翻译）、zh=全文缓存；解读产物读 md
   useEffect(() => {
     setEditing(false)
     if (view === 'source') {
       if (!detail) return
-      let cancelled = false
-      if (detail.paper.status !== 'ready') {
+      const paper = detail.paper
+      if (paper.status !== 'ready') {
         setMdText('')
         return
       }
-      void window.api.agent.paperFulltext(detail.paper.id).then((raw) => {
+      let cancelled = false
+      if (paper.language === 'en') {
+        const trans = detail.interpretations.find((i) => i.kind === 'translation' && i.status === 'done')
+        if (trans?.md_path) {
+          void window.api.md
+            .read(trans.md_path)
+            .then((md) => {
+              if (!cancelled) setMdText(md)
+            })
+            .catch(() => {
+              if (!cancelled) setMdText('')
+            })
+          return () => {
+            cancelled = true
+          }
+        }
+        // 旧英文条目缺译文：静默补一次翻译管道（幂等），译文就绪前先展示英文原文
+        if (!fetching && !autoTrigRef.current) {
+          autoTrigRef.current = true
+          void window.api.agent.paperRetryFetch(paper.id).catch(() => {})
+        }
+      }
+      void window.api.agent.paperFulltext(paper.id).then(({ raw, isMd }) => {
         if (cancelled) return
         setMdText(
           raw
-            ? `# 原文：${detail.paper.title}\n\n${raw
-                .split(/\n+/)
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .join('\n\n')}`
-            : '（原文缓存缺失，可「手动传 PDF」后重试）'
+            ? `# 原文：${paper.title}\n\n${
+                isMd ? raw.trim() : raw.split(/\n+/).map((s) => s.trim()).filter(Boolean).join('\n\n')
+              }`
+            : '（原文缓存缺失，请返回列表「重试抓取」）'
         )
       })
       return () => {
@@ -159,10 +196,10 @@ export default function PaperReader(props: {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, detail?.paper.id, detail?.paper.status, contentPath, mdVersion])
+  }, [view, detail?.paper.id, detail?.paper.status, detail?.interpretations, contentPath, mdVersion, fetching])
 
   /** 生成/重生成解读；done 且未 force 的先弹确认 */
-  const generate = (kind: 'digest' | 'lecture' | 'translate', force = false): void => {
+  const generate = (kind: 'digest' | 'deepread', force = false): void => {
     if (!detail) return
     if (interpOf(kind) && !force) {
       setForceKind(kind)
@@ -171,7 +208,7 @@ export default function PaperReader(props: {
     void window.api.agent
       .runInterpret(detail.paper.id, kind, force)
       .then(() => {
-        toast(kind === 'digest' ? '导读卡生成中，完成后自动更新' : '任务已入队，逐章生成中')
+        toast(kind === 'digest' ? '导读卡生成中，完成后自动更新' : '精读版生成中，逐章进行')
         setForceKind(null)
         setMdVersion((v) => v + 1)
       })
@@ -183,19 +220,6 @@ export default function PaperReader(props: {
         }
         toast(`触发失败：${msg}`)
       })
-  }
-
-  const importPdf = async (): Promise<void> => {
-    if (!detail) return
-    try {
-      const ok = await window.api.agent.importPaperPdf(detail.paper.id)
-      if (ok) {
-        toast('PDF 导入成功，全文已就绪')
-        void load()
-      }
-    } catch (e) {
-      toast(`导入失败：${(e as Error).message}`)
-    }
   }
 
   const saveEdit = async (): Promise<void> => {
@@ -214,9 +238,9 @@ export default function PaperReader(props: {
     props.onBack()
   }
 
-  // 划词问 AI（无高光载体，仅问 AI；原文/编辑态不出气泡）
+  // 划词问 AI（无高光载体，仅问 AI；编辑态不出气泡，原文页也可问）
   useSelectionBubble(
-    !editing && view !== 'source' && !!mdText,
+    !editing && !!mdText,
     bodyRef,
     detail
       ? {
@@ -228,23 +252,22 @@ export default function PaperReader(props: {
 
   const paper = detail?.paper
   const langLabel = paper?.language === 'zh' ? '中文' : '英文'
-  const emptyHint =
-    view === 'source' ? null : busy ? (
-      <div className="empty-state">
-        <span className="material-symbols-outlined spin">progress_activity</span>
-        {busy.progress
-          ? `${kindMeta?.label ?? ''}生成中 · ${busy.progress}——逐章落盘，已生成部分可直接阅读；本视图每 5 秒自动刷新`
-          : `${kindMeta?.label ?? ''}已入队，排队生成中——轮到后自动开始，完成后自动更新`}
-      </div>
-    ) : (
-      <div className="empty-state">
-        <span className="material-symbols-outlined">auto_awesome</span>
-        {`暂无${kindMeta?.label ?? '解读产物'}——点击下方按钮生成（后台逐章进行，完成后自动更新）`}
-        <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => kindMeta && generate(kindMeta.kind)}>
-          生成{kindMeta?.label}
-        </button>
-      </div>
-    )
+  const emptyHint = busy ? (
+    <div className="empty-state">
+      <span className="material-symbols-outlined spin">progress_activity</span>
+      {busy.progress
+        ? `${tab?.label ?? ''}生成中 · ${busy.progress}——逐章落盘，已生成部分可直接阅读；本视图每 5 秒自动刷新`
+        : `${tab?.label ?? ''}已入队，排队生成中——轮到后自动开始，完成后自动更新`}
+    </div>
+  ) : (
+    <div className="empty-state">
+      <span className="material-symbols-outlined">auto_awesome</span>
+      {`暂无${tab?.label ?? '解读产物'}——点击下方按钮生成（后台逐章进行，完成后自动更新）`}
+      <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => tab && generate(tab.kind)}>
+        生成{tab?.label}
+      </button>
+    </div>
+  )
 
   return (
     <div className="module-reader-page" ref={rootRef} style={rootHeight != null ? { height: rootHeight } : undefined}>
@@ -296,47 +319,40 @@ export default function PaperReader(props: {
         </button>
       </div>
 
-      {/* 视图页签：导读卡｜精讲｜精译｜原文 + 生成/重生成动作 */}
+      {/* 视图页签：原文｜导读卡｜精读版 + 生成/重生成动作 */}
       <div className="recycle-tabs domain-tabs" style={{ flexShrink: 0 }}>
-        {KINDS.map(({ kind, label, task }) => {
-          const has = !!interpOf(kind)
+        <button
+          className={`recycle-tab${view === 'source' ? ' active' : ''}`}
+          onClick={() => setView('source')}
+          title="简体中文全文（英文原文已自动翻译）"
+        >
+          原文{fetching ? ' …' : ''}
+        </button>
+        {TABS.map(({ view: v, label, task }) => {
           const b = busyOf(task)
           return (
             <button
-              key={kind}
-              className={`recycle-tab${view === kind ? ' active' : ''}`}
+              key={v}
+              className={`recycle-tab${view === v ? ' active' : ''}`}
               title={b ? `${label}生成中${b.progress ? ` · ${b.progress}` : ''}` : undefined}
-              onClick={() => setView(kind)}
+              onClick={() => setView(v)}
             >
               {label}
               {b ? ' …' : ''}
             </button>
           )
         })}
-        <button
-          className={`recycle-tab${view === 'source' ? ' active' : ''}`}
-          onClick={() => setView('source')}
-          title={
-            paper?.status === 'ready'
-              ? '在 App 内阅读原文全文'
-              : fetching
-                ? '全文抓取中，完成后可读'
-                : '全文未抓取到，可重试抓取或手动传 PDF'
-          }
-        >
-          原文
-        </button>
         {view !== 'source' && (
           <>
             {row && !busy && (
-              <button className="icon-btn" title={`重新生成${kindMeta?.label}（覆盖现有产物）`} onClick={() => setForceKind(view)}>
+              <button className="icon-btn" title={`重新生成${tab?.label}（覆盖现有产物）`} onClick={() => setForceKind(view)}>
                 <span className="material-symbols-outlined">refresh</span>
               </button>
             )}
             {!row && !busy && (
-              <button className="btn btn-primary" onClick={() => kindMeta && generate(kindMeta.kind)}>
+              <button className="btn btn-primary" onClick={() => tab && generate(tab.kind)}>
                 <span className="material-symbols-outlined">auto_awesome</span>
-                生成{kindMeta?.label}
+                生成{tab?.label}
               </button>
             )}
           </>
@@ -351,7 +367,7 @@ export default function PaperReader(props: {
               {dateLabel(paper) ? ` · ${dateLabel(paper)}` : ''}
               {` · ${langLabel}`}
               <span className={`badge ${paper.status === 'ready' ? 'primary' : ''}`} style={{ marginLeft: 8 }}>
-                {paper.status === 'ready' ? '全文就绪' : fetching ? '抓取中…' : '仅元信息'}
+                {paper.status === 'ready' ? '全文就绪' : '处理中…'}
               </span>
               <span className="badge" style={{ marginLeft: 6 }}>{sourceBadge(paper.source)}</span>
             </div>
@@ -375,38 +391,18 @@ export default function PaperReader(props: {
                 </button>
               </div>
             </div>
-          ) : view === 'source' && paper?.status !== 'ready' ? (
-            fetching ? (
-              <div className="empty-state">
-                <span className="material-symbols-outlined spin">progress_activity</span>
-                全文抓取中…（抓取任务在队列中进行，完成后自动就绪；失败会降级为「仅元信息」）
-              </div>
-            ) : (
-              <div className="empty-state">
-                <span className="material-symbols-outlined">upload_file</span>
-                全文尚未抓取到（仅元信息）——可重试抓取，或手动传 PDF 补全文
-                <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'center' }}>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      if (!detail) return
-                      void window.api.agent
-                        .paperRetryFetch(detail.paper.id)
-                        .then(() => toast('重试抓取中，成功后自动生成导读卡'))
-                        .catch((e) => toast(`重试失败：${(e as Error).message}`))
-                    }}
-                  >
-                    <span className="material-symbols-outlined">cloud_download</span>
-                    重试抓取
-                  </button>
-                  <button className="btn btn-primary" onClick={() => void importPdf()}>
-                    手动传 PDF
-                  </button>
-                </div>
-              </div>
-            )
           ) : mdText ? (
             <MdView md={mdText} bodyRef={bodyRef} />
+          ) : view === 'source' && fetching ? (
+            <div className="empty-state">
+              <span className="material-symbols-outlined spin">progress_activity</span>
+              中文版生成中…（英文原文已抓取，翻译完成后自动替换；本视图每 5 秒自动刷新）
+            </div>
+          ) : view === 'source' ? (
+            <div className="empty-state">
+              <span className="material-symbols-outlined spin">progress_activity</span>
+              加载中…
+            </div>
           ) : (
             emptyHint
           )}
@@ -453,13 +449,13 @@ export default function PaperReader(props: {
 
       <ConfirmDialog
         open={forceKind !== null}
-        title={`重新生成${forceKind === 'digest' ? '导读卡' : forceKind === 'lecture' ? '精讲' : '精译'}`}
+        title={`重新生成${forceKind === 'digest' ? '导读卡' : '精读版'}`}
         danger
         confirmText="重新生成"
         onConfirm={() => forceKind && generate(forceKind, true)}
         onCancel={() => setForceKind(null)}
       >
-        已有生成产物，重新生成将覆盖现有内容（精讲/精译已生成部分会从头重写）。确定继续？
+        已有生成产物，重新生成将覆盖现有内容。确定继续？
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -470,7 +466,7 @@ export default function PaperReader(props: {
         onConfirm={() => void removePaper()}
         onCancel={() => setDelOpen(false)}
       >
-        确认彻底删除《{paper?.title}》？其导读卡/精讲/精译产物、全文缓存与相关推荐将一并删除，不可恢复。
+        确认彻底删除《{paper?.title}》？其导读卡/精读版产物、全文缓存与相关推荐将一并删除，不可恢复。
       </ConfirmDialog>
 
       <KnowledgeLinksDialog

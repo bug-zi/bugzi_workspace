@@ -558,7 +558,7 @@ export default function AiSidebar(props: AiSidebarProps) {
   if (collapsed) {
     // 草稿本/画布面板正展开：隐藏但保持挂载（进行中的生成任务 await 仍能回填状态，重展开即恢复）
     if (!showRail) return <aside className="ai-sidebar" style={{ display: 'none' }} aria-hidden />
-    // 都收起：右缘细条五图标入口（debugzi / 资源管理器 / 草稿本 / 日志库 / 画布，互斥展开）
+    // 都收起：右缘细条五图标入口（debugzi / 资源管理器 / 草稿本 / 画布 / 日志库，互斥展开）
     return (
       <aside className="ai-sidebar collapsed">
         <button className="ai-toggle" onClick={onExpand} title={`展开 ${AI_NAME}`}>
@@ -570,11 +570,11 @@ export default function AiSidebar(props: AiSidebarProps) {
         <button className="ai-toggle" onClick={onOpenDraft} title="展开草稿本">
           <span className="material-symbols-outlined">edit_note</span>
         </button>
-        <button className="ai-toggle" onClick={onOpenLogs} title="展开日志库">
-          <span className="material-symbols-outlined">receipt_long</span>
-        </button>
         <button className="ai-toggle" onClick={onOpenCanvas} title="展开画布">
           <span className="material-symbols-outlined">draw</span>
+        </button>
+        <button className="ai-toggle" onClick={onOpenLogs} title="展开日志库">
+          <span className="material-symbols-outlined">receipt_long</span>
         </button>
       </aside>
     )

@@ -83,7 +83,7 @@ void app.whenReady().then(() => {
   registerBzresProtocol()   // ① 协议处理器本体（ready 后才能 protocol.handle）
   initDb()                  // ② 建目录 + 开 SQLite + 46 版迁移
   registerIpc()             // ③ 注册全部 ~330 条通道
-  startSchedulers()         // ④ 启动清理 + 排格言定时/零点清理
+  startSchedulers()         // ④ 启动清理 + 格言启动生成（每日最多两次，260929 自定时改造）+ 零点清理
   setTimeout(…, 10_000) ×5  // ⑤ 五个延迟任务，全部错开启动高峰、unref、内部自 catch：
                             //    backfillTrickNotes（存量汤诡计摘要回填）
                             //    ensureReasoningStock / ensureWikiQuizStock（推理角两池）

@@ -34,7 +34,7 @@ function applyLogsWidth(w: number): void {
 const SCOPES: { id: LogScope; label: string }[] = [
   { id: 'system', label: '系统' },
   { id: 'agent', label: '超级工作台' },
-  { id: 'scheduler', label: '定时任务' },
+  { id: 'scheduler', label: '后台任务' },
   { id: 'stock', label: '补库泵' },
   { id: 'llm', label: 'LLM 调用' },
   { id: 'podcast', label: '播客台' },

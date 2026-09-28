@@ -62,10 +62,10 @@ function paperContext(id: number): LitContext | null {
 function scienceContext(id: number): LitContext | null {
   const article = getScienceArticle(id)
   if (!article) return null
-  // 解读产物优先（translation || light），其次摘要，全文节选兜底
+  // 解读产物优先（translation=原文中文版），其次摘要，全文节选兜底
   const rows = getDb()
     .prepare(
-      "SELECT md_path FROM interpretations WHERE owner_type = 'science_article' AND owner_id = ? AND kind IN ('translation','light') AND status = 'done' ORDER BY CASE kind WHEN 'translation' THEN 0 ELSE 1 END LIMIT 1"
+      "SELECT md_path FROM interpretations WHERE owner_type = 'science_article' AND owner_id = ? AND kind = 'translation' AND status = 'done' ORDER BY id DESC LIMIT 1"
     )
     .all(id) as { md_path: string | null }[]
   const product = rows[0]?.md_path

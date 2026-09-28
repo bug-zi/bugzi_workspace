@@ -35,7 +35,7 @@ export default function LiteraturePanel({
   const [subTab, setSubTab] = useState<SubTab>('discover')
   const [items, setItems] = useState<DiscoverItemRow[]>([])
   const [papers, setPapers] = useState<PaperRow[]>([])
-  // 抓取中文献 id 集（make_digest 在队/在跑派生，260928 三态化）
+  // 抓取中文献 id 集（paper_fetch 在队/在跑派生，260929 三页签改造）
   const [fetchingIds, setFetchingIds] = useState<Set<number>>(new Set())
   const [domains, setDomains] = useState<AgentDomainRow[]>([])
   // 领域筛选（260927）：domainsAll=deep 轨全量（tab 数据源，含停用），domains=启用中（海选下拉）
@@ -53,9 +53,9 @@ export default function LiteraturePanel({
   }, [])
   const loadPapers = useCallback((): void => {
     void window.api.agent.papers().then(setPapers)
-    // 抓取中派生态（260928 三态化）：make_digest 在队/在跑的文献 id 集
+    // 抓取中派生态：paper_fetch 在队/在跑的文献 id 集
     void window.api.agent.activeTasks().then((rows) => {
-      setFetchingIds(new Set(rows.filter((t) => t.type === 'make_digest' && t.refId != null).map((t) => t.refId as number)))
+      setFetchingIds(new Set(rows.filter((t) => t.type === 'paper_fetch' && t.refId != null).map((t) => t.refId as number)))
     })
   }, [])
   const loadDomains = useCallback((): void => {
@@ -79,15 +79,17 @@ export default function LiteraturePanel({
     const off = window.api.agent.onAgentStatus((s: AgentStatusSnapshot) => {
       const ev = s.lastEvent
       if (!ev) return
-      // 入队事件也要刷「抓取中」徽章（260928 三态化）；其余终态照旧
+      // 入队事件也要刷「抓取中」徽章；其余终态照旧
       if (ev.status === 'enqueued') {
-        if (ev.type === 'make_digest') loadPapers()
+        if (ev.type === 'paper_fetch') loadPapers()
         return
       }
       if (ev.type === 'collect_deep') {
         loadDiscover()
         toast(ev.status === 'done' ? '海选完成，发现箱已更新' : '海选任务失败，详见控制台 [agent] 日志')
-      } else if (ev.type === 'make_digest' || ev.type === 'lecture' || ev.type === 'translate') {
+      } else if (ev.type === 'paper_fetch') {
+        loadPapers()
+      } else if (ev.type === 'make_digest' || ev.type === 'paper_deepread') {
         loadPapers()
         const msg =
           ev.status === 'done'
@@ -146,7 +148,7 @@ export default function LiteraturePanel({
   const accept = async (id: number): Promise<void> => {
     try {
       await window.api.agent.discoverAccept(id)
-      toast('已转正，全文抓取与导读卡生成中（完成后自动出现）')
+      toast('已转正，全文抓取中（就绪后可打开）')
       loadDiscover()
       loadPapers()
     } catch (e) {
@@ -333,26 +335,69 @@ export default function LiteraturePanel({
                 : '该领域下暂无文献'}
             </div>
           )}
-          {papersFiltered.map((p) => (
-            <div className="lit-item" key={p.id}>
-              <div className="row-main" onClick={() => setReadingId(p.id)} title="点击进入阅读视图">
-                <div className="row-title">{p.title}</div>
-                <div className="row-sub">
-                  {(p.authors.length ? p.authors.slice(0, 4).join(', ') : '佚名')}
-                  {dateLabel(p) ? ` · ${dateLabel(p)}` : ''}
-                  {p.digest_md ? ' · 已有导读卡' : ''}
+          {papersFiltered.map((p) => {
+            const fetching = fetchingIds.has(p.id)
+            return (
+              <div className="lit-item" key={p.id}>
+                <div
+                  className="row-main"
+                  onClick={() => {
+                    if (p.status !== 'ready') {
+                      toast(fetching ? '全文抓取中，就绪后即可打开' : '全文尚未就绪——可先在行内「重试抓取」')
+                      return
+                    }
+                    setReadingId(p.id)
+                  }}
+                  title={p.status === 'ready' ? '点击进入阅读视图' : fetching ? '抓取中，暂不可打开' : '抓取失败，可重试抓取或导入 PDF'}
+                >
+                  <div className="row-title">{p.title}</div>
+                  <div className="row-sub">
+                    {(p.authors.length ? p.authors.slice(0, 4).join(', ') : '佚名')}
+                    {dateLabel(p) ? ` · ${dateLabel(p)}` : ''}
+                    {p.digest_md ? ' · 已有导读卡' : ''}
+                  </div>
+                </div>
+                <div className="row-actions">
+                  <span className={`badge ${p.status === 'ready' ? 'primary' : ''}`}>
+                    {p.status === 'ready' ? '全文就绪' : fetching ? '抓取中…' : '抓取失败'}
+                  </span>
+                  {p.status !== 'ready' && (
+                    <>
+                      <button
+                        className="btn"
+                        disabled={fetching}
+                        title={fetching ? '抓取任务进行中' : '重新抓取全文；英文文献会自动翻译成中文'}
+                        onClick={() =>
+                          void window.api.agent
+                            .paperRetryFetch(p.id)
+                            .then(() => toast('重试抓取中，就绪后可打开'))
+                            .catch((e) => toast(`重试失败：${(e as Error).message}`))
+                        }
+                      >
+                        重试抓取
+                      </button>
+                      <button
+                        className="btn"
+                        disabled={fetching}
+                        title="手动导入 PDF 补全文；英文文献随后自动翻译"
+                        onClick={() =>
+                          void window.api.agent
+                            .importPaperPdf(p.id)
+                            .then((ok) => ok && toast('PDF 导入成功，就绪后可打开'))
+                            .catch((e) => toast(`导入失败：${(e as Error).message}`))
+                        }
+                      >
+                        导入 PDF
+                      </button>
+                    </>
+                  )}
+                  <button className="icon-btn danger" title="彻底删除文献" onClick={() => setDelPaper(p)}>
+                    <span className="material-symbols-outlined">delete</span>
+                  </button>
                 </div>
               </div>
-              <div className="row-actions">
-                <span className={`badge ${p.status === 'ready' ? 'primary' : ''}`}>
-                  {p.status === 'ready' ? '全文就绪' : fetchingIds.has(p.id) ? '抓取中…' : '仅元信息'}
-                </span>
-                <button className="icon-btn danger" title="彻底删除文献" onClick={() => setDelPaper(p)}>
-                  <span className="material-symbols-outlined">delete</span>
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -365,7 +410,7 @@ export default function LiteraturePanel({
         onConfirm={() => void removePaper()}
         onCancel={() => setDelPaper(null)}
       >
-        确认彻底删除《{delPaper?.title}》？其导读卡/精讲/精译产物、全文缓存与相关推荐将一并删除，不可恢复。
+        确认彻底删除《{delPaper?.title}》？其导读卡/精读版产物、全文缓存与相关推荐将一并删除，不可恢复。
       </ConfirmDialog>
 
       {/* 删除发现条目确认 */}

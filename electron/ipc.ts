@@ -5,7 +5,6 @@ import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { readExplorerDir, readExplorerText, readExplorerImage } from './services/explorer'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
-import { scheduleMottoTask } from './services/scheduler'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
 import {
@@ -53,7 +52,7 @@ import {
   pendingDiscoverCount,
   deletePaper,
   deleteDiscover,
-  readFulltext,
+  readPaperSource,
   retryPaperFetch
 } from './services/agent/papers'
 import { runInterpret } from './services/agent/interpret'
@@ -66,7 +65,8 @@ import {
   scienceRelated,
   deleteScienceArticle,
   retryScienceFetch,
-  readScienceFulltext,
+  ensureSourceMd,
+  readScienceSource,
   addScienceHighlight,
   removeScienceHighlight,
   scienceLinkManual,
@@ -298,8 +298,6 @@ export function registerIpc(): void {
   ipcMain.handle('settings:get', (_e, key: string) => getSetting(key))
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
     setSetting(key, value)
-    // 定时设置变更 → 重排格言任务
-    if (key === SettingsKeys.MottoSchedule) scheduleMottoTask()
     return true
   })
 
@@ -4032,13 +4030,13 @@ export function registerIpc(): void {
       paper,
       interpretations: listInterpretations(id),
       related: listLinks('paper', id),
-      active: activeTypesFor(['make_digest', 'lecture', 'translate'], id)
+      active: activeTypesFor(['paper_fetch', 'make_digest', 'paper_deepread'], id)
     }
   })
   ipcMain.handle('agent:activeTasks', () => activeTasks())
   ipcMain.handle('agent:paperRetryFetch', (_e, id: number) => retryPaperFetch(id))
-  // 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null；260927 阅读视图化）
-  ipcMain.handle('agent:paperFulltext', (_e, id: number) => readFulltext(id))
+  // 原文渲染源（papers/{id}.md 保排版 Markdown 优先，存量 .txt 纯文本按行切段；260927 阅读视图化）
+  ipcMain.handle('agent:paperFulltext', (_e, id: number) => readPaperSource(id))
   ipcMain.handle('agent:runCollect', (_e, domainId: number) => {
     // 按领域 track 路由（批次D）：deep→collect_deep、science→collect_science
     const d = listDomains().find((x) => x.id === domainId)
@@ -4048,7 +4046,7 @@ export function registerIpc(): void {
       trigger: 'manual'
     })
   })
-  ipcMain.handle('agent:runInterpret', (_e, paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean) =>
+  ipcMain.handle('agent:runInterpret', (_e, paperId: number, kind: 'digest' | 'deepread', force?: boolean) =>
     runInterpret(paperId, kind, force ?? false)
   )
   ipcMain.handle('agent:importPaperPdf', async (_e, paperId: number) => {
@@ -4059,6 +4057,8 @@ export function registerIpc(): void {
     })
     if (r.canceled || r.filePaths.length === 0) return false
     await importManualPdf(paperId, r.filePaths[0])
+    // 导入成功后走幂等管道：zh 直接就绪、en 补翻译（260929 三页签改造）
+    enqueue('paper_fetch', { refId: paperId, trigger: 'manual' })
     return true
   })
   ipcMain.handle('agent:pendingCounts', () => ({ discovered: pendingDiscoverCount() }))
@@ -4103,7 +4103,7 @@ export function registerIpc(): void {
         .all('science_article', id),
       highlights: listScienceHighlights(id),
       related: scienceRelated(id),
-      active: activeTypesFor(['science_fetch', 'science_translate', 'science_light', 'science_lecture'], id)
+      active: activeTypesFor(['science_fetch', 'science_digest', 'science_deepread'], id)
     }
   })
   ipcMain.handle('agent:scienceDelete', (_e, id: number) => {
@@ -4111,13 +4111,14 @@ export function registerIpc(): void {
     return true
   })
   ipcMain.handle('agent:scienceRetryFetch', (_e, id: number) => retryScienceFetch(id))
-  // 原文全文（260927：全文就绪文章在 App 内可读，不再只跳外部浏览器）
-  ipcMain.handle('agent:scienceFulltext', (_e, id: number) => readScienceFulltext(id))
+  // 原文渲染源（science/{id}.md 保排版 Markdown 优先；260927：全文就绪文章在 App 内可读）
+  ipcMain.handle('agent:scienceFulltext', (_e, id: number) => readScienceSource(id))
   ipcMain.handle(
     'agent:scienceInterpret',
-    (_e, id: number, kind: 'translate' | 'light' | 'lecture', force?: boolean) =>
-      runScienceInterpret(id, kind, force ?? false)
+    (_e, id: number, kind: 'digest' | 'deepread', force?: boolean) => runScienceInterpret(id, kind, force ?? false)
   )
+  // zh 原文 md 包装（划词高光载体，幂等）：不存在则由全文缓存生成
+  ipcMain.handle('agent:scienceEnsureSource', (_e, id: number) => ensureSourceMd(id))
   ipcMain.handle('agent:scienceHighlightAdd', (_e, articleId: number, text: string) => {
     addScienceHighlight(articleId, text)
     return true

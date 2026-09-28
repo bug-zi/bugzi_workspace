@@ -1,14 +1,12 @@
 import { logInfo, logWarn } from '../logger'
-// 正式文献服务（超级工作台 2.0 批次B spec §2）：发现箱终选转正、全文抓取
-// （arXiv PDF → pdfjs legacy 抽文本 / 网页 → readability 抽正文）、手动传 PDF 兜底。
-// 抓取失败降级 meta_only，主管道不炸（总纲 §5.1 兜底）。
+// 正式文献服务（260929 抓取三页签阅读改造）：发现箱终选转正（转正入队 paper_fetch 幂等管道：
+// 抓全文 → en 译文 → ready → embed）、全文抓取（管线在 docText：PDF 直链/网页自适应）、
+// 手动传 PDF 兜底。抓取失败降级 meta_only，主管道不炸。
 import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Readability } from '@mozilla/readability'
-import { parseHTML } from 'linkedom'
 import { getDb, nowIso, userDataDir } from '../../db/db'
+import { extractPdfText, fetchDocText } from './docText'
 import { mdDelete, mdWrite } from '../files'
-import { politeFetch, politeFetchBinary } from './guardrails'
 import { enqueue } from './queue'
 import { scienceAcceptRow } from './science'
 import type { DiscoverItemRow, InterpretationRow, PaperRow } from '../../../src/shared/types'
@@ -111,8 +109,8 @@ export function acceptDiscover(id: number): { paperId: number } | { scienceId: n
     )
   d.prepare("UPDATE discover_items SET status = 'accepted' WHERE id = ?").run(id)
   const paperId = Number(r.lastInsertRowid)
-  // 转正即自动管道：抓全文 → 导读卡 → embed_index（make_digest runner 内串）
-  enqueue('make_digest', { refId: paperId, trigger: 'auto' })
+  // 转正即自动管道：抓全文 → en 译文 → ready → embed_index（paper_fetch runner 内串，260929 三页签改造）
+  enqueue('paper_fetch', { refId: paperId, trigger: 'auto' })
   return { paperId }
 }
 
@@ -123,10 +121,10 @@ export function listPapers(): PaperRow[] {
   const d = getDb()
   for (const r of rows) {
     const id = Number(r.id)
-    if (r.status === 'ready' && !existsSync(txtPath(id))) {
+    if (r.status === 'ready' && !existsSync(mdPath(id)) && !existsSync(txtPath(id))) {
       d.prepare("UPDATE papers SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), id)
       r.status = 'meta_only'
-      enqueue('make_digest', { refId: id, trigger: 'auto' })
+      enqueue('paper_fetch', { refId: id, trigger: 'auto' })
       logWarn('agent', `[agent:papers] #${id}《${String(r.title)}》就绪但缓存缺失，已自动重抓`)
     }
   }
@@ -179,7 +177,7 @@ export function deletePaper(id: number): void {
   d.prepare('DELETE FROM papers WHERE id = ?').run(id)
   // 文件清理放库后（库删成功为主，文件失败仅留痕）
   for (const it of interps) mdDelete(it.md_path)
-  for (const suffix of ['.txt', '.pdf']) {
+  for (const suffix of ['.md', '.txt', '.pdf']) {
     try {
       unlinkSync(join(userDataDir(), 'papers', `${id}${suffix}`))
     } catch {
@@ -189,9 +187,13 @@ export function deletePaper(id: number): void {
   logInfo('agent', `[agent:papers] 文献 #${id}《${paper.title}》已彻底删除（含 ${interps.length} 份解读产物）`)
 }
 
-/** 全文缓存绝对路径 */
+/** 全文缓存绝对路径（HTML 抓取=保排版 Markdown .md；PDF 抽取/存量=纯文本 .txt，渲染层按行切段） */
 function txtPath(paperId: number): string {
   return join(userDataDir(), 'papers', `${paperId}.txt`)
+}
+
+function mdPath(paperId: number): string {
+  return join(userDataDir(), 'papers', `${paperId}.md`)
 }
 
 function pdfPath(paperId: number): string {
@@ -199,9 +201,19 @@ function pdfPath(paperId: number): string {
 }
 
 export function readFulltext(paperId: number): string | null {
-  const p = txtPath(paperId)
-  if (!existsSync(p)) return null
-  return readFileSync(p, 'utf-8')
+  for (const p of [mdPath(paperId), txtPath(paperId)]) {
+    if (existsSync(p)) return readFileSync(p, 'utf-8')
+  }
+  return null
+}
+
+/** 原文渲染源（IPC agent:paperFulltext）：isMd=true 直接按 Markdown 渲染；false 纯文本按行切段 */
+export function readPaperSource(paperId: number): { raw: string | null; isMd: boolean } {
+  const mdP = mdPath(paperId)
+  if (existsSync(mdP)) return { raw: readFileSync(mdP, 'utf-8'), isMd: true }
+  const txtP = txtPath(paperId)
+  if (existsSync(txtP)) return { raw: readFileSync(txtP, 'utf-8'), isMd: false }
+  return { raw: null, isMd: false }
 }
 
 /** arXiv 链接 → 规范 id（arxiv.org/abs/2101.00001 / /pdf/2101.00001v2 → 2101.00001） */
@@ -211,64 +223,43 @@ function arxivIdOf(url: string): string | null {
   return m[1].replace(/\.pdf$/, '').replace(/v\d+$/, '')
 }
 
-/** pdfjs legacy 构建（Node fake worker）逐页抽文本（书籍解读批次E 复用） */
-export async function extractPdfText(pdfAbsPath: string): Promise<string> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const data = new Uint8Array(readFileSync(pdfAbsPath))
-  const loadingTask = pdfjs.getDocument({ data, useSystemFonts: false })
-  const doc = await loadingTask.promise
-  const pages: string[] = []
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i)
-    const tc = await page.getTextContent()
-    pages.push(
-      tc.items
-        .map((it) => ('str' in it ? (it as { str: string }).str : ''))
-        .join(' ')
-    )
-    page.cleanup()
-  }
-  await loadingTask.destroy()
-  return pages.join('\n\n').replace(/[ \t]+/g, ' ').trim()
-}
-
-/** 抓全文：成功置 ready 并落 papers/{id}.txt；任一步失败置 meta_only（不抛错） */
+/** 抓全文缓存（不置 ready——ready 由 paper_fetch 管道在译文就绪后统一置）；
+ *  HTML 落保排版 .md、PDF 落纯文本 .txt；缓存已可用（.md 存在，或 ≥200 字符）直接返回——
+ *  仅存量 .txt 亦重抓升级 .md（排版保留，260929），任一步失败置 meta_only（不抛错） */
 export async function ensureFulltext(paper: PaperRow): Promise<void> {
-  if (paper.status === 'ready' && existsSync(txtPath(paper.id))) return
+  const cached = readFulltext(paper.id)
+  if (cached && cached.length >= 200 && existsSync(mdPath(paper.id))) return
   const d = getDb()
   const fail = (reason: string): void => {
     d.prepare("UPDATE papers SET status = 'meta_only', updated_at = ? WHERE id = ?").run(nowIso(), paper.id)
     logWarn('agent', `[agent:papers] 《${paper.title}》全文抓取失败（meta_only）：${reason}`)
   }
   try {
-    let text = ''
     const aid = arxivIdOf(paper.url)
-    if (aid) {
-      const buf = await politeFetchBinary(`https://arxiv.org/pdf/${aid}`)
-      writeFileSync(pdfPath(paper.id), buf)
-      text = await extractPdfText(pdfPath(paper.id))
-    } else {
-      const { text: html } = await politeFetch(paper.url)
-      const { document } = parseHTML(html)
-      const parsed = new Readability(document).parse()
-      const plain = (parsed?.textContent ?? '').replace(/\s+\n/g, '\n').trim()
-      if (plain.length < 200) throw new Error('正文过短')
-      text = plain
+    const doc = await fetchDocText(aid ? `https://arxiv.org/pdf/${aid}` : paper.url, {
+      pdfSink: pdfPath(paper.id),
+      asPdf: Boolean(aid)
+    })
+    if (doc.text.length < 200) {
+      throw new Error(doc.kind === 'pdf' ? '抽取文本过短（扫描版 PDF 无文本层？）' : '正文过短')
     }
-    if (text.length < 200) throw new Error('抽取文本过短')
-    writeFileSync(txtPath(paper.id), text, 'utf-8')
-    d.prepare("UPDATE papers SET status = 'ready', fulltext_path = ?, updated_at = ? WHERE id = ?").run(
-      `papers/${paper.id}.txt`,
+    const isMd = doc.kind === 'html' && !!doc.md
+    writeFileSync(isMd ? mdPath(paper.id) : txtPath(paper.id), isMd ? doc.md! : doc.text, 'utf-8')
+    d.prepare('UPDATE papers SET fulltext_path = ?, updated_at = ? WHERE id = ?').run(
+      `papers/${paper.id}${isMd ? '.md' : '.txt'}`,
       nowIso(),
       paper.id
     )
-    logInfo('agent', `[agent:papers] 《${paper.title}》全文就绪（${Math.round(text.length / 1000)}k 字符）`)
+    logInfo(
+      'agent',
+      `[agent:papers] 《${paper.title}》全文缓存就绪（${isMd ? 'Markdown 保排版' : '纯文本'}，${Math.round(doc.text.length / 1000)}k 字符）`
+    )
   } catch (e) {
     fail((e as Error).message)
   }
 }
 
-/** 手动传 PDF 兜底：复制入 papers/{id}.pdf → 抽取 → 成功置 ready */
+/** 手动传 PDF 兜底：复制入 papers/{id}.pdf → 抽取缓存（不置 ready）；IPC 成功后入队 paper_fetch 补译/就绪 */
 export async function importManualPdf(paperId: number, srcAbsPath: string): Promise<boolean> {
   const paper = getPaper(paperId)
   if (!paper) throw new Error('NOT_FOUND')
@@ -278,9 +269,9 @@ export async function importManualPdf(paperId: number, srcAbsPath: string): Prom
     if (text.length < 200) throw new Error('抽取文本过短（扫描版 PDF 无文本层？）')
     writeFileSync(txtPath(paperId), text, 'utf-8')
     getDb()
-      .prepare("UPDATE papers SET status = 'ready', fulltext_path = ?, updated_at = ? WHERE id = ?")
+      .prepare('UPDATE papers SET fulltext_path = ?, updated_at = ? WHERE id = ?')
       .run(`papers/${paperId}.txt`, nowIso(), paperId)
-    logInfo('agent', `[agent:papers] 《${paper.title}》手动 PDF 导入成功`)
+    logInfo('agent', `[agent:papers] 《${paper.title}》手动 PDF 导入成功（ready 由 paper_fetch 管道置）`)
     return true
   } catch (e) {
     logWarn('agent', `[agent:papers] 手动 PDF 抽取失败：${(e as Error).message}`)
@@ -288,14 +279,11 @@ export async function importManualPdf(paperId: number, srcAbsPath: string): Prom
   }
 }
 
-/** 重试抓取（260928 三态化，与科普 retryScienceFetch 同口径）：成功后照常入链导读卡管道 */
-export async function retryPaperFetch(paperId: number): Promise<void> {
-  const paper = getPaper(paperId)
-  if (!paper) throw new Error('NOT_FOUND')
-  await ensureFulltext(paper)
-  if (getPaper(paperId)?.status === 'ready') {
-    enqueue('make_digest', { refId: paperId, trigger: 'auto' })
-  }
+/** 重试抓取（260929 三页签改造）：幂等入队 paper_fetch（抓缺 → 译缺 → 建链/就绪），
+ *  行内重试与导入 PDF 补译共用同一入口 */
+export function retryPaperFetch(paperId: number): void {
+  if (!getPaper(paperId)) throw new Error('NOT_FOUND')
+  enqueue('paper_fetch', { refId: paperId, trigger: 'manual' })
 }
 
 // ---------- 导读卡产物登记工具（interpret.ts 共用） ----------

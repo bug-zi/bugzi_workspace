@@ -37,6 +37,19 @@ import { noiseEngine } from './services/noiseEngine'
 import { musicEngine } from './services/musicEngine'
 import { activeAudioKind } from './services/audioExclusive'
 import { sceneById } from './services/noiseScenes'
+import {
+  DEFAULT_BINDINGS,
+  KEYBINDINGS_CHANGED_EVENT,
+  SHORTCUT_ACTIONS,
+  eventMatchesShortcut,
+  isCapturing,
+  isEditableTarget,
+  isTerminalTarget,
+  loadOverrides,
+  resolveBindings,
+  useShortcutLabel,
+  type ShortcutActionId
+} from './services/keybindings'
 import { useToast } from './components/Toast'
 import { SettingsKeys, TURTLE_GAME_EVENT } from './shared/types'
 import type { AiChannel, ModuleId, ModuleMode } from './shared/types'
@@ -114,6 +127,9 @@ export const MODULE_NAVIGATE_EVENT = 'bugzi:module-navigate'
 function Shell() {
   const { theme, toggleTheme, firstLaunch, setFirstLaunchDone, settings } = useAppSettings()
   const { toast } = useToast()
+  // 终端快捷键组合（个人档「快捷键」栏重设后动态更新，供按钮 title 引用）
+  const terminalToggleAcc = useShortcutLabel('terminal.toggle')
+  const modeAcc = useShortcutLabel('mode.toggle')
   const [module, setModule] = useState<MainView>('zonglan')
   // 当前模块 ref（失活事件需捕获旧模块 id；ref 方案防 strict-mode 双触发）
   const moduleRef = useRef<MainView>('zonglan')
@@ -127,27 +143,11 @@ function Shell() {
   const [aiForceOpen, setAiForceOpen] = useState(false)
   // 海龟汤对局上下文（TurtlePanel 进出对局派发；草稿本据此切频道 + 新建以汤名命名，App 持有保证面板收起时不丢）
   const [turtleGame, setTurtleGame] = useState<{ title: string } | null>(null)
-  // 内置终端（260912）：open 默认收起（pty 不跨重启）；Ctrl+J 呼出/收起、Ctrl+Shift+J 新建标签
+  // 内置终端（260912）：open 默认收起（pty 不跨重启）；呼出/新建标签走个人档「快捷键」注册表分发
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalNewTabSignal, setTerminalNewTabSignal] = useState(0)
   // 学习/生活双模式（优化建议区 260922）：当前模式；启动经下方 effect 恢复（主栏仍固定落总导览）
   const [appMode, setAppMode] = useState<ModuleMode>('learn')
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      const k = e.key.toLowerCase()
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'j') {
-        e.preventDefault()
-        setTerminalOpen((o) => !o)
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && k === 'j') {
-        e.preventDefault()
-        setTerminalOpen(true)
-        setTerminalNewTabSignal((v) => v + 1)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
 
   useEffect(() => {
     const onTurtleGame = (e: Event): void => {
@@ -158,7 +158,7 @@ function Shell() {
     return () => window.removeEventListener(TURTLE_GAME_EVENT, onTurtleGame)
   }, [])
 
-  // 主进程轻提示（notify:toast，260928）：定时格言生成完成/失败；完成条点击直达文笔坊·格言库
+  // 主进程轻提示（notify:toast，260928）：启动格言生成完成/失败；完成条点击直达文笔坊·格言库
   useEffect(() => {
     return window.api.notify.onToast(({ text }) => {
       toast(text, {
@@ -354,6 +354,65 @@ function Shell() {
   const activeKind = noisePlaying ? 'noise' : musicPlaying ? 'music' : activeAudioKind()
   const anyPlaying = noisePlaying || musicPlaying
 
+  // 播放/暂停当前活跃音源（右栏快捷钮与快捷键 Ctrl+Q 共用，260929 抽取）
+  const activeKindRef = useRef<'noise' | 'music'>(activeKind)
+  activeKindRef.current = activeKind
+  const toggleActiveAudio = useCallback((): void => {
+    if (activeKindRef.current === 'music') void musicEngine.toggle()
+    else void noiseEngine.toggle().catch(() => toast('音频初始化失败'))
+  }, [toast])
+
+  // 右栏面板当前值 ref：快捷键 effect 只挂载一次，toggle 日志库需读最新展开态
+  const rightPanelRef = useRef(rightPanel)
+  rightPanelRef.current = rightPanel
+  // 同上：模式切换快捷键需读最新模式
+  const appModeRef = useRef(appMode)
+  appModeRef.current = appMode
+
+  // 应用内快捷键（260929 新功能开发区）：注册表分发五动作，组合可在个人档「快捷键」栏重设
+  // （settings keybindings 覆盖 + bugzi:keybindings-changed 重载）。抑制规则：可编辑元素内不触发
+  // （保留全选等原生行为）；终端面板内仅终端两条触发（面板级控制），其余交还 shell
+  useEffect(() => {
+    let bindings: Record<ShortcutActionId, string> = { ...DEFAULT_BINDINGS }
+    const reload = (): void => {
+      void loadOverrides().then((ov) => {
+        bindings = resolveBindings(ov)
+      })
+    }
+    reload()
+    window.addEventListener(KEYBINDINGS_CHANGED_EVENT, reload)
+    const onKey = (e: KeyboardEvent): void => {
+      if (isCapturing()) return
+      if (isEditableTarget(e.target)) return
+      const inTerminal = isTerminalTarget(e.target)
+      for (const meta of SHORTCUT_ACTIONS) {
+        if (inTerminal && !meta.firesInTerminal) continue
+        if (!eventMatchesShortcut(e, bindings[meta.id])) continue
+        e.preventDefault()
+        if (meta.id === 'terminal.toggle') setTerminalOpen((o) => !o)
+        else if (meta.id === 'terminal.newTab') {
+          setTerminalOpen(true)
+          setTerminalNewTabSignal((v) => v + 1)
+        } else if (meta.id === 'logs.toggle') {
+          switchRightPanel(rightPanelRef.current === 'logs' ? null : 'logs')
+        } else if (meta.id === 'theme.toggle') {
+          toggleTheme()
+        } else if (meta.id === 'mode.toggle') {
+          switchMode(appModeRef.current === 'learn' ? 'life' : 'learn')
+        } else if (meta.id === 'audio.toggle') {
+          toggleActiveAudio()
+        }
+        return
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener(KEYBINDINGS_CHANGED_EVENT, reload)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 左栏列表项（三段公用）：占位项置灰仅提示待建；下固定段在回收站位前注入音乐吧
   const renderNavItem = (m: (typeof MODULES)[number]) => {
     if (m.pending) {
@@ -507,7 +566,7 @@ function Shell() {
             <button
               className="right-col-terminal"
               onClick={() => setTerminalOpen((o) => !o)}
-              title={terminalOpen ? '收起终端 (Ctrl+J)' : '打开终端 (Ctrl+J)'}
+              title={terminalOpen ? `收起终端 (${terminalToggleAcc})` : `打开终端 (${terminalToggleAcc})`}
             >
               <span className="material-symbols-outlined">terminal</span>
             </button>
@@ -516,10 +575,7 @@ function Shell() {
           {rightPanel === null && (
             <button
               className="right-col-noise"
-              onClick={() => {
-                if (activeKind === 'music') void musicEngine.toggle()
-                else void noiseEngine.toggle().catch(() => toast('音频初始化失败'))
-              }}
+              onClick={toggleActiveAudio}
               title={
                 activeKind === 'music'
                   ? `轻音乐 · ${musicPlaying ? '播放中，点击暂停' : '已暂停，点击播放'}`
@@ -546,7 +602,11 @@ function Shell() {
             <button
               className="right-col-mode"
               onClick={() => switchMode(appMode === 'learn' ? 'life' : 'learn')}
-              title={appMode === 'learn' ? '切换到生活模式' : '切换到学习模式'}
+              title={
+                appMode === 'learn'
+                  ? `切换到生活模式 (${modeAcc})`
+                  : `切换到学习模式 (${modeAcc})`
+              }
             >
               <span className="material-symbols-outlined">{appMode === 'learn' ? 'home' : 'school'}</span>
             </button>

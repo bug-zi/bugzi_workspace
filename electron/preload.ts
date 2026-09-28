@@ -1090,7 +1090,7 @@ const api = {
     }
   },
   notify: {
-    /** 主进程轻提示（定时格言生成完成/失败等后台事件） */
+    /** 主进程轻提示（启动格言生成完成/失败等后台事件） */
     onToast: (cb: (payload: { text: string }) => void): (() => void) => {
       const listener = (_e: unknown, payload: { text: string }): void => {
         cb(payload)
@@ -1256,16 +1256,17 @@ const api = {
     /** 在队/在跑任务快照（列表「抓取中」徽章派生用；含排队未派发项） */
     activeTasks: (): Promise<{ type: string; refId: number | null }[]> =>
       ipcRenderer.invoke('agent:activeTasks'),
-    /** 重试抓取全文（meta_only 时可调）；成功后照常入链导读卡管道 */
+    /** 重试抓取（meta_only 时可调）：幂等入队 paper_fetch（抓缺 → 译缺 → 就绪） */
     paperRetryFetch: (id: number): Promise<void> => ipcRenderer.invoke('agent:paperRetryFetch', id),
     /** 手动海选：返回 runId（进展见任务中心） */
     runCollect: (domainId: number): Promise<number> => ipcRenderer.invoke('agent:runCollect', domainId),
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
-    runInterpret: (paperId: number, kind: 'digest' | 'lecture' | 'translate', force?: boolean): Promise<number> =>
+    runInterpret: (paperId: number, kind: 'digest' | 'deepread', force?: boolean): Promise<number> =>
       ipcRenderer.invoke('agent:runInterpret', paperId, kind, force),
     importPaperPdf: (paperId: number): Promise<boolean> => ipcRenderer.invoke('agent:importPaperPdf', paperId),
-    /** 原文全文缓存（papers/{id}.txt；meta_only 或文件缺失返回 null） */
-    paperFulltext: (id: number): Promise<string | null> => ipcRenderer.invoke('agent:paperFulltext', id),
+    /** 原文渲染源（HTML 抓取=保排版 Markdown isMd=true；PDF/存量=纯文本按行切段） */
+    paperFulltext: (id: number): Promise<{ raw: string | null; isMd: boolean }> =>
+      ipcRenderer.invoke('agent:paperFulltext', id),
     pendingCounts: (): Promise<{ discovered: number }> => ipcRenderer.invoke('agent:pendingCounts'),
     paperDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:paperDelete', id),
     discoverDelete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:discoverDelete', id),
@@ -1298,12 +1299,15 @@ const api = {
     }> => ipcRenderer.invoke('agent:scienceDetail', id),
     delete: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceDelete', id),
     retryFetch: (id: number): Promise<boolean> => ipcRenderer.invoke('agent:scienceRetryFetch', id),
-    /** 原文全文缓存（science/{id}.txt；meta_only 或文件缺失返回 null） */
-    fulltext: (id: number): Promise<string | null> => ipcRenderer.invoke('agent:scienceFulltext', id),
+    /** 原文渲染源（HTML 抓取=保排版 Markdown isMd=true；PDF/存量=纯文本按行切段） */
+    fulltext: (id: number): Promise<{ raw: string | null; isMd: boolean }> =>
+      ipcRenderer.invoke('agent:scienceFulltext', id),
+    /** zh 原文 md 包装（划词高光载体，幂等）：返回 md 相对路径 */
+    ensureSource: (id: number): Promise<string> => ipcRenderer.invoke('agent:scienceEnsureSource', id),
     /** kind 已有 done 产物且未 force 时抛 INTERPRET_EXISTS（渲染层转确认弹窗） */
     interpret: (
       id: number,
-      kind: 'translate' | 'light' | 'lecture',
+      kind: 'digest' | 'deepread',
       force?: boolean
     ): Promise<number> => ipcRenderer.invoke('agent:scienceInterpret', id, kind, force),
     highlightAdd: (articleId: number, text: string): Promise<boolean> =>

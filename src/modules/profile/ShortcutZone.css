@@ -1,0 +1,39 @@
+/* 快捷键配置（260929）：kbd 徽章与录入态，主题色系低饱和 */
+.shortcut-row {
+  align-items: center;
+}
+
+.shortcut-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-kbd {
+  min-width: 112px;
+  text-align: center;
+  padding: 3px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.shortcut-capture {
+  min-width: 112px;
+  padding: 3px 12px;
+  border: 1px dashed var(--color-primary);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  color: var(--color-primary-deep);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.shortcut-note {
+  padding-top: 8px;
+  line-height: 1.7;
+}
