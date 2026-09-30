@@ -24,6 +24,7 @@ export type ModuleId =
   | 'fushi'
   | 'duiyi'
   | 'yule'
+  | 'office'
 
 // 模块深链导航事件 detail（260912 总导览）：App.tsx MODULE_NAVIGATE_EVENT 的载荷，
 // 目标模块经 useModuleNavigate 监听后按 target 切内部视图
@@ -1775,4 +1776,49 @@ export interface LogListQuery {
   keyword?: string
   beforeId?: number
   limit?: number
+}
+
+// ===== 办公台（260930；DB v66 office_documents/office_versions）=====
+
+export type OfficeKind = 'docx' | 'xlsx' | 'pptx' | 'txt' | 'csv' | 'md'
+
+/** office_documents 行（deleted_at IS NULL 口径由服务层保证） */
+export interface OfficeDocRow {
+  id: number
+  name: string
+  kind: OfficeKind
+  source_name: string | null
+  size: number
+  created_at: string
+  updated_at: string
+}
+
+/** office_versions 行（不含 snapshot 大字段；恢复时按 id 取） */
+export interface OfficeVersionRow {
+  id: number
+  note: string | null
+  created_at: string
+}
+
+/** 工作簿网格（xlsx/csv 统一口径；rows 为字符串二维表） */
+export interface OfficeSheet {
+  name: string
+  rows: string[][]
+}
+
+/** office:open 载荷：文本类回 content、表格类回 sheets（另一侧为 null） */
+export interface OfficeOpenPayload {
+  row: OfficeDocRow
+  content: string | null
+  sheets: OfficeSheet[] | null
+}
+
+/** office:aiWrite 入参（无副作用生成：文档手术与落盘在渲染层/office:save） */
+export interface OfficeAiWriteInput {
+  instruction: string
+  action: 'rewrite' | 'append' | 'selection'
+  current: string
+  selection?: string
+  sheetName?: string
+  sheetBook?: OfficeSheet[]
 }

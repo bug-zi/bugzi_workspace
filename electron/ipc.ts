@@ -5,6 +5,21 @@ import { getSetting, setSetting, getAllSettings } from './db/settings'
 import { mdRead, mdWrite, mdDelete, mdCreate } from './services/files'
 import { readExplorerDir, readExplorerText, readExplorerImage } from './services/explorer'
 import { discardToRecycle, restoreFromRecycle, hardDelete, listRecycle } from './services/recycle'
+import {
+  listDocs,
+  importOne,
+  createDoc,
+  renameDoc,
+  openDoc,
+  saveDoc,
+  exportDoc,
+  discardDoc,
+  versionsOf,
+  restoreVersion,
+  getDoc
+} from './services/office'
+import { runOfficeWrite } from './ai/services'
+import type { OfficeAiWriteInput, OfficeDocRow, OfficeKind, OfficeSheet } from '../src/shared/types'
 import { ensureReasoningStock, freshSoupCount } from './services/reasoningStock'
 import { ensureWikiStock, drawPoolCard } from './services/wikiStock'
 import {
@@ -271,7 +286,7 @@ import { ensureCopyStock } from './services/copyStock'
 import { refreshTrayMenu } from './services/tray'
 import type { AiChannel, LlmConfig, McpConfig, LearnDailyRow, LearnQuizQuestion, LearnQuizAnswer, LearnQuizView, LearnTaskRow, ZhijijiQuestionCandidate, MusicImportSummary, TriggerImportSummary, CustomFontInfo, CopyProgress, PodcastEpisodeView } from '../src/shared/types'
 import { copyFileSync, unlinkSync, writeFileSync, readdirSync, mkdirSync, renameSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { userDataDir, yyMMdd } from './db/db'
 import { currentDataDir, migrateDataDir } from './services/storage'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './services/terminal'
@@ -4213,6 +4228,52 @@ export function registerIpc(): void {
   ipcMain.handle('fushi:gameDelete', (_e, id: number) => {
     discardToRecycle('fushi_game', id)
     return true
+  })
+  // ===== 办公台（260930 specs §6）=====
+  ipcMain.handle('office:list', () => listDocs())
+  ipcMain.handle('office:import', async () => {
+    const r = await dialog.showOpenDialog(win()!, {
+      title: '导入文档',
+      filters: [{ name: '文档', extensions: ['docx', 'xlsx', 'pptx', 'txt', 'csv', 'md', 'markdown'] }],
+      properties: ['openFile', 'multiSelections']
+    })
+    if (r.canceled || r.filePaths.length === 0) return { imported: [], failed: [] }
+    const imported: OfficeDocRow[] = []
+    const failed: { name: string; reason: string }[] = []
+    for (const p of r.filePaths) {
+      try {
+        imported.push(await importOne(p))
+      } catch (e) {
+        failed.push({ name: basename(p), reason: (e as Error).message })
+      }
+    }
+    return { imported, failed }
+  })
+  ipcMain.handle('office:create', (_e, name: string, kind: OfficeKind) => createDoc(name, kind))
+  ipcMain.handle('office:rename', (_e, id: number, name: string) => renameDoc(id, name))
+  ipcMain.handle('office:open', (_e, id: number) => openDoc(id))
+  ipcMain.handle('office:save', (_e, id: number, payload: { content?: string; sheets?: OfficeSheet[] }) =>
+    saveDoc(id, payload)
+  )
+  ipcMain.handle('office:export', async (_e, id: number) => {
+    const row = getDoc(id)
+    const r = await dialog.showSaveDialog(win()!, {
+      title: '导出到电脑',
+      defaultPath: `${row.name}.${row.kind}`
+    })
+    if (r.canceled || !r.filePath) return { ok: false }
+    await exportDoc(id, r.filePath)
+    return { ok: true }
+  })
+  ipcMain.handle('office:discard', (_e, id: number) => {
+    discardDoc(id)
+    return true
+  })
+  ipcMain.handle('office:versions', (_e, id: number) => versionsOf(id))
+  ipcMain.handle('office:restoreVersion', (_e, versionId: number) => restoreVersion(versionId))
+  ipcMain.handle('office:aiWrite', (_e, id: number, input: OfficeAiWriteInput) => {
+    const row = getDoc(id)
+    return runOfficeWrite({ docId: id, kind: row.kind, ...input })
   })
   ipcMain.handle('fushi:poems', (_e, genre?: FushiGenre) => {
     const rows = (

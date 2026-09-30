@@ -1708,6 +1708,31 @@ function migrate(): void {
       throw e
     }
   }
+
+  if (version < 66) {
+    // v66：办公台（2026-09-30-办公台-design.md §四）——文档行 + AI 写入前快照两表。
+    // 真相源文件在 userData/office/<id>/（content.md/book.xlsx 等），不入 DB；删除走回收站 office 源。
+    d.exec(`CREATE TABLE office_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('docx','xlsx','pptx','txt','csv','md')),
+      source_name TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      deleted_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`)
+    d.exec(`CREATE TABLE office_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL REFERENCES office_documents(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('doc','sheet')),
+      snapshot TEXT NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL
+    )`)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_office_versions_doc ON office_versions(doc_id)')
+    d.exec('PRAGMA user_version = 66')
+  }
 }
 
 // ---------- 通用工具 ----------

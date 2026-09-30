@@ -33,9 +33,11 @@ export function registerBzresProtocol(): void {
         ? 'bg/' + pathPart
         : host === 'fonts'
           ? 'fonts/' + pathPart
-          : host === 'root' || host === 'localhost' || host === ''
-            ? pathPart
-            : ''
+          : host === 'office'
+            ? 'office/' + pathPart
+            : host === 'root' || host === 'localhost' || host === ''
+              ? pathPart
+              : ''
     const parts = decodeURIComponent(raw)
       .replace(/\\/g, '/')
       .split('/')

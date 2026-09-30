@@ -700,6 +700,7 @@ export interface RecycleRow {
     | 'yule_poker'
     | 'fuben'
     | 'duiyi'
+    | 'office'
   item_id: number
   payload: string
   created_at: string
@@ -2167,6 +2168,20 @@ export interface Api {
     onDiyProgress(cb: (p: import('../shared/types').CopyDiyProgress) => void): () => void
     /** 补库泵每补完一条推送：每日候选渐进刷新 */
     onStockChanged(cb: () => void): () => void
+  }
+  /** 办公台（260930 specs §6/§9；类型见 shared/types Office*） */
+  office: {
+    list(): Promise<import('../shared/types').OfficeDocRow[]>
+    importDocs(): Promise<{ imported: import('../shared/types').OfficeDocRow[]; failed: { name: string; reason: string }[] }>
+    create(name: string, kind: import('../shared/types').OfficeKind): Promise<import('../shared/types').OfficeDocRow>
+    rename(id: number, name: string): Promise<boolean>
+    open(id: number): Promise<import('../shared/types').OfficeOpenPayload>
+    save(id: number, payload: { content?: string; sheets?: import('../shared/types').OfficeSheet[] }): Promise<boolean>
+    exportDoc(id: number): Promise<{ ok: boolean }>
+    discard(id: number): Promise<boolean>
+    versions(id: number): Promise<import('../shared/types').OfficeVersionRow[]>
+    restoreVersion(versionId: number): Promise<boolean>
+    aiWrite(id: number, input: import('../shared/types').OfficeAiWriteInput): Promise<{ text: string }>
   }
 }
 

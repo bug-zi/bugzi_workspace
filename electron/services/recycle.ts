@@ -1,5 +1,7 @@
 // 回收站服务：入站/恢复/彻底删除/3天自动清理（回收站 specs §1/§3/§4）
-import { getDb, nowIso, recordMottoTombstone } from '../db/db'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { getDb, nowIso, recordMottoTombstone, userDataDir } from '../db/db'
 import { mdDelete } from './files'
 
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000
@@ -32,6 +34,7 @@ export type RecycleSource =
   | 'yule_poker'
   | 'fuben'
   | 'duiyi'
+  | 'office'
 
 const TABLES: Record<RecycleSource, string> = {
   mottos: 'mottos',
@@ -60,7 +63,8 @@ const TABLES: Record<RecycleSource, string> = {
   yule_taro: 'taro_records',
   yule_poker: 'poker_games',
   fuben: 'copies',
-  duiyi: 'duiyi_games'
+  duiyi: 'duiyi_games',
+  office: 'office_documents'
 }
 
 // 各来源的附属 md 路径字段（mottos 仅正式区有笔记；zhijiji 为多 md、reasoning_game 为
@@ -93,7 +97,8 @@ const MD_FIELDS: Record<RecycleSource, string | null> = {
   twelve_question: null, // 想法为 DB 行，hardDelete 特判清理
   yule_taro: 'md_path',
   yule_poker: 'review_md_path', // 手牌流水在行内 JSON，不随删（specs §6）
-  duiyi: null // 棋谱在行内 JSON，无 md 附属
+  duiyi: null, // 棋谱在行内 JSON，无 md 附属
+  office: null // 真相源在 userData/office/<id>/ 整目录，hardDelete 特判清理
 }
 
 export interface RecycleRow {
@@ -153,6 +158,10 @@ export function restoreFromRecycle(recycleId: number): { source: RecycleSource; 
     case 'qa':
       // 回问答历史列表：仅清标记
       d.prepare('UPDATE qa_records SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
+      break
+    case 'office':
+      // 回办公台列表：仅清标记（userData/office/<id>/ 目录原样保留）
+      d.prepare('UPDATE office_documents SET deleted_at = NULL WHERE id = ?').run(rb.item_id)
       break
     case 'ai_session':
       // 回 AI 边栏原频道会话列表：仅清标记（激活指向失效由渲染层 load 兜底）
@@ -312,6 +321,18 @@ export function hardDelete(recycleId: number): void {
   if (rb.source === 'interview_q') {
     // 面试题：答案 md 派生为 md/learn/interview/<id>.md（无表列），连同软删行一并清理
     mdDelete(`md/learn/interview/${rb.item_id}.md`)
+  }
+  if (rb.source === 'office') {
+    // 办公文档彻底删：连版本快照 + userData/office/<id>/ 整目录（真相源/原件/图片）
+    d.prepare('DELETE FROM office_versions WHERE doc_id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM office_documents WHERE id = ?').run(rb.item_id)
+    d.prepare('DELETE FROM recycle_bin WHERE id = ?').run(recycleId)
+    try {
+      rmSync(join(userDataDir(), 'office', String(rb.item_id)), { recursive: true, force: true })
+    } catch {
+      /* 目录已不存在忽略 */
+    }
+    return
   }
   if (rb.source === 'ai_session') {
     // 归档会话彻底删除：连全部消息一并删（无 md 附属）

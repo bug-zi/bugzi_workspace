@@ -29,6 +29,7 @@ const TABS: { key: string; label: string }[] = [
   { key: 'ledger', label: '记账本' },
   { key: 'fushi', label: '赋诗苑' },
   { key: 'duiyi', label: '对弈社' },
+  { key: 'office', label: '办公台' },
   { key: 'ai', label: 'AI 会话' }
 ]
 
@@ -60,6 +61,7 @@ const GROUP_MODE: Record<string, 'learn' | 'life' | 'both'> = {
   ledger: 'life',
   fushi: 'life',
   duiyi: 'life',
+  office: 'learn',
   mottos: 'both',
   wenbi: 'both',
   drafts: 'both',
@@ -92,6 +94,8 @@ function backToOf(source: RecycleRow['source']): string {
       return '致知己·预言家列表'
     case 'twelve_question':
       return '致知己·十二问题列表'
+    case 'office':
+      return '办公台列表'
     case 'reasoning_soup':
       return '推理角汤库'
     case 'fuben':

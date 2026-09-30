@@ -5,6 +5,7 @@ import { getSetting, setSetting, getJsonSetting } from '../db/settings'
 import { chatCompletion, LlmNotConfiguredError } from './llm'
 import { ensureNotCancelled } from './jobs'
 import { mdRead, mdWrite, mdCreate } from '../services/files'
+import { snapshotDoc } from '../services/office'
 import { AI_NAME, SettingsKeys, fushiNorm, GENRE_ZH, COPY_CATEGORIES, COPY_MOODS, COPY_ERAS } from '../../src/shared/types'
 import type {
   AiChannel,
@@ -14,7 +15,9 @@ import type {
   FushiGenre,
   FushiResult,
   LearnQuizQuestion,
-  LlmConfig
+  LlmConfig,
+  OfficeKind,
+  OfficeSheet
 } from '../../src/shared/types'
 
 // ---------- AI 边栏（样式 specs §4；多会话：优化建议区「对话记录管理」） ----------
@@ -3383,4 +3386,88 @@ ${input.hands}
   const md = stripFence(res.content)
   if (!md) throw new Error('LLM 未返回内容')
   return md
+}
+
+// ---------- 办公台 AI 写入（办公台 specs §6）：无副作用生成——只回文本 + 写快照，
+// 文档手术与落盘在渲染层 / office:save。scene：office:doc / office:ppt / office:sheet。 ----------
+
+const stripFences = (s: string): string =>
+  s
+    .replace(/^\s*```(?:markdown|md|json)?\s*\n?/, '')
+    .replace(/\n?```\s*$/, '')
+    .trim()
+
+/** 办公台指令条生成（260930）：画像注入照全局惯例（profileDigest 压缩摘要）；
+ *  表格场景输出 JSON 二维数组（解析失败重试一次，仍失败抛「AI 返回格式异常」）；
+ *  快照存写入前状态（doc=md 全文 / sheet=全簿 JSON），恢复走 office:restoreVersion。 */
+export async function runOfficeWrite(input: {
+  docId: number
+  kind: OfficeKind
+  instruction: string
+  action: 'rewrite' | 'append' | 'selection'
+  current: string
+  selection?: string
+  sheetName?: string
+  sheetBook?: OfficeSheet[]
+  signal?: AbortSignal
+}): Promise<{ text: string }> {
+  const isSheet = input.kind === 'xlsx' || input.kind === 'csv'
+  const scene = isSheet ? 'office:sheet' : input.kind === 'pptx' ? 'office:ppt' : 'office:doc'
+  const actionText =
+    input.action === 'append'
+      ? '在文末续写内容，保持与已有正文一致的风格与格式，只输出新增部分。'
+      : input.action === 'selection'
+        ? '只改写用户提供的选中文本，只输出改写后的选区文本，不要扩大范围。'
+        : '按需求改写整篇文档，保持 Markdown 格式，输出完整改写后的全文。'
+  const system = [
+    '你是用户的办公文档写作助手，直接在文档里替用户干活。',
+    '用户画像如下，写作时参考用户背景：',
+    profileDigest(),
+    isSheet
+      ? '输出要求：只输出一个 JSON 二维数组（首行为表头行，后续为数据行），不要 markdown 围栏、不要任何解释文字。'
+      : '输出要求：只输出 Markdown 正文，不要代码围栏包裹、不要任何解释或前后缀。'
+  ].join('\n')
+  const curSheet = input.sheetBook?.find((s) => s.name === input.sheetName) ?? input.sheetBook?.[0]
+  const body = isSheet
+    ? `当前工作表「${curSheet?.name ?? 'Sheet1'}」内容（首行表头）：\n${(curSheet?.rows ?? [])
+        .map((r) => r.join(','))
+        .join('\n')}\n\n需求：${input.instruction}\n\n动作：${actionText}`
+    : `${input.action === 'selection' ? `选中文本：\n${input.selection ?? ''}\n\n` : ''}${
+        input.action === 'selection' ? '' : `当前文档全文：\n${input.current}\n\n`
+      }需求：${input.instruction}\n\n动作：${actionText}`
+  const messages = [
+    { role: 'system' as const, content: system },
+    { role: 'user' as const, content: body }
+  ]
+  const call = async (): Promise<string> =>
+    (await chatCompletion({ scene, signal: input.signal, messages })).content
+  const first = stripFences(await call())
+  if (!isSheet) {
+    snapshotDoc(input.docId, 'doc', input.current, input.instruction)
+    return { text: first }
+  }
+  const parse = (s: string): string[][] => {
+    let v: unknown
+    try {
+      v = JSON.parse(s)
+    } catch {
+      throw new Error('AI 返回格式异常（非 JSON）')
+    }
+    if (!Array.isArray(v) || !Array.isArray(v[0])) throw new Error('AI 返回格式异常（非二维数组）')
+    return v as string[][]
+  }
+  let text = first
+  try {
+    parse(text)
+  } catch {
+    text = stripFences(await call())
+    parse(text)
+  }
+  snapshotDoc(
+    input.docId,
+    'sheet',
+    JSON.stringify(input.sheetBook ?? [{ name: 'Sheet1', rows: [['']] }]),
+    input.instruction
+  )
+  return { text }
 }

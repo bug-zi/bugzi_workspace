@@ -1497,6 +1497,23 @@ const api = {
       ipcRenderer.on('copies:stockChanged', listener)
       return () => ipcRenderer.removeListener('copies:stockChanged', listener)
     }
+  },
+  // ===== 办公台（260930 specs §6/§9）=====
+  office: {
+    list: (): Promise<unknown> => ipcRenderer.invoke('office:list'),
+    importDocs: (): Promise<{ imported: unknown[]; failed: { name: string; reason: string }[] }> =>
+      ipcRenderer.invoke('office:import'),
+    create: (name: string, kind: string): Promise<unknown> => ipcRenderer.invoke('office:create', name, kind),
+    rename: (id: number, name: string): Promise<boolean> => ipcRenderer.invoke('office:rename', id, name),
+    open: (id: number): Promise<unknown> => ipcRenderer.invoke('office:open', id),
+    save: (id: number, payload: { content?: string; sheets?: unknown }): Promise<boolean> =>
+      ipcRenderer.invoke('office:save', id, payload),
+    exportDoc: (id: number): Promise<{ ok: boolean }> => ipcRenderer.invoke('office:export', id),
+    discard: (id: number): Promise<boolean> => ipcRenderer.invoke('office:discard', id),
+    versions: (id: number): Promise<unknown> => ipcRenderer.invoke('office:versions', id),
+    restoreVersion: (versionId: number): Promise<boolean> => ipcRenderer.invoke('office:restoreVersion', versionId),
+    aiWrite: (id: number, input: unknown): Promise<{ text: string }> =>
+      ipcRenderer.invoke('office:aiWrite', id, input)
   }
 }
 

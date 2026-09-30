@@ -17,6 +17,7 @@ import ReasoningModule from './modules/reasoning/ReasoningModule'
 import WenbiModule from './modules/wenbi/WenbiModule'
 import ZangyueModule from './modules/zangyue/ZangyueModule'
 import FavoritesModule from './modules/favorites/FavoritesModule'
+import OfficeModule from './modules/office/OfficeModule'
 import FeedModule from './modules/feed/FeedModule'
 import LiteratureModule from './modules/literature/LiteratureModule'
 import PodcastModule from './modules/podcast/PodcastModule'
@@ -66,6 +67,8 @@ const MODULES: {
   label: string
   icon: string
   seg: 'top' | 'learn' | 'life' | 'bottom'
+  /** 下固定项按模式显隐（260930 办公台/收藏夹槽位互换）：缺省 = 双模式常驻 */
+  mode?: ModuleMode
   pending?: true
 }[] = [
   // —— 上固定 ——
@@ -88,7 +91,9 @@ const MODULES: {
   { id: 'yule', label: '娱乐城', icon: 'casino', seg: 'life' },
   { id: 'ledger', label: '记账本', icon: 'account_balance_wallet', seg: 'life' },
   // —— 下固定 ——
-  { id: 'favorites', label: '收藏夹', icon: 'bookmarks', seg: 'bottom' },
+  // 办公台（260930 新功能开发区）：学习模式专属，与收藏夹（生活模式专属）互换下固定首位槽位
+  { id: 'office', label: '办公台', icon: 'description', seg: 'bottom', mode: 'learn' },
+  { id: 'favorites', label: '收藏夹', icon: 'bookmarks', seg: 'bottom', mode: 'life' },
   { id: 'recycle', label: '回收站', icon: 'delete', seg: 'bottom' },
   { id: 'profile', label: '个人档', icon: 'person', seg: 'bottom' }
 ]
@@ -247,12 +252,13 @@ function Shell() {
   }, [])
 
   // 视图所属模式（双模式）：'agent'（任务中心）视为学习专属，'noise'（音乐吧）常驻，
-  // 其余按 MODULES 段位映射（top/bottom=常驻，learn/life 同名）
+  // 其余按 MODULES 段位映射（带 mode 的 bottom 项归属其专属模式，top/bottom 缺省=常驻）
   const modeOfView = useCallback((id: MainView): 'learn' | 'life' | 'common' => {
     if (id === 'agent') return 'learn'
     if (id === 'noise') return 'common'
-    const seg = MODULES.find((m) => m.id === id)?.seg
-    return seg === 'learn' ? 'learn' : seg === 'life' ? 'life' : 'common'
+    const m = MODULES.find((x) => x.id === id)
+    if (m?.mode) return m.mode
+    return m?.seg === 'learn' ? 'learn' : m?.seg === 'life' ? 'life' : 'common'
   }, [])
 
   // 模式 last 专属模块记录（双模式）：仅专属模块记账，常驻（总导览/音乐吧/回收站/个人档）不记——
@@ -469,7 +475,7 @@ function Shell() {
         <nav className="sidebar">
           {MODULES.filter((m) => m.seg === 'top').map(renderNavItem)}
           {MODULES.filter((m) => m.seg === appMode).map(renderNavItem)}
-          {MODULES.filter((m) => m.seg === 'bottom').map(renderNavItem)}
+          {MODULES.filter((m) => m.seg === 'bottom' && (m.mode == null || m.mode === appMode)).map(renderNavItem)}
           <div className="sidebar-spacer" />
         </nav>
 
@@ -522,6 +528,7 @@ function Shell() {
               {m.id === 'yule' && <YuleModule />}
               {m.id === 'fushi' && <FushiModule />}
               {m.id === 'duiyi' && <DuiyiModule />}
+              {m.id === 'office' && <OfficeModule onNavigateToProfile={() => activateModule('profile')} />}
               {m.id === 'recycle' && <RecycleModule appMode={appMode} />}
               {m.id === 'profile' && <ProfileModule onOpenWorkspace={openAgentCenter} />}
             </div>
