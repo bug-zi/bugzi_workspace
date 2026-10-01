@@ -599,6 +599,108 @@ export async function generateMottos(signal?: AbortSignal): Promise<GenerateMott
   }
 }
 
+// ---------- 格言 AI 打磨（2026-10-01-格言AI打磨-design.md）：编撰条二次改进 ----------
+
+export interface PolishMottoResult {
+  /** 改写后的新句 */
+  content: string
+  /** 一句话改动说明（LLM 自述；可能为空串） */
+  note: string
+}
+
+/** 打磨产物 JSON 解析：{"content","note"}；兼容 ```json 包裹（解析失败重试由调用方承担） */
+function parsePolishResult(raw: string): PolishMottoResult {
+  const text = raw.replace(/^[\s\S]*?```(?:json)?\s*\n?/, '').replace(/\n?```\s*[\s\S]*$/, '').trim()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new Error('LLM 未返回合法 JSON')
+  }
+  const o = parsed as { content?: unknown; note?: unknown }
+  if (!o || typeof o.content !== 'string' || !o.content.trim()) throw new Error('LLM 返回缺少新句内容')
+  return { content: o.content.trim(), note: typeof o.note === 'string' ? o.note.trim() : '' }
+}
+
+/**
+ * AI 打磨：按用户建议改写一条 AI 编撰格言，保留观点角度、重作文笔。
+ * 闸门与「来10条格言」同口径（句式禁令/口语化/限长/查重），查重集合排除原句自身；
+ * 闸门命中回喂违规原因重试一次，二次仍命中抛 POLISH_GATE_REJECTED（原句不动）。
+ */
+export async function polishMotto(mottoId: number, suggestion: string, signal?: AbortSignal): Promise<PolishMottoResult> {
+  const d = getDb()
+  const row = d.prepare('SELECT id, content, source, gen_kind FROM mottos WHERE id = ?').get(mottoId) as
+    | { id: number; content: string; source: string; gen_kind: 'excerpt' | 'composed' | null }
+    | undefined
+  if (!row) throw new Error('NOT_FOUND')
+  if (row.gen_kind !== 'composed') throw new Error('NOT_COMPOSED')
+  if (!isLlmConfigured()) throw new Error('LLM_NOT_CONFIGURED')
+  const sug = suggestion.trim()
+  if (!sug) throw new Error('SUGGESTION_EMPTY')
+
+  // 正式区风格样本（最近 10 条，供参照文风）
+  const formal = d
+    .prepare("SELECT content, source FROM mottos WHERE status = 'formal' AND deleted_at IS NULL ORDER BY id DESC LIMIT 10")
+    .all() as { content: string; source: string }[]
+  const samples = formal.length ? formal.map((m) => `- ${m.content} —— ${m.source}`).join('\n') : '（暂无）'
+  // 查重集合：全库（含回收站）排除自身 + 全量墓碑 norms
+  const dupNorms: string[] = [
+    ...(
+      d.prepare('SELECT content FROM mottos WHERE id != ? ORDER BY updated_at DESC LIMIT 500').all(mottoId) as {
+        content: string
+      }[]
+    ).map((r) => normalizeText(r.content)),
+    ...(d.prepare('SELECT content_norm FROM motto_tombstones').all() as { content_norm: string }[]).map((t) => t.content_norm)
+  ]
+
+  /** 闸门检查：返回违规项清单（空数组 = 通过）；口径与 generateMottos 代码侧兜底一致 */
+  const violationsOf = (content: string): string[] => {
+    const v: string[] = []
+    if (COMPOSED_BANNED_PATTERNS.some((p) => p.test(content)))
+      v.push('句式禁令（不是A而是B/与其A不如B/真正的A是B/所谓A不过是B/才算唯有才/所有A都B/愿你 等对仗套话）')
+    if (COLLOQUIAL_PATTERNS.some((p) => p.test(content)))
+      v.push('口语化（句尾语气词/口语虚词 其实真的确实反正/句首叮嘱 你要你应该别再记得/超 22 字）')
+    if (content.replace(/\s/g, '').length > 22) v.push('超过 22 字')
+    if (isDupMotto(dupNorms, normalizeText(content))) v.push('与库内已有格言或已淘汰记录重复/过于相近')
+    return v
+  }
+
+  const buildPrompt = (feedback: string): string =>
+    `${profileDigest()}${profileDigest() ? '\n\n' : ''}下面是我格言库中的一条由你编撰的格言，观点角度我觉得不错，但文笔还不够好。请在**保留其核心观点角度**的基础上，按我的建议改写：\n\n原句：「${row.content}」（出处：${row.source || 'debugzi'}）\n\n我的改进建议：${sug}\n\n${
+      feedback ? `你上一次的改写未通过检查：${feedback}。请务必规避。\n\n` : ''
+    }正式区风格样本（供参照文风，不要照抄）：\n${samples}\n\n改写要求——写出格言的文体，遵守五条标准：\n1. 凝练：一句成型，不超过 22 字，删一字则伤；\n2. 断言：是一个判断或主张，不是描述、不是叮嘱——说出来就站住；\n3. 普遍：脱离具体情境依然成立，面向一类人生状况；\n4. 可诵：有顿挫节奏，读出声不拗口（但禁止上述对仗套话）；\n5. 画面是载体不是目的：意象必须为断言服务。\n规避口语化：句尾语气词（呢/吧/啊/嘛/啦/呗/了）、口语虚词（其实/真的/确实/反正）、句首叮嘱（你要/你应该/别再/记得/赶紧/千万）。\n只改写这一句，不要另起炉灶换主题。\n\n仅输出 JSON 对象：{"content":"改写后的新句","note":"一句话说明改了什么"}，不要输出其他任何内容。`
+
+  /** 单趟调用 + 解析（仅 JSON 解析类失败自动重试一次，与 generateMottos 的 callAndParse 口径一致：
+   *  chatCompletion 的取消/网络/配置错误在 await once() 时已抛出，catch 内重试天然只覆盖解析失败） */
+  const call = async (prompt: string): Promise<PolishMottoResult> => {
+    const once = (): ReturnType<typeof chatCompletion> =>
+      chatCompletion({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7, // 打磨比创作（0.9）收敛——定向改写
+        jsonMode: true,
+        thinking: 'disabled',
+        scene: 'motto:polish',
+        signal
+      })
+    const res = await once()
+    try {
+      return parsePolishResult(res.content)
+    } catch {
+      return parsePolishResult((await once()).content)
+    }
+  }
+
+  let result = await call(buildPrompt(''))
+  let violations = violationsOf(result.content)
+  if (violations.length > 0) {
+    ensureNotCancelled(signal)
+    result = await call(buildPrompt(violations.join('；')))
+    violations = violationsOf(result.content)
+    if (violations.length > 0) throw new Error('POLISH_GATE_REJECTED')
+  }
+  return result
+}
+
 // ---------- 灵感泉 v2.0（灵感泉 specs §6：从零生成 + AI 完善） ----------
 
 /** 灵感形态枚举（优化建议区任务2）：发散候选携 form 标签，自评按配额挑 5，跨阶段透传；发散 prompt 规则 2 以 length/join 插值引用本数组，增删形态会同步改变 prompt */

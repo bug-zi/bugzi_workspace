@@ -5,6 +5,7 @@ import ActionMenu, { type ActionMenuItem } from '../../components/ActionMenu'
 import MdDialog from '../../components/MdDialog'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import GoConfigDialog from '../../components/GoConfigDialog'
+import MottoPolishDialog from './MottoPolishDialog'
 import { useToast } from '../../components/Toast'
 import { useModuleActivated } from '../../hooks/useModuleActivated'
 import type { AiChannel } from '../../shared/types'
@@ -76,6 +77,8 @@ export default function MottosModule(props: MottosModuleProps) {
   const [discardTarget, setDiscardTarget] = useState<MottoRecord | null>(null)
   // 直接删除二次确认（优化建议区：越过回收站彻底删除）
   const [foreverTarget, setForeverTarget] = useState<MottoRecord | null>(null)
+  // AI 打磨弹窗目标（2026-10-01-格言AI打磨-design.md）：null = 关闭；换行重开即卸载旧弹窗并取消进行中生成
+  const [polishTarget, setPolishTarget] = useState<MottoRecord | null>(null)
   // 功能气泡菜单（优化建议区第15轮）：单击行 260ms 防抖召唤，双击行打开笔记（正式区）
   // 第39轮：锚点由行右端改为鼠标点击坐标，菜单出现在点击处正下方
   const [menuFor, setMenuFor] = useState<{ id: number; point: { x: number; y: number } } | null>(null)
@@ -364,7 +367,10 @@ export default function MottosModule(props: MottosModuleProps) {
   /** 功能气泡菜单项（按区拼装；顺序：AI 解读 / 编辑 / 标签 / 复制 / 区特有 ∥ 丢弃） */
   const mottoMenuItems = (m: MottoRecord): ActionMenuItem[] => {
     const items: ActionMenuItem[] = [
-      { key: 'interpret', icon: 'psychology', label: 'AI 解读', onClick: () => interpretMotto(m) }
+      { key: 'interpret', icon: 'psychology', label: 'AI 解读', onClick: () => interpretMotto(m) },
+      ...(m.gen_kind === 'composed'
+        ? [{ key: 'polish', icon: 'auto_fix_high', label: 'AI 打磨', onClick: () => setPolishTarget(m) }]
+        : [])
     ]
     // 编辑：正式区全量；草稿/沉淀区仅 AI 编撰条（出处署名 debugzi，判定与 AI 徽章一致）
     if (m.status === 'formal' || (m.origin === 'ai' && m.gen_kind !== 'excerpt')) {
@@ -817,6 +823,20 @@ export default function MottosModule(props: MottosModuleProps) {
         onClose={() => setViewId(null)}
         onChanged={load}
       />
+
+      {/* AI 打磨弹窗（仅编撰条入口；onDone 即 toast + 刷新 + 关闭） */}
+      {polishTarget && (
+        <MottoPolishDialog
+          motto={polishTarget}
+          onGoConfig={() => setGoConfig(true)}
+          onDone={(mode) => {
+            setPolishTarget(null)
+            toast(mode === 'replace' ? '已替换' : '已存入草稿区')
+            void load()
+          }}
+          onClose={() => setPolishTarget(null)}
+        />
+      )}
 
       {/* 编辑弹窗 */}
       {editing && (

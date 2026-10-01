@@ -211,7 +211,13 @@ const api = {
     checkDuplicate: (content: string): Promise<boolean> =>
       ipcRenderer.invoke('mottos:checkDuplicate', content),
     /** 直接删除：越过回收站彻底删除（含笔记 md），需前端二次确认 */
-    deleteForever: (id: number): Promise<boolean> => ipcRenderer.invoke('mottos:deleteForever', id)
+    deleteForever: (id: number): Promise<boolean> => ipcRenderer.invoke('mottos:deleteForever', id),
+    /** AI 打磨：按建议改写 AI 编撰条，返回新句与改动说明（2026-10-01-格言AI打磨-design.md） */
+    polish: (jobId: string, mottoId: number, suggestion: string): Promise<{ content: string; note: string }> =>
+      ipcRenderer.invoke('mottos:polish', jobId, mottoId, suggestion),
+    /** 打磨采纳：replace=替换原句（旧句入墓碑）| save=另存草稿区区首；返回落库后整行 */
+    polishAdopt: (mottoId: number, content: string, mode: 'replace' | 'save'): Promise<unknown> =>
+      ipcRenderer.invoke('mottos:polishAdopt', mottoId, content, mode)
   },
   wiki: {
     sections: (): Promise<unknown[]> => ipcRenderer.invoke('wiki:sections'),

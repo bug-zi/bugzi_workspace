@@ -106,6 +106,7 @@ import {
   getActiveSessionId,
   deleteAiMessage,
   generateMottos,
+  polishMotto,
   generateWikiCard,
   suggestWikiTerm,
   generateWikiQuiz,
@@ -867,6 +868,51 @@ export function registerIpc(): void {
     getDb().prepare('DELETE FROM mottos WHERE id = ?').run(id)
     if (row?.note_path) mdDelete(row.note_path)
     return true
+  })
+  /** AI 打磨（2026-10-01-格言AI打磨-design.md）：按建议改写编撰条，jobId 可取消（同 mottos:generate 口径） */
+  ipcMain.handle('mottos:polish', async (_e, jobId: string, mottoId: number, suggestion: string) => {
+    const ac = beginJob(jobId)
+    try {
+      return await polishMotto(mottoId, suggestion, ac.signal)
+    } finally {
+      endJob(jobId)
+    }
+  })
+  /** 打磨采纳（主进程原子落库）：replace=原句位置替换（旧句入墓碑防复现）| save=另存草稿区区首（查重排除原句自身） */
+  ipcMain.handle('mottos:polishAdopt', (_e, mottoId: number, content: string, mode: 'replace' | 'save') => {
+    const d = getDb()
+    const row = d.prepare('SELECT id, content FROM mottos WHERE id = ?').get(mottoId) as
+      | { id: number; content: string }
+      | undefined
+    if (!row) throw new Error('NOT_FOUND')
+    const text = String(content ?? '').trim()
+    if (!text) throw new Error('EMPTY_CONTENT')
+    const now = nowIso()
+    if (mode === 'replace') {
+      recordMottoTombstone(row.content)
+      d.prepare('UPDATE mottos SET content = ?, updated_at = ? WHERE id = ?').run(text, now, mottoId)
+      const updated = d.prepare('SELECT * FROM mottos WHERE id = ?').get(mottoId) as { tags?: string | null }
+      return { ...updated, tags: parseTags(updated.tags) }
+    }
+    // save：全库（含回收站）+ 墓碑查重，排除原句自身（改进句与原句天然相近，不得误杀）
+    const norms: string[] = [
+      ...(
+        d.prepare('SELECT content FROM mottos WHERE id != ? ORDER BY updated_at DESC LIMIT 500').all(mottoId) as {
+          content: string
+        }[]
+      ).map((r) => normalizeText(r.content)),
+      ...(d.prepare('SELECT content_norm FROM motto_tombstones').all() as { content_norm: string }[]).map((t) => t.content_norm)
+    ]
+    if (isDupMotto(norms, normalizeText(text))) throw new Error('DUPLICATE')
+    const info = d
+      .prepare(
+        "INSERT INTO mottos (content, source, status, origin, note_path, sort, tags, gen_kind, created_at, updated_at) VALUES (?, 'debugzi', 'draft', 'ai', NULL, ?, '[]', 'composed', ?, ?)"
+      )
+      .run(text, mottoHeadSort(d, 'draft'), now, now)
+    const created = d.prepare('SELECT * FROM mottos WHERE id = ?').get(Number(info.lastInsertRowid)) as {
+      tags?: string | null
+    }
+    return { ...created, tags: parseTags(created.tags) }
   })
 
   // ---------- 万象库 ----------

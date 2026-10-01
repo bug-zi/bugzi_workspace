@@ -187,3 +187,13 @@ copilot?: {
 - **IPC**：`wenbi:expList / expCreate / expUpdate / expDiscard`（create/update 服务端 trim 兜底，返回整行）。
 - **接线**：`ExperiencePanel.tsx` 挂 WenbiModule 第二位 tab；刷新三路径（挂载 / `useModuleActivated('wenbi')` / active 切回）。
 - **优化轮（260917 同日，详见 `2026-09-17-经验书优化-design.md`）**：顶部分类 tab 夹（全部｜分类｜未分类锁定末位；预置系统整理/处事准则，可建改删，重名 DUP_NAME）+ 夹内拖拽排序（格言库同款半差插入/归一化/边缘自动滚动）+ 拖到 tab 归类 + ActionMenu「移动到…」；行去时间列（created_at 仍存库）。DB v46：`exp_categories` + 条目 `category_id`/`sort`；新通道 `expCategoryList/Create/Rename/Delete`、`expMove`、`expReorder`，`expCreate` 扩 categoryId、`expList` 改 sort 序；回收站 `wenbi_exp` 恢复加孤儿分类守卫。快记落当前激活分类（全部→未分类）插夹顶；tab 激活夹被删自愈回「全部」。
+
+## 10. 格言库「AI 打磨」（261001 新增，编撰条二次改进）
+
+对 AI 编撰格言的行级二次改进：输入改进建议 → AI 基于原句改写（保留观点角度、重作文笔）→ 审核三选。完整设计见 `2026-10-01-格言AI打磨-design.md`。
+
+- **入口**：格言行 ActionMenu「AI 打磨」（auto_fix_high 图标，居「AI 解读」后），仅 `gen_kind='composed'` 条显示（三区内均可）；摘录条/手动条无入口。零新表零迁移。
+- **弹窗 `MottoPolishDialog`**：原句展示（正文+出处）→ 建议 textarea（Enter 生成、Shift+Enter 换行、空内容不触发、生成中禁改）→ 新句 + 一行改动说明；「重新生成」同建议重跑；生成中可取消（jobId 同 `mottos:generate` 机制，取消回先前状态保留建议）；换行重开弹窗即卸载旧弹窗并取消进行中生成。
+- **后端 `polishMotto`**（`electron/ai/services.ts`，scene `motto:polish`、temperature 0.7、关思维链）：prompt = 原句 + 建议 + 文体五条标准 + 句式禁令 7 类 + ≤22 字 + 正式区风格样本 10 条（含 profileDigest），JSON 返回 `{"content","note"}`；代码侧四闸与生成线同口径（句式禁令/口语化/限长/查重，查重集合=全库含回收站+全量墓碑、**排除原句自身**），命中回喂违规原因重试一次，二次仍中抛 `POLISH_GATE_REJECTED` 原句不动；JSON 解析失败自动重试一次。
+- **IPC**：`mottos:polish`（jobId 可取消）/ `mottos:polishAdopt(mottoId, content, mode)`——`replace`=旧句写墓碑 + 原位替换（source/标签/gen_kind/status/sort 全不动，可继续多轮打磨，替换前 ConfirmDialog 确认）；`save`=查重（排除原句）后 INSERT 草稿区区首（origin='ai'、gen_kind='composed'、source='debugzi'、note_path=NULL 转正时建），重复抛 `DUPLICATE`。均返回落库后整行。
+- **LLM 未配置**：报错路径弹「去配置」直达 GoConfigDialog（按钮不置灰，全局规则口径）。

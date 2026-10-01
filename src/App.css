@@ -2810,3 +2810,48 @@
 .fuben-filter-gap {
   margin-left: 14px;
 }
+
+/* 格言「AI 打磨」弹窗（2026-10-01-格言AI打磨-design.md） */
+.polish-origin {
+  padding: 10px 12px;
+  background: var(--color-surface);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+}
+.polish-origin-text {
+  font-size: 15px;
+  line-height: 1.6;
+}
+.polish-origin-source {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.polish-running {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.polish-error {
+  font-size: 13px;
+  color: var(--color-danger);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.polish-result {
+  padding: 10px 12px;
+  background: var(--color-primary-soft);
+  border-radius: var(--radius-sm);
+}
+.polish-result-text {
+  font-size: 15px;
+  line-height: 1.6;
+}
+.polish-result-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
